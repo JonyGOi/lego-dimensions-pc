@@ -360,8 +360,123 @@ void ReadKeyboard(Input& in) {
 
 std::mutex g_script_mutex; // o macro acrescenta passos de outra thread
 
+// Fase 60: bloqueio do controle fora de foco. Sem a janela do jogo em primeiro plano, SDL e XInput sao
+// ignorados (sticks no centro, nenhum botao); --background-pad desliga. Ao voltar o foco, os botoes que ja
+// estavam apertados so contam depois de soltos (o clique / Alt+Tab de volta nao vira um X no jogo).
+bool g_background_pad = false;
+bool g_pad_blocked = false;
+u32 g_pad_held_mask = 0;
+
+bool PadFocusGate() {
+    const bool allowed = g_background_pad || !videoout::WindowHandle() || videoout::WindowHasFocus();
+    if (allowed != g_pad_blocked) {
+        return allowed; // sem mudanca (liberado e nao bloqueado, ou fora de foco e ja bloqueado)
+    }
+    if (!allowed) {
+        g_pad_blocked = true;
+        log::Tagged("PAD", "janela do jogo fora de foco: controle bloqueado");
+    }
+    return allowed;
+}
+
+u32 PadHeldSinceFocus(u32 buttons) {
+    if (g_pad_blocked && PadFocusGate()) { // acabou de voltar o foco
+        g_pad_blocked = false;
+        g_pad_held_mask = buttons;
+        log::Tagged("PAD", "janela do jogo em foco: controle liberado");
+    }
+    g_pad_held_mask &= buttons; // botao solto sai da mascara
+    return g_pad_held_mask;
+}
+
+// Testes (LD_PAD_LIVE=<arquivo>): linhas "botao:ms", "ls_up:ms" ou "wait:ms" acrescentadas ao arquivo entram
+// na hora, em sequencia. Serve para navegar num teste olhando a tela, sem teclado nem controle.
+void ReadLiveFile(double now) {
+    static const char* path = std::getenv("LD_PAD_LIVE");
+    static double next_check = 0.0;
+    static long long consumed = 0;
+    static double cursor = 0.0;
+    if (!path || now < next_check) {
+        return;
+    }
+    next_check = now + 0.1;
+    FILE* f = std::fopen(path, "rb");
+    if (!f) {
+        return;
+    }
+    std::fseek(f, 0, SEEK_END);
+    const long long size = std::ftell(f);
+    if (size <= consumed) {
+        std::fclose(f);
+        return;
+    }
+    std::string text(static_cast<size_t>(size - consumed), '\0');
+    std::fseek(f, static_cast<long>(consumed), SEEK_SET);
+    text.resize(std::fread(text.data(), 1, text.size(), f));
+    std::fclose(f);
+    const size_t last_newline = text.rfind('\n');
+    if (last_newline == std::string::npos) {
+        return; // linha ainda incompleta
+    }
+    text.resize(last_newline + 1);
+    consumed += static_cast<long long>(text.size());
+    static const struct {
+        const char* name;
+        int axis;
+        u8 value;
+    } kAxes[] = {
+        {"ls_left", 0, 0x00}, {"ls_right", 0, 0xFF}, {"ls_up", 1, 0x00}, {"ls_down", 1, 0xFF},
+        {"rs_left", 2, 0x00}, {"rs_right", 2, 0xFF}, {"rs_up", 3, 0x00}, {"rs_down", 3, 0xFF},
+    };
+    cursor = std::max(cursor, now);
+    std::lock_guard lock(g_script_mutex);
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const size_t end = text.find('\n', pos);
+        std::string line = text.substr(pos, end - pos);
+        pos = end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.pop_back();
+        }
+        for (char& c : line) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        const size_t colon = line.find(':');
+        if (colon == std::string::npos) {
+            continue;
+        }
+        const std::string name = line.substr(0, colon);
+        const double hold_ms = std::atof(line.c_str() + colon + 1);
+        if (name == "wait") {
+            cursor += hold_ms / 1000.0;
+            continue;
+        }
+        ScriptStep step{};
+        step.start_s = cursor;
+        step.end_s = cursor + hold_ms / 1000.0;
+        for (const auto& b : kButtonNames) {
+            if (name == b.name) {
+                step.button = b.bit;
+            }
+        }
+        for (const auto& a : kAxes) {
+            if (name == a.name) {
+                step.axis = a.axis;
+                step.value = a.value;
+            }
+        }
+        if ((!step.button && step.axis < 0) || hold_ms <= 0.0) {
+            continue;
+        }
+        cursor = step.end_s + 0.15; // folga entre dois toques do mesmo botao
+        g_script.push_back(step);
+        log::Tagged("PAD", "t=%.1fs ao vivo: %s por %.0f ms", now, name.c_str(), hold_ms);
+    }
+}
+
 void ReadScript(Input& in) {
     const double now = Seconds();
+    ReadLiveFile(now);
     std::lock_guard lock(g_script_mutex);
     for (ScriptStep& step : g_script) {
         const bool by_reads = step.reads_left > 0 && now >= step.start_s;
@@ -423,7 +538,10 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
     // Fase 24.5: o SDL e a primeira fonte (enxerga o DualShock 4 e o touchpad). O XInput so e lido
     // se o SDL nao abriu nenhum controle (um controle Xbox apareceria nos dois).
     padsdl::State sdl;
-    const bool have_sdl = padsdl::Read(&sdl);
+    // Fase 60: o controle so mexe no jogo com a janela do jogo em primeiro plano. Antes, com outra janela
+    // aberta por cima (navegador, Discord...), o controle continuava andando com o personagem.
+    const bool pad_allowed = PadFocusGate();
+    const bool have_sdl = padsdl::Read(&sdl) && pad_allowed;
     if (have_sdl) {
         in.buttons |= sdl.buttons;
         in.lx = sdl.lx;
@@ -440,9 +558,10 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
                 std::printf("[PAD] analogico esquerdo (SDL): LeftX %u LeftY %u botoes 0x%05x\n", in.lx, in.ly, in.buttons);
             }
         }
-    } else {
+    } else if (pad_allowed) {
         ReadXInput(in);
     }
+    in.buttons &= ~PadHeldSinceFocus(in.buttons);
     ReadKeyboard(in);
     ReadScript(in);
 
@@ -518,6 +637,10 @@ HLE_OVERRIDE(scePadSetVibration);
 
 void SetPadStickLog(bool enabled) {
     g_stick_log = enabled;
+}
+
+void SetPadBackgroundInput(bool enabled) {
+    g_background_pad = enabled;
 }
 
 void SetPadKeyboardEnabled(bool enabled) {

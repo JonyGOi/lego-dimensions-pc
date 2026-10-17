@@ -36,6 +36,7 @@
 
 #include "hle/overrides/hle_filesystem.h"
 #include "hle/overrides/hle_override.h"
+#include "runtime/lang.h"
 #include "hle/overrides/hle_pad_sdl.h"
 #include "hle/overrides/hle_videoout.h"
 
@@ -677,7 +678,7 @@ std::wstring LastWrite(const std::filesystem::path& dir) {
         }
     }
     if (!any) {
-        return L"vazio";
+        return lang::T(L"vazio", L"empty");
     }
     const auto system = std::chrono::time_point_cast<std::chrono::system_clock::duration>(latest - std::filesystem::file_time_type::clock::now() +
                                                                                            std::chrono::system_clock::now());
@@ -685,7 +686,7 @@ std::wstring LastWrite(const std::filesystem::path& dir) {
     std::tm local{};
     localtime_s(&local, &seconds);
     wchar_t text[64];
-    std::wcsftime(text, 64, L"%d/%m/%Y %H:%M", &local);
+    std::wcsftime(text, 64, lang::T(L"%d/%m/%Y %H:%M", L"%Y-%m-%d %H:%M"), &local);
     return text;
 }
 
@@ -743,12 +744,13 @@ LRESULT CALLBACK SaveDialogProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             SelectObject(dc, normal);
             SetTextColor(dc, RGB(200, 205, 220));
             RECT empty{24, kHeaderHeight, client.right - 24, kHeaderHeight + kRowHeight};
-            DrawTextW(dc, L"Nenhum salvamento encontrado.", -1, &empty, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            DrawTextW(dc, lang::T(L"Nenhum salvamento encontrado.", L"No saves found."), -1, &empty, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         }
         SelectObject(dc, small);
         SetTextColor(dc, RGB(160, 170, 190));
         RECT footer{24, client.bottom - kFooterHeight, client.right - 24, client.bottom - 8};
-        DrawTextW(dc, L"Direcional / setas: escolher      X / Enter: confirmar      O / Esc: voltar", -1, &footer,
+        DrawTextW(dc, lang::T(L"Direcional / setas: escolher      X / Enter: confirmar      O / Esc: voltar",
+                          L"D-pad / arrows: choose      X / Enter: confirm      O / Esc: back"), -1, &footer,
                   DT_LEFT | DT_SINGLELINE | DT_VCENTER);
         SelectObject(dc, old);
         DeleteObject(big);
@@ -842,7 +844,7 @@ void SaveDialogThread(DialogUi ui) {
         ClientToScreen(owner, &origin);
         area = {origin.x, origin.y, origin.x + client.right, origin.y + client.bottom};
     }
-    const HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, L"LegoDimensionsPcSaveDialog", L"Salvamentos", WS_POPUP | WS_BORDER,
+    const HWND hwnd = CreateWindowExW(WS_EX_TOPMOST, L"LegoDimensionsPcSaveDialog", lang::T(L"Salvamentos", L"Saves"), WS_POPUP | WS_BORDER,
                                       area.left + (area.right - area.left - width) / 2, area.top + (area.bottom - area.top - height) / 2,
                                       width, height, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (automatic) {
@@ -924,7 +926,9 @@ bool BuildSaveList(const SaveDataDialogParam* param, DialogUi* ui) {
     if (!items) {
         return false;
     }
-    ui->title = param->disp_type == 2 ? L"Carregar jogo" : param->disp_type == 3 ? L"Apagar salvamento" : L"Salvar jogo \u2014 escolha o salvamento";
+    ui->title = param->disp_type == 2   ? lang::T(L"Carregar jogo", L"Load game")
+                : param->disp_type == 3 ? lang::T(L"Apagar salvamento", L"Delete save")
+                                        : lang::T(L"Salvar jogo \u2014 escolha o salvamento", L"Save game \u2014 choose a save");
     std::string focus;
     if (items->focus_pos == 6 && items->focus_dir_name && std::memchr(items->focus_dir_name->data, 0, sizeof(DirName::data))) {
         focus = items->focus_dir_name->data;
@@ -945,9 +949,10 @@ bool BuildSaveList(const SaveDataDialogParam* param, DialogUi* ui) {
         DialogEntry entry;
         entry.dir = name;
         entry.line1 = Widen(name) + (title.empty() ? L"" : L"  \u2014  " + Widen(title));
-        entry.line2 = (sub.empty() ? L"" : Widen(sub) + L"   \u00B7   ") + L"\u00DAltima grava\u00E7\u00E3o: " + LastWrite(dir);
+        entry.line2 = (sub.empty() ? L"" : Widen(sub) + L"   \u00B7   ") + lang::T(L"\u00DAltima grava\u00E7\u00E3o: ", L"Last saved: ") + LastWrite(dir);
         if (param->disp_type == 1) {
-            entry.line2 += L"   ·   Novo jogo no lugar deste (ele vai para uma pasta de backup)";
+            entry.line2 += lang::T(L"   \u00B7   Novo jogo no lugar deste (ele vai para uma pasta de backup)",
+                                   L"   \u00B7   New game in place of this one (it is moved to a backup folder)");
         }
         if (name == focus) {
             ui->selected = static_cast<int>(ui->entries.size());
@@ -957,8 +962,8 @@ bool BuildSaveList(const SaveDataDialogParam* param, DialogUi* ui) {
     if (items->new_item) {
         DialogEntry entry;
         const char* title = items->new_item->title;
-        entry.line1 = title && *title ? Widen(title) : L"Novo salvamento";
-        entry.line2 = L"Cria um salvamento novo, sem apagar os outros";
+        entry.line1 = title && *title ? Widen(title) : lang::T(L"Novo salvamento", L"New save");
+        entry.line2 = lang::T(L"Cria um salvamento novo, sem apagar os outros", L"Creates a new save without deleting the others");
         if (items->focus_pos == 0 || ui->entries.empty()) {
             ui->entries.insert(ui->entries.begin(), std::move(entry)); // como no console: o item novo vem primeiro
             ui->selected = items->focus_pos == 0 ? 0 : ui->selected + 1;

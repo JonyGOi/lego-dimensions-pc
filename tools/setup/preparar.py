@@ -25,6 +25,25 @@ EXTRACTOR = os.path.join(ROOT, 'tools', 'nu2_shader_extractor', 'nu2_shader_extr
 TITLE_ID = 'CUSA01176'
 
 
+def _portuguese():
+    """Fase 60: textos em portugues se o launcher pediu (LD_LANG) ou se o Windows esta em portugues; senao ingles."""
+    lang = os.environ.get('LD_LANG', '')
+    if lang:
+        return lang.lower().startswith('pt')
+    try:
+        import ctypes
+        return ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x16  # LANG_PORTUGUESE
+    except Exception:
+        return True
+
+
+PT = _portuguese()
+
+
+def T(pt, en):
+    return pt if PT else en
+
+
 def progress(pct, text):
     print('PROGRESSO %d %s' % (pct, text), flush=True)
 
@@ -59,24 +78,30 @@ def game_file(app0, patch, *parts):
 def check_game(app0, patch=''):
     sfo = game_file(app0, patch, 'sce_sys', 'param.sfo')
     if not os.path.isfile(game_file(app0, patch, 'eboot.bin')) or not os.path.isfile(sfo):
-        fail('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions, CUSA01176)')
+        fail(T('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions, CUSA01176)',
+               'the game folder must contain eboot.bin and sce_sys\\param.sfo (PS4 dump of LEGO Dimensions, CUSA01176)'))
     info = read_sfo(sfo)
     if info.get('TITLE_ID') != TITLE_ID:
-        fail('o dump e de outro jogo ou regiao (%s); este port e do LEGO Dimensions %s' % (info.get('TITLE_ID'), TITLE_ID))
+        fail(T('o dump e de outro jogo ou regiao (%s); este port e do LEGO Dimensions %s',
+               'the dump is from another game or region (%s); this port is for LEGO Dimensions %s') % (info.get('TITLE_ID'), TITLE_ID))
     dats = set()
     for base in [app0] + ([patch] if patch else []):
         if os.path.isdir(os.path.join(base, 'data')):
             dats.update(f.upper() for d in os.listdir(os.path.join(base, 'data')) if d.lower().startswith('chunk')
                         for f in os.listdir(os.path.join(base, 'data', d)) if f.upper().endswith('.DAT'))
     if not dats:
-        fail('nenhum pacote .DAT em data\\chunk*: o dump esta incompleto')
-    print('jogo: %s %s, versao %s, %d pacotes .DAT%s' % (info.get('TITLE_ID'), info.get('TITLE', ''), info.get('APP_VER', '?'), len(dats),
-                                                       (' (atualizacao em %s)' % patch) if patch else ''), flush=True)
+        fail(T('nenhum pacote .DAT em data\\chunk*: o dump esta incompleto', 'no .DAT package in data\\chunk*: the dump is incomplete'))
+    print(T('jogo: %s %s, versao %s, %d pacotes .DAT%s', 'game: %s %s, version %s, %d .DAT packages%s')
+          % (info.get('TITLE_ID'), info.get('TITLE', ''), info.get('APP_VER', '?'), len(dats),
+             (T(' (atualizacao em %s)', ' (update in %s)') % patch) if patch else ''), flush=True)
     if not any(d.startswith('PATCH') for d in dats):
-        print('AVISO: sem os pacotes PATCH*.DAT da atualizacao. O port foi feito para a versao 01.24: se a atualizacao estiver '
-              'numa pasta separada, escolha-a em "Atualizacao" no launcher.', flush=True)
+        print(T('AVISO: sem os pacotes PATCH*.DAT da atualizacao. O port foi feito para a versao 01.24: se a atualizacao estiver '
+                'numa pasta separada, escolha-a em "Atualizacao" no launcher.',
+                'WARNING: the update PATCH*.DAT packages are missing. The port was made for version 01.24: if the update is '
+                'in a separate folder, choose it under "Update" in the launcher.'), flush=True)
     elif info.get('APP_VER', '01.24') != '01.24':
-        print('AVISO: versao %s; o port foi feito e testado com a 01.24' % info.get('APP_VER'), flush=True)
+        print(T('AVISO: versao %s; o port foi feito e testado com a 01.24', 'WARNING: version %s; the port was made and tested with 01.24')
+              % info.get('APP_VER'), flush=True)
     return info
 
 
@@ -84,7 +109,8 @@ def check_dlcs(addcont):
     if not addcont:
         return 0
     if not os.path.isdir(addcont):
-        print('AVISO: pasta de DLCs nao encontrada (%s): seguindo sem DLC' % addcont, flush=True)
+        print(T('AVISO: pasta de DLCs nao encontrada (%s): seguindo sem DLC', 'WARNING: DLC folder not found (%s): continuing without DLC')
+              % addcont, flush=True)
         return 0
     n = 0
     for d in sorted(os.listdir(addcont)):
@@ -94,7 +120,7 @@ def check_dlcs(addcont):
             if str(info.get('CATEGORY', '')).startswith('ac'):
                 n += 1
                 print('DLC: %s (%s)' % (d, info.get('CONTENT_ID', '')), flush=True)
-    print('%d DLC(s) encontradas' % n, flush=True)
+    print(T('%d DLC(s) encontradas', '%d DLC(s) found') % n, flush=True)
     return n
 
 
@@ -108,10 +134,21 @@ def convert_eboot(app0, patch=''):
     else:
         elf, info = check_binaries.self_to_elf(data)
         if elf is None:
-            fail('eboot.bin criptografado (SELF de varejo): use um dump descriptografado do jogo. ' + '; '.join(info.notes))
+            fail(T('eboot.bin criptografado (SELF de varejo): use um dump descriptografado do jogo. ',
+                   'encrypted eboot.bin (retail SELF): use a decrypted dump of the game. ') + '; '.join(info.notes))
     with open(os.path.join(out_dir, 'eboot.bin.elf'), 'wb') as f:
         f.write(elf)
     print('eboot.bin.elf: %d bytes' % len(elf), flush=True)
+
+
+def english_line(line):
+    """Fase 60: as linhas de resumo do extrator (EXTRAIDO / PLANO / COMPILADO) em ingles no log do launcher."""
+    for pt, en in (('EXTRAIDO:', 'EXTRACTED:'), ('PLANO:', 'PLAN:'), ('COMPILADO:', 'COMPILED:'), (' arquivos', ' files'),
+                   (' shaders unicos', ' unique shaders'), (' pares', ' pairs'), (' lotes em', ' batches in'), (' em ', ' in '),
+                   (' blocos unicos', ' unique blocks'), ('de SPIR-V/texto', 'of SPIR-V/text'), ('no pacote', 'in the pack'),
+                   ('lote ', 'batch ')):
+        line = line.replace(pt, en)
+    return line
 
 
 def run_step(args, label, start, end):
@@ -120,7 +157,7 @@ def run_step(args, label, start, end):
                             text=True, encoding='utf-8', errors='replace')
     for line in proc.stdout:
         line = line.rstrip()
-        print(line, flush=True)
+        print(line if PT else english_line(line), flush=True)
         m = re.search(r'lote (\d+)/(\d+)', line)
         if m and int(m.group(2)):
             progress(start + (end - start) * int(m.group(1)) // int(m.group(2)), '%s (%s/%s)' % (label, m.group(1), m.group(2)))
@@ -128,7 +165,7 @@ def run_step(args, label, start, end):
         if m:
             progress(start + min(end - start - 1, (end - start) * int(m.group(1)) // 14200), label)
     if proc.wait() != 0:
-        fail('%s falhou (codigo %d)' % (label, proc.returncode))
+        fail(T('%s falhou (codigo %d)', '%s failed (code %d)') % (label, proc.returncode))
 
 
 def main():
@@ -141,28 +178,28 @@ def main():
     ap.add_argument('--limite', type=int, default=0, help='so os N primeiros lotes da traducao (teste)')
     args = ap.parse_args()
     t0 = time.time()
-    progress(1, 'conferindo o jogo')
+    progress(1, T('conferindo o jogo', 'checking the game'))
     if not args.patch:  # Fase 58
         sys.path.insert(0, os.path.join(ROOT, 'tools', 'nu2_shader_extractor'))
         import nu2dat
         args.patch = nu2dat.find_patch(args.app0)
     check_game(args.app0, args.patch)
     check_dlcs(args.addcont)
-    progress(3, 'convertendo o eboot.bin')
+    progress(3, T('convertendo o eboot.bin', 'converting eboot.bin'))
     convert_eboot(args.app0, args.patch)
     for d in ('shaders_spv', 'shaders_aot', 'dumped_shaders', 'savedata0', 'temp0', 'download0'):
         os.makedirs(os.path.join(ROOT, 'assets', d), exist_ok=True)
     if not args.sem_aot:
         addcont = ['--addcont', args.addcont] if args.addcont and os.path.isdir(args.addcont) else ['--addcont', '']
-        progress(5, 'extraindo os shaders dos pacotes do jogo e das DLCs')
-        run_step(['extract', '--app0', args.app0] + addcont + (['--patch', args.patch] if args.patch else []), 'extraindo shaders', 5, 15)
-        progress(15, 'planejando as variantes')
-        run_step(['plan'], 'planejando', 15, 17)
-        progress(17, 'traduzindo os shaders para Vulkan (a etapa mais longa)')
-        run_step(['compile', '--jobs', str(args.jobs)] + (['--limit', str(args.limite)] if args.limite else []), 'traduzindo shaders', 17, 99)
+        progress(5, T('extraindo os shaders dos pacotes do jogo e das DLCs', 'extracting shaders from the game and DLC packages'))
+        run_step(['extract', '--app0', args.app0] + addcont + (['--patch', args.patch] if args.patch else []), T('extraindo shaders', 'extracting shaders'), 5, 15)
+        progress(15, T('planejando as variantes', 'planning the variants'))
+        run_step(['plan'], T('planejando', 'planning'), 15, 17)
+        progress(17, T('traduzindo os shaders para Vulkan (a etapa mais longa)', 'translating the shaders to Vulkan (the longest step)'))
+        run_step(['compile', '--jobs', str(args.jobs)] + (['--limit', str(args.limite)] if args.limite else []), T('traduzindo shaders', 'translating shaders'), 17, 99)
     with open(os.path.join(ROOT, 'assets', 'preparado.txt'), 'w', encoding='utf-8') as f:
         f.write('app0=%s\npatch=%s\naddcont=%s\naot=%s\n' % (args.app0, args.patch, args.addcont, 'nao' if args.sem_aot else 'sim'))
-    progress(100, 'pronto em %.0f min' % ((time.time() - t0) / 60))
+    progress(100, T('pronto em %.0f min', 'done in %.0f min') % ((time.time() - t0) / 60))
 
 
 if __name__ == '__main__':

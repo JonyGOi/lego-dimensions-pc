@@ -46,6 +46,7 @@
 #include "hle/overrides/hle_videoout.h"
 #include "render/vulkan_backend.h"
 #include "runtime/crash_handler.h"
+#include "runtime/lang.h"
 
 namespace hle::gnm {
 
@@ -1691,6 +1692,25 @@ bool ReadGuestTexture(const GuestTexture& t, PixelVector* out, render::TextureDa
 }
 
 u64 g_texture_frame = 0; // avanca a cada flip (junto com g_cache_frame)
+
+// DIAGNOSTICO Fase 60 (LD_DBG_CB=1): num frame a cada 600, guarda cada buffer de constantes copiado (endereco,
+// tamanho, conteudo) e, no fim do Submit do flip, compara com a memoria do jogo: o que mudou depois da copia sai
+// em [DBG-CB], por (VS, PS, estagio, binding).
+struct DbgCbEntry {
+    u64 address, vs, ps;
+    u32 bytes, stage, binding, source;
+    std::vector<u8> data;
+};
+bool g_dbg_cb_record = false;
+std::mutex g_dbg_cb_mutex;
+std::vector<DbgCbEntry> g_dbg_cb;
+
+void DbgCbRecord(u64 address, u32 bytes, const u8* data, u64 vs, u64 ps, u32 stage, u32 binding, u32 source) {
+    std::lock_guard lock(g_dbg_cb_mutex);
+    if (g_dbg_cb.size() < 40000) {
+        g_dbg_cb.push_back({address, vs, ps, bytes, stage, binding, source, std::vector<u8>(data, data + bytes)});
+    }
+}
 
 // Garante a textura no backend e devolve a chave dela (0 = nao foi possivel).
 // Fase 29: amostra do conteudo de uma textura na memoria do jogo - 64 bytes a cada 1 KiB. Serve
@@ -4199,6 +4219,10 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                 buffer.data = arena.data() + used;
                 buffer.bytes = static_cast<u32>(bytes);
                 used += (bytes + 15) & ~15ull;
+                if (g_dbg_cb_record) { // DIAGNOSTICO Fase 60 (LD_DBG_CB=1): o jogo muda as constantes depois da copia?
+                    DbgCbRecord(address, static_cast<u32>(bytes), arena.data() + used - ((bytes + 15) & ~15ull), info->vs_hash, info->ps_hash,
+                                r.stage, r.binding, r.source);
+                }
                 {   // DIAGNOSTICO Fase 59 (LD_COPY_STATS=1): bytes de constantes copiados por frame e quantos sao repetidos
                     static const bool copy_stats = std::getenv("LD_COPY_STATS") != nullptr;
                     if (copy_stats) {
@@ -5607,7 +5631,52 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
             std::thread(StallWatchThread).detach();
         }
     });
+    static const bool dbg_cb = std::getenv("LD_DBG_CB") != nullptr; // DIAGNOSTICO Fase 60
+    auto dbg_cb_check = [](const char* when) {
+        std::lock_guard lock(g_dbg_cb_mutex);
+        std::map<std::tuple<u64, u64, u32, u32>, std::pair<u32, u32>> groups; // (VS, PS, estagio, binding) -> (mudaram, total)
+        u32 changed = 0, printed = 0;
+        std::vector<u8> now;
+        for (const auto& e : g_dbg_cb) {
+            now.resize(e.bytes);
+            const bool same = SafeCopy(now.data(), e.address, e.bytes) && !std::memcmp(now.data(), e.data.data(), e.bytes);
+            auto& g = groups[{e.vs, e.ps, e.stage, e.binding}];
+            ++g.second;
+            if (!same) {
+                ++g.first;
+                ++changed;
+                if (printed < 30) {
+                    ++printed;
+                    u32 first = 0;
+                    while (first + 4 <= e.bytes && !std::memcmp(now.data() + first, e.data.data() + first, 4)) {
+                        first += 4;
+                    }
+                    const u32 row = std::min(first & ~15u, (e.bytes & ~15u) - 16);
+                    const float* a = reinterpret_cast<const float*>(e.data.data() + row);
+                    const float* b = reinterpret_cast<const float*>(now.data() + row);
+                    std::printf("[DBG-CB] %s: par %016llx %016llx est %u b%u src %u end 0x%llx %u bytes, 1o byte diferente %u | copia %g %g %g %g -> agora %g %g %g %g\n",
+                                when, static_cast<unsigned long long>(e.vs), static_cast<unsigned long long>(e.ps), e.stage, e.binding, e.source,
+                                static_cast<unsigned long long>(e.address), e.bytes, first, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+                }
+            }
+        }
+        u32 group_changed = 0;
+        for (const auto& [key, g] : groups) {
+            group_changed += g.first != 0;
+        }
+        std::printf("[DBG-CB] %s: %zu buffers copiados, %u mudaram depois da copia (%u de %zu grupos)\n", when, g_dbg_cb.size(), changed,
+                    group_changed, groups.size());
+    };
+    if (dbg_cb && !g_dbg_cb.empty()) {
+        dbg_cb_check("um frame depois");
+        g_dbg_cb.clear();
+    }
+    g_dbg_cb_record = dbg_cb && g_texture_frame % 600 == 300;
     const int result = Submit(count, dcb_addrs, dcb_sizes, ccb_addrs, ccb_sizes);
+    if (g_dbg_cb_record) {
+        g_dbg_cb_record = false;
+        dbg_cb_check("fim do Submit");
+    }
     if (result != err::OK) {
         return result;
     }
@@ -6530,7 +6599,7 @@ void WarmupStatus(char* text, size_t size) {
         text[0] = 0;
         return;
     }
-    std::snprintf(text, size, " | Compilando shaders: %u / %u", pairs_done + done, pairs_total + total);
+    std::snprintf(text, size, lang::T(" | Compilando shaders: %u / %u", " | Compiling shaders: %u / %u"), pairs_done + done, pairs_total + total);
 }
 
 void SetAsyncTextures(bool enabled) {

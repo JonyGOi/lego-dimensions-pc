@@ -14,6 +14,7 @@
 
 #include "hle/overrides/hle_filesystem.h"
 #include "hle/overrides/hle_override.h"
+#include "runtime/lang.h"
 
 namespace {
 
@@ -138,7 +139,7 @@ HLE_IMPL(int, sceSystemServiceParamGetInt, int param_id, int* value) {
         return kSystemServiceErrorParameter;
     }
     switch (param_id) {
-    case 1: *value = 17; break;   // idioma: portugues (Brasil)
+    case 1: *value = lang::Ps4SystemLanguage(); break; // Fase 60: idioma do Windows (17 = portugues do Brasil, 1 = ingles)
     case 2: *value = 1; break;    // formato de data DD/MM/AAAA
     case 3: *value = 1; break;    // relogio de 24 horas
     case 4: *value = -180; break; // fuso em minutos (UTC-3)

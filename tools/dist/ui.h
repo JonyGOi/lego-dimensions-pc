@@ -24,6 +24,20 @@ constexpr COLORREF kBg = RGB(17, 19, 28), kPanel = RGB(27, 30, 43), kField = RGB
 
 inline Gdiplus::Color C(COLORREF c, BYTE a = 255) { return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c)); }
 
+// ---- idioma (Fase 60) ----
+// Portugues se o Windows estiver em portugues; senao ingles. LD_LANG=pt|en escolhe na mao.
+inline bool Pt() {
+    static const bool pt = [] {
+        wchar_t value[8] = {};
+        if (GetEnvironmentVariableW(L"LD_LANG", value, 8)) {
+            return _wcsnicmp(value, L"pt", 2) == 0;
+        }
+        return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_PORTUGUESE;
+    }();
+    return pt;
+}
+inline const wchar_t* T(const wchar_t* pt, const wchar_t* en) { return Pt() ? pt : en; }
+
 // ---- DPI ----
 inline float g_scale = 1.0f;
 inline int S(float v) { return static_cast<int>(v * g_scale + 0.5f); }

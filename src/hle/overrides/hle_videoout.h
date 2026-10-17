@@ -39,6 +39,8 @@ bool IsSrgbDisplayBuffer(u64 address);
 void SetForce60Hz(bool enabled);
 // Fase 38: confere na abertura todos os .spv soltos de shaders_spv (diagnostico; segura o backend por segundos).
 void SetCheckModules(bool enabled);
+// Fase 60 (--fullscreen): janela abre em tela cheia sem bordas. F11 alterna a qualquer momento.
+void SetStartFullscreen(bool enabled);
 
 FlipStatus GetFlipStatus(int handle);
 u64 FlipCount();

@@ -648,16 +648,33 @@ HLE_IMPL(float, _FSin, float x, u32 quadrant) {
 }
 HLE_OVERRIDE(_FSin);
 
-// Dinkumware: _Log(x, 0) = ln, _Log(x, 1) = log10.
-HLE_IMPL(double, _Log, double x, int decimal) {
-    HLE_QUIET("%g, %d", x, decimal);
-    return decimal ? std::log10(x) : std::log(x);
+// Dinkumware: _Log(x, base): 0 = ln, 1 (positivo) = log10, -1 (negativo) = log2 (log2/log2f chamam
+// _Log(x, -1)). Fase 60: antes qualquer base diferente de 0 virava log10, e todo log2 do jogo saia
+// 3,3 vezes menor (parametros de nevoa e de exposicao calculados na CPU).
+template <typename T>
+T DinkumwareLog(T x, int base) {
+    return base < 0 ? std::log2(x) : base > 0 ? std::log10(x) : std::log(x);
+}
+
+void NoteLogBase(int base) { // DIAGNOSTICO Fase 60: quais bases o jogo usa (uma linha por base)
+    static std::atomic<u32> seen{0};
+    const u32 bit = base < 0 ? 1u : base > 0 ? 2u : 4u;
+    if (!(seen.fetch_or(bit) & bit)) {
+        std::printf("[LIBM] _Log/_FLog chamado com base %d (%s)\n", base, base < 0 ? "log2" : base > 0 ? "log10" : "ln");
+    }
+}
+
+HLE_IMPL(double, _Log, double x, int base) {
+    HLE_QUIET("%g, %d", x, base);
+    NoteLogBase(base);
+    return DinkumwareLog(x, base);
 }
 HLE_OVERRIDE(_Log);
 
-HLE_IMPL(float, _FLog, float x, int decimal) {
-    HLE_QUIET("%g, %d", static_cast<double>(x), decimal);
-    return decimal ? std::log10(x) : std::log(x);
+HLE_IMPL(float, _FLog, float x, int base) {
+    HLE_QUIET("%g, %d", static_cast<double>(x), base);
+    NoteLogBase(base);
+    return DinkumwareLog(x, base);
 }
 HLE_OVERRIDE(_FLog);
 

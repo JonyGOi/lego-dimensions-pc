@@ -31,9 +31,9 @@ namespace {
 
 constexpr int kW = 980, kH = 840, kHero = 380; // Fase 58: +80 para o campo da atualizacao
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
-enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse };
+enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen };
 
-HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_focus;
+HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 std::unique_ptr<Gdiplus::Bitmap> g_art;
 HICON g_icon;
 HFONT g_font, g_small, g_label, g_title, g_subtitle, g_button, g_play_font;
@@ -130,10 +130,10 @@ void PaintHero(HDC dc, Gdiplus::Graphics& g) {
     DrawIconEx(dc, S(40), S(34), g_icon, S(56), S(56), 0, nullptr, DI_NORMAL);
     RECT title{S(40), S(118), w, S(186)}, sub{S(42), S(184), w, S(214)};
     ui::Text(dc, L"LEGO® DIMENSIONS", title, g_title, RGB(255, 255, 255));
-    ui::Text(dc, L"Port para PC   •   60 FPS   •   DLCs   •   shaders prontos antes de jogar", sub, g_subtitle, ui::kMuted);
+    ui::Text(dc, ui::T(L"Port para PC   •   60 FPS   •   DLCs   •   shaders prontos antes de jogar", L"PC port   •   60 FPS   •   DLCs   •   shaders ready before you play"), sub, g_subtitle, ui::kMuted);
     if (!g_art) {
         RECT hint{S(42), S(222), S(620), S(262)};
-        ui::Text(dc, L"Escolha a pasta do jogo abaixo para ver a arte do LEGO Dimensions aqui.", hint, g_small, ui::kMuted);
+        ui::Text(dc, ui::T(L"Escolha a pasta do jogo abaixo para ver a arte do LEGO Dimensions aqui.", L"Choose the game folder below to see the LEGO Dimensions art here."), hint, g_small, ui::kMuted);
     }
 }
 
@@ -151,10 +151,10 @@ void PaintCard(HDC dc, Gdiplus::Graphics& g) {
     g.Flush();
     RECT l1{S(48), S(kHero - 46), S(900), S(kHero - 24)}, lp{S(48), S(kHero + 34), S(900), S(kHero + 56)},
         l2{S(48), S(kHero + 114), S(900), S(kHero + 136)};
-    ui::Text(dc, L"PASTA DO JOGO  —  dump do PS4 (CUSA01176), a pasta com eboot.bin", l1, g_label, ui::kMuted);
-    ui::Text(dc, L"ATUALIZA\u00c7\u00c3O  —  s\u00f3 se ela estiver numa pasta separada (CUSA01176-patch); achada sozinha", lp, g_label,
+    ui::Text(dc, ui::T(L"PASTA DO JOGO  —  dump do PS4 (CUSA01176), a pasta com eboot.bin", L"GAME FOLDER  —  PS4 dump (CUSA01176), the folder with eboot.bin"), l1, g_label, ui::kMuted);
+    ui::Text(dc, ui::T(L"ATUALIZA\u00c7\u00c3O  —  s\u00f3 se ela estiver numa pasta separada (CUSA01176-patch); achada sozinha", L"UPDATE  —  only if it is in a separate folder (CUSA01176-patch); found automatically"), lp, g_label,
              ui::kMuted);
-    ui::Text(dc, L"PASTA DAS DLCs  —  opcional, uma subpasta por DLC (como a addcont do shadPS4)", l2, g_label, ui::kMuted);
+    ui::Text(dc, ui::T(L"PASTA DAS DLCs  —  opcional, uma subpasta por DLC (como a addcont do shadPS4)", L"DLC FOLDER  —  optional, one subfolder per DLC (like the shadPS4 addcont)"), l2, g_label, ui::kMuted);
     int x = S(48);
     const int y = S(kHero + 198);
     x += ui::Pill(dc, g, x, y, g_status.game, g_status.game_c, g_small) + S(10);
@@ -238,25 +238,25 @@ void UpdateStatus() {
     const fs::path game = GetText(g_game), dlc = GetText(g_dlc);
     std::error_code ec;
     const bool game_ok = !game.empty() && fs::is_regular_file(game / L"eboot.bin", ec) && fs::is_regular_file(game / L"sce_sys" / L"param.sfo", ec);
-    g_status.game = game.empty() ? L"Escolha a pasta do jogo" : game_ok ? L"Jogo encontrado" : L"Pasta sem eboot.bin";
+    g_status.game = game.empty() ? ui::T(L"Escolha a pasta do jogo", L"Choose the game folder") : game_ok ? ui::T(L"Jogo encontrado", L"Game found") : ui::T(L"Pasta sem eboot.bin", L"Folder without eboot.bin");
     g_status.game_c = game.empty() ? ui::kAmber : game_ok ? ui::kGreen : ui::kRed;
     const fs::path patch = GetText(g_patch);
     const bool patch_ok = !patch.empty() && (fs::is_regular_file(patch / L"eboot.bin", ec) || fs::is_directory(patch / L"data", ec));
     const bool merged = game_ok && HasPatchDats(game); // atualizacao ja junto do jogo (como no dump mesclado)
-    g_status.patch = patch_ok ? L"Atualiza\u00e7\u00e3o separada" : !patch.empty() ? L"Atualiza\u00e7\u00e3o: pasta inv\u00e1lida"
-                     : merged  ? L"Atualiza\u00e7\u00e3o no jogo"
-                     : game_ok ? L"Sem atualiza\u00e7\u00e3o (1.24 necess\u00e1ria)"
-                               : L"Atualiza\u00e7\u00e3o";
+    g_status.patch = patch_ok ? ui::T(L"Atualiza\u00e7\u00e3o separada", L"Separate update") : !patch.empty() ? ui::T(L"Atualiza\u00e7\u00e3o: pasta inv\u00e1lida", L"Update: invalid folder")
+                     : merged  ? ui::T(L"Atualiza\u00e7\u00e3o no jogo", L"Update included in the game")
+                     : game_ok ? ui::T(L"Sem atualiza\u00e7\u00e3o (1.24 necess\u00e1ria)", L"No update (1.24 required)")
+                               : ui::T(L"Atualiza\u00e7\u00e3o", L"Update");
     g_status.patch_c = patch_ok || merged ? ui::kGreen : !patch.empty() ? ui::kRed : game_ok ? ui::kAmber : ui::kMuted;
     const int dlcs = CountDlcs(dlc);
-    g_status.dlcs = dlcs ? std::to_wstring(dlcs) + (dlcs == 1 ? L" DLC" : L" DLCs") : L"Sem DLCs";
+    g_status.dlcs = dlcs ? std::to_wstring(dlcs) + (dlcs == 1 ? L" DLC" : L" DLCs") : ui::T(L"Sem DLCs", L"No DLCs");
     g_status.dlcs_c = dlcs ? ui::kBlue : ui::kMuted;
-    g_status.shaders = !Prepared() ? L"Preparar pendente" : AotReady() ? L"Shaders AOT prontos" : L"Sem shaders AOT";
+    g_status.shaders = !Prepared() ? ui::T(L"Preparar pendente", L"Prepare pending") : AotReady() ? ui::T(L"Shaders AOT prontos", L"AOT shaders ready") : ui::T(L"Sem shaders AOT", L"No AOT shaders");
     g_status.shaders_c = !Prepared() ? ui::kAmber : AotReady() ? ui::kGreen : ui::kAmber;
-    if (!g_busy && (g_step.empty() || g_step.rfind(L"Clique", 0) == 0 || g_step.rfind(L"Tudo", 0) == 0)) { // dica do proximo passo
-        g_step = !game_ok ? L"Clique em Procurar e escolha a pasta do jogo." : !Prepared() || !AotReady()
-                     ? L"Clique em Preparar: gera os arquivos e traduz os shaders a partir do seu jogo (s\u00f3 na primeira vez)."
-                     : L"Tudo pronto. Clique em JOGAR!";
+    if (!g_busy && (g_step.empty() || g_step.rfind(L"Clique", 0) == 0 || g_step.rfind(L"Tudo", 0) == 0 || g_step.rfind(L"Click", 0) == 0 || g_step.rfind(L"All set", 0) == 0)) { // dica do proximo passo
+        g_step = !game_ok ? ui::T(L"Clique em Procurar e escolha a pasta do jogo.", L"Click Browse and choose the game folder.") : !Prepared() || !AotReady()
+                     ? ui::T(L"Clique em Preparar: gera os arquivos e traduz os shaders a partir do seu jogo (s\u00f3 na primeira vez).", L"Click Prepare: it builds the files and translates the shaders from your game (first time only).")
+                     : ui::T(L"Tudo pronto. Clique em JOGAR!", L"All set. Click PLAY!");
     }
     EnableWindow(g_play, !g_busy && game_ok);
     EnableWindow(g_prepare, !g_busy && game_ok);
@@ -298,6 +298,7 @@ void SaveSettings() {
     WriteIni(L"dlcs", GetText(g_dlc));
     WriteIni(L"fps60", ui::Checked(g_fps) ? L"1" : L"0");
     WriteIni(L"console", ui::Checked(g_console) ? L"1" : L"0");
+    WriteIni(L"telacheia", ui::Checked(g_fullscreen) ? L"1" : L"0");
 }
 
 std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
@@ -327,7 +328,7 @@ void RunPrepare() {
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, g_root.c_str(),
                         &si, &pi)) {
-        AppendLog(L"ERRO: nao consegui abrir o Python para a preparacao.");
+        AppendLog(ui::T(L"ERRO: nao consegui abrir o Python para a preparacao.", L"ERROR: could not start Python for the preparation."));
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
         return;
@@ -335,7 +336,7 @@ void RunPrepare() {
     CloseHandle(write_pipe);
     g_busy = true;
     g_pct = 1;
-    g_step = L"Preparando... (a tradu\u00e7\u00e3o dos shaders leva de 20 a 60 minutos, s\u00f3 na primeira vez)";
+    g_step = ui::T(L"Preparando... (a tradu\u00e7\u00e3o dos shaders leva de 20 a 60 minutos, s\u00f3 na primeira vez)", L"Preparing... (translating the shaders takes 20 to 60 minutes, first time only)");
     UpdateStatus();
     std::thread([read_pipe, pi] {
         std::string pending;
@@ -375,14 +376,16 @@ void OnLine(const std::wstring& line) {
         return;
     }
     if (line.rfind(L"ERRO ", 0) == 0) {
-        AppendLog(L"ERRO: " + line.substr(5));
-        g_step = L"Erro: " + line.substr(5);
+        AppendLog(std::wstring(ui::T(L"ERRO: ", L"ERROR: ")) + line.substr(5));
+        g_step = std::wstring(ui::T(L"Erro: ", L"Error: ")) + line.substr(5);
         InvalidateCard();
         MessageBoxW(g_main, line.substr(5).c_str(), L"LEGO Dimensions PC", MB_ICONERROR);
         return;
     }
     if (line.find(L"EXTRAIDO") != std::wstring::npos || line.find(L"COMPILADO") != std::wstring::npos || line.find(L"PLANO") != std::wstring::npos ||
-        line.find(L"jogo:") == 0 || line.find(L"DLC") != std::wstring::npos || line.find(L"AVISO") == 0 || line.find(L"eboot") == 0) {
+        line.find(L"EXTRACTED") != std::wstring::npos || line.find(L"COMPILED") != std::wstring::npos || line.find(L"PLAN:") == 0 ||
+        line.find(L"jogo:") == 0 || line.find(L"game:") == 0 || line.find(L"DLC") != std::wstring::npos || line.find(L"AVISO") == 0 ||
+        line.find(L"WARNING") == 0 || line.find(L"eboot") == 0) {
         AppendLog(line);
     }
 }
@@ -391,12 +394,14 @@ void OnLine(const std::wstring& line) {
 void RunGame() {
     SaveSettings();
     if (!Prepared()) {
-        MessageBoxW(g_main, L"Primeiro clique em Preparar: o port precisa gerar os arquivos a partir do seu jogo.", L"LEGO Dimensions PC", MB_ICONINFORMATION);
+        MessageBoxW(g_main, ui::T(L"Primeiro clique em Preparar: o port precisa gerar os arquivos a partir do seu jogo.", L"First click Prepare: the port needs to build its files from your game."), L"LEGO Dimensions PC", MB_ICONINFORMATION);
         return;
     }
     if (!AotReady() && MessageBoxW(g_main,
-                                   L"Os shaders AOT ainda nao foram preparados: o jogo vai compilar os shaders na hora (mais pop-in e "
-                                   L"travamentos na primeira vez). Jogar assim mesmo?",
+                                   ui::T(L"Os shaders AOT ainda nao foram preparados: o jogo vai compilar os shaders na hora (mais pop-in e "
+                                         L"travamentos na primeira vez). Jogar assim mesmo?",
+                                         L"The AOT shaders have not been prepared yet: the game will compile shaders on the fly "
+                                         L"(more pop-in and stutter the first time). Play anyway?"),
                                    L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
     }
@@ -408,6 +413,9 @@ void RunGame() {
     }
     if (ui::Checked(g_fps)) {
         command += L" --fps60";
+    }
+    if (ui::Checked(g_fullscreen)) {
+        command += L" --fullscreen"; // Fase 60: tela cheia sem bordas (F11 alterna dentro do jogo)
     }
     command += L" --hitch-log";
     const bool console = ui::Checked(g_console);
@@ -433,11 +441,11 @@ void RunGame() {
                        &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
-        g_step = L"Jogo aberto. Bom jogo!";
+        g_step = ui::T(L"Jogo aberto. Bom jogo!", L"Game started. Have fun!");
         InvalidateCard();
         ShowWindow(g_main, SW_MINIMIZE);
     } else {
-        AppendLog(L"ERRO: nao consegui abrir build\\lego_dimensions.exe");
+        AppendLog(ui::T(L"ERRO: nao consegui abrir build\\lego_dimensions.exe", L"ERROR: could not start build\\lego_dimensions.exe"));
     }
     if (log != INVALID_HANDLE_VALUE) {
         CloseHandle(log);
@@ -447,17 +455,18 @@ void RunGame() {
 void CreateControls() {
     const int field_h = S(24);
     g_game = ui::Edit(g_main, S(58), S(kHero - 12), S(kW - 300), field_h, kGameEdit, g_font);
-    ui::Button(g_main, L"Procurar...", ui::Style::kSecondary, S(kW - 216), S(kHero - 22), S(168), S(44), kGameBrowse, g_button, ui::kPanel);
+    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero - 22), S(168), S(44), kGameBrowse, g_button, ui::kPanel);
     g_patch = ui::Edit(g_main, S(58), S(kHero + 68), S(kW - 300), field_h, kPatchEdit, g_font);
-    ui::Button(g_main, L"Procurar...", ui::Style::kSecondary, S(kW - 216), S(kHero + 58), S(168), S(44), kPatchBrowse, g_button, ui::kPanel);
+    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero + 58), S(168), S(44), kPatchBrowse, g_button, ui::kPanel);
     g_dlc = ui::Edit(g_main, S(58), S(kHero + 148), S(kW - 300), field_h, kDlcEdit, g_font);
-    ui::Button(g_main, L"Procurar...", ui::Style::kSecondary, S(kW - 216), S(kHero + 138), S(168), S(44), kDlcBrowse, g_button, ui::kPanel);
+    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero + 138), S(168), S(44), kDlcBrowse, g_button, ui::kPanel);
     g_log = ui::Edit(g_main, S(58), S(kH - 170), S(kW - 116), S(60), kLog, g_small, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL);
     SetWindowTheme(g_log, L"DarkMode_Explorer", nullptr); // barra de rolagem escura (Windows 10 1809+)
     g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
-    g_console = ui::Button(g_main, L"Mostrar console", ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
-    g_prepare = ui::Button(g_main, L"Preparar", ui::Style::kSecondary, S(kW - 420), S(kH - 82), S(170), S(54), kPrepare, g_button);
-    g_play = ui::Button(g_main, L"JOGAR", ui::Style::kPrimary, S(kW - 236), S(kH - 82), S(212), S(54), kPlay, g_play_font);
+    g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
+    g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
+    g_prepare = ui::Button(g_main, ui::T(L"Preparar", L"Prepare"), ui::Style::kSecondary, S(kW - 420), S(kH - 82), S(170), S(54), kPrepare, g_button);
+    g_play = ui::Button(g_main, ui::T(L"JOGAR", L"PLAY"), ui::Style::kPrimary, S(kW - 236), S(kH - 82), S(212), S(54), kPlay, g_play_font);
 }
 
 void LoadSettings() {
@@ -483,8 +492,9 @@ void LoadSettings() {
     SetWindowTextW(g_dlc, dlc.c_str());
     ui::SetChecked(g_fps, ReadIni(L"fps60", L"1") == L"1");
     ui::SetChecked(g_console, ReadIni(L"console", L"0") == L"1");
+    ui::SetChecked(g_fullscreen, ReadIni(L"telacheia", L"0") == L"1");
     LoadArt(game);
-    AppendLog(L"Bem-vindo! Escolha as pastas, clique em Preparar na primeira vez e depois em JOGAR.");
+    AppendLog(ui::T(L"Bem-vindo! Escolha as pastas, clique em Preparar na primeira vez e depois em JOGAR.", L"Welcome! Choose the folders, click Prepare the first time and then PLAY."));
     UpdateStatus();
 }
 
@@ -512,7 +522,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case kGameBrowse: {
-            const std::wstring folder = BrowseFolder(L"Pasta do jogo (dump CUSA01176)", GetText(g_game));
+            const std::wstring folder = BrowseFolder(ui::T(L"Pasta do jogo (dump CUSA01176)", L"Game folder (CUSA01176 dump)"), GetText(g_game));
             if (!folder.empty()) {
                 SetWindowTextW(g_game, folder.c_str());
                 LoadArt(folder);
@@ -524,7 +534,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         }
         case kPatchBrowse: {
-            const std::wstring folder = BrowseFolder(L"Pasta da atualiza\u00e7\u00e3o (CUSA01176-patch)", GetText(g_patch).empty() ? GetText(g_game) : GetText(g_patch));
+            const std::wstring folder = BrowseFolder(ui::T(L"Pasta da atualiza\u00e7\u00e3o (CUSA01176-patch)", L"Update folder (CUSA01176-patch)"), GetText(g_patch).empty() ? GetText(g_game) : GetText(g_patch));
             if (!folder.empty()) {
                 SetWindowTextW(g_patch, folder.c_str());
                 SaveSettings();
@@ -532,7 +542,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         }
         case kDlcBrowse: {
-            const std::wstring folder = BrowseFolder(L"Pasta das DLCs (uma subpasta por DLC)", GetText(g_dlc));
+            const std::wstring folder = BrowseFolder(ui::T(L"Pasta das DLCs (uma subpasta por DLC)", L"DLC folder (one subfolder per DLC)"), GetText(g_dlc));
             if (!folder.empty()) {
                 SetWindowTextW(g_dlc, folder.c_str());
                 SaveSettings();
@@ -560,7 +570,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
         case kPrepare:
-            if (!Prepared() || MessageBoxW(hwnd, L"Ja esta preparado. Preparar de novo (refaz os shaders AOT)?", L"LEGO Dimensions PC",
+            if (!Prepared() || MessageBoxW(hwnd, ui::T(L"Ja esta preparado. Preparar de novo (refaz os shaders AOT)?", L"Already prepared. Prepare again (rebuilds the AOT shaders)?"), L"LEGO Dimensions PC",
                                            MB_YESNO | MB_ICONQUESTION) == IDYES) {
                 RunPrepare();
             }
@@ -570,6 +580,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case kFps:
         case kConsole:
+        case kFullscreen:
             ui::Toggle(reinterpret_cast<HWND>(lp));
             SaveSettings();
             break;
@@ -585,15 +596,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_busy = false;
         if (wp == 0) {
             g_pct = 100;
-            g_step = L"Pronto! Clique em JOGAR.";
-            AppendLog(L"Preparacao concluida.");
+            g_step = ui::T(L"Pronto! Clique em JOGAR.", L"Done! Click PLAY.");
+            AppendLog(ui::T(L"Preparacao concluida.", L"Preparation finished."));
         } else {
-            AppendLog(L"A preparacao terminou com erro (veja acima).");
+            AppendLog(ui::T(L"A preparacao terminou com erro (veja acima).", L"The preparation failed (see above)."));
         }
         UpdateStatus();
         return 0;
     case WM_CLOSE:
-        if (g_busy && MessageBoxW(hwnd, L"A preparacao ainda esta rodando. Fechar mesmo assim?", L"LEGO Dimensions PC", MB_YESNO) != IDYES) {
+        if (g_busy && MessageBoxW(hwnd, ui::T(L"A preparacao ainda esta rodando. Fechar mesmo assim?", L"The preparation is still running. Close anyway?"), L"LEGO Dimensions PC", MB_YESNO) != IDYES) {
             return 0;
         }
         SaveSettings();
@@ -614,6 +625,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wchar_t exe[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
     g_root = fs::path(exe).parent_path();
+    SetEnvironmentVariableW(L"LD_LANG", ui::Pt() ? L"pt" : L"en"); // Fase 60
     g_font = ui::Font(15);
     g_small = ui::Font(13);
     g_label = ui::Font(11.5f, FW_SEMIBOLD);

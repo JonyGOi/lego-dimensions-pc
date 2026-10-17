@@ -96,6 +96,7 @@ def stage():
         keep(S('assets', d))
     keep(S('build', 'logs'))
     copy(R('tools', 'dist', 'LEIA-ME.txt'), S('LEIA-ME.txt'))
+    copy(R('tools', 'dist', 'README.txt'), S('README.txt'))  # Fase 60: o mesmo em ingles
     # conferencia: nada do jogo dentro
     for base, _, files in os.walk(STAGE):
         for f in files:

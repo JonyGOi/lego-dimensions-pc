@@ -43,7 +43,7 @@ HICON g_icon;
 std::wstring g_self;
 bool g_busy = false, g_done = false, g_focus = false;
 int g_pct = 0;
-std::wstring g_step = L"Pronto para instalar.", g_launcher;
+std::wstring g_step = ui::T(L"Pronto para instalar.", L"Ready to install."), g_launcher;
 // (os textos com acento usam \u: o .cpp e compilado sem depender da pagina de codigo)
 
 std::wstring GetText(HWND h) {
@@ -128,16 +128,16 @@ void Install(fs::path dest, bool desktop) {
     };
     const auto [offset, size] = FindPayload();
     if (!size) {
-        fail(L"Este instalador esta incompleto (sem os arquivos do port).");
+        fail(ui::T(L"Este instalador esta incompleto (sem os arquivos do port).", L"This installer is incomplete (the port files are missing)."));
         return;
     }
     std::error_code ec;
     fs::create_directories(dest, ec);
     if (ec) {
-        fail(L"Nao consegui criar a pasta de destino: " + dest.wstring());
+        fail(std::wstring(ui::T(L"Nao consegui criar a pasta de destino: ", L"Could not create the destination folder: ")) + dest.wstring());
         return;
     }
-    Step(L"Copiando os arquivos...", 5);
+    Step(ui::T(L"Copiando os arquivos...", L"Copying files..."), 5);
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
     const fs::path zip = fs::path(temp) / L"lego_dimensions_pc_payload.zip";
@@ -152,21 +152,21 @@ void Install(fs::path dest, bool desktop) {
             in.read(buffer.data(), static_cast<std::streamsize>(chunk));
             out.write(buffer.data(), static_cast<std::streamsize>(chunk));
             left -= chunk;
-            Step(L"Copiando os arquivos...", 5 + static_cast<int>(35 * (size - left) / size));
+            Step(ui::T(L"Copiando os arquivos...", L"Copying files..."), 5 + static_cast<int>(35 * (size - left) / size));
         }
         if (left) {
-            fail(L"Erro ao ler o instalador.");
+            fail(ui::T(L"Erro ao ler o instalador.", L"Error reading the installer."));
             return;
         }
     }
-    Step(L"Extraindo (pode levar um minuto)...", 45);
+    Step(ui::T(L"Extraindo (pode levar um minuto)...", L"Extracting (this can take a minute)..."), 45);
     wchar_t system[MAX_PATH];
     GetSystemDirectoryW(system, MAX_PATH);
     std::wstring command = L"\"" + (fs::path(system) / L"tar.exe").wstring() + L"\" -xf \"" + zip.wstring() + L"\" -C \"" + dest.wstring() + L"\"";
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        fail(L"Nao achei o tar.exe do Windows (Windows 10 1803 ou mais novo).");
+        fail(ui::T(L"Nao achei o tar.exe do Windows (Windows 10 1803 ou mais novo).", L"Windows tar.exe was not found (Windows 10 1803 or newer is required)."));
         return;
     }
     WaitForSingleObject(pi.hProcess, INFINITE);
@@ -176,10 +176,10 @@ void Install(fs::path dest, bool desktop) {
     CloseHandle(pi.hThread);
     DeleteFileW(zip.c_str());
     if (code != 0 || !fs::is_regular_file(dest / L"LegoDimensionsLauncher.exe", ec)) {
-        fail(L"A extracao falhou (codigo " + std::to_wstring(code) + L"). Ha espaco no disco?");
+        fail(std::wstring(ui::T(L"A extracao falhou (codigo ", L"Extraction failed (code ")) + std::to_wstring(code) + ui::T(L"). Ha espaco no disco?", L"). Is there enough disk space?"));
         return;
     }
-    Step(L"Criando o desinstalador e os atalhos...", 85);
+    Step(ui::T(L"Criando o desinstalador e os atalhos...", L"Creating the uninstaller and shortcuts..."), 85);
     { // desinstalador = este .exe sem o .zip
         std::ifstream in(fs::path(g_self), std::ios::binary);
         std::ofstream out(dest / L"Desinstalar.exe", std::ios::binary | std::ios::trunc);
@@ -195,15 +195,15 @@ void Install(fs::path dest, bool desktop) {
     const fs::path menu = KnownFolder(FOLDERID_Programs) / kAppName;
     fs::create_directories(menu, ec);
     Shortcut(menu / L"LEGO Dimensions PC.lnk", launcher, dest);
-    Shortcut(menu / L"Desinstalar LEGO Dimensions PC.lnk", dest / L"Desinstalar.exe", dest);
+    Shortcut(menu / ui::T(L"Desinstalar LEGO Dimensions PC.lnk", L"Uninstall LEGO Dimensions PC.lnk"), dest / L"Desinstalar.exe", dest);
     if (desktop) {
         Shortcut(KnownFolder(FOLDERID_Desktop) / L"LEGO Dimensions PC.lnk", launcher, dest);
     }
     HKEY key;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kUninstallKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
         SetRegString(key, L"DisplayName", kAppName);
-        SetRegString(key, L"DisplayVersion", L"Fase 49");
-        SetRegString(key, L"Publisher", L"Port nao oficial (feito em casa)");
+        SetRegString(key, L"DisplayVersion", ui::T(L"Fase 49", L"1.1"));
+        SetRegString(key, L"Publisher", ui::T(L"Port nao oficial (feito em casa)", L"Unofficial fan port"));
         SetRegString(key, L"InstallLocation", dest.wstring());
         SetRegString(key, L"DisplayIcon", launcher.wstring());
         SetRegString(key, L"UninstallString", L"\"" + (dest / L"Desinstalar.exe").wstring() + L"\" /uninstall");
@@ -220,11 +220,11 @@ void Install(fs::path dest, bool desktop) {
 int Uninstall() {
     const fs::path dir = fs::path(g_self).parent_path();
     if (!g_test_mode &&
-        MessageBoxW(nullptr, (L"Desinstalar o LEGO Dimensions PC de\n" + dir.wstring() + L" ?").c_str(), kAppName, MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        MessageBoxW(nullptr, (std::wstring(ui::T(L"Desinstalar o LEGO Dimensions PC de\n", L"Uninstall LEGO Dimensions PC from\n")) + dir.wstring() + L" ?").c_str(), kAppName, MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return 0;
     }
     const bool keep_saves =
-        g_test_mode || MessageBoxW(nullptr, L"Manter os seus saves (assets\\savedata0) na pasta?", kAppName, MB_YESNO | MB_ICONQUESTION) == IDYES;
+        g_test_mode || MessageBoxW(nullptr, ui::T(L"Manter os seus saves (assets\\savedata0) na pasta?", L"Keep your saves (assets\\savedata0) in the folder?"), kAppName, MB_YESNO | MB_ICONQUESTION) == IDYES;
     std::error_code ec;
     fs::remove_all(KnownFolder(FOLDERID_Programs) / kAppName, ec);
     fs::remove(KnownFolder(FOLDERID_Desktop) / L"LEGO Dimensions PC.lnk", ec);
@@ -255,7 +255,7 @@ int Uninstall() {
         CloseHandle(pi.hThread);
     }
     if (!g_test_mode) {
-        MessageBoxW(nullptr, keep_saves ? L"Desinstalado. Os saves ficaram em assets\\savedata0." : L"Desinstalado.", kAppName, MB_ICONINFORMATION);
+        MessageBoxW(nullptr, keep_saves ? ui::T(L"Desinstalado. Os saves ficaram em assets\\savedata0.", L"Uninstalled. Your saves were kept in assets\\savedata0.") : ui::T(L"Desinstalado.", L"Uninstalled."), kAppName, MB_ICONINFORMATION);
     }
     return 0;
 }
@@ -267,7 +267,7 @@ std::wstring BrowseFolder(const std::wstring& start) {
         DWORD options = 0;
         dialog->GetOptions(&options);
         dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-        dialog->SetTitle(L"Onde instalar o LEGO Dimensions PC");
+        dialog->SetTitle(ui::T(L"Onde instalar o LEGO Dimensions PC", L"Where to install LEGO Dimensions PC"));
         (void)start;
         if (SUCCEEDED(dialog->Show(g_main))) {
             IShellItem* item = nullptr;
@@ -297,7 +297,7 @@ std::wstring FreeSpace(const fs::path& dest) {
         return L"";
     }
     wchar_t text[64];
-    swprintf(text, 64, L"%.1f GB livres", free_bytes.QuadPart / 1073741824.0);
+    swprintf(text, 64, ui::T(L"%.1f GB livres", L"%.1f GB free"), free_bytes.QuadPart / 1073741824.0);
     return text;
 }
 
@@ -335,15 +335,17 @@ void Paint(HDC target) {
     DrawIconEx(dc, S(36), S(40), g_icon, S(96), S(96), 0, nullptr, DI_NORMAL);
     RECT title{S(152), S(44), w, S(100)}, sub{S(154), S(98), w, S(126)};
     ui::Text(dc, L"LEGO\u00ae DIMENSIONS PC", title, g_title, RGB(255, 255, 255));
-    ui::Text(dc, L"Instalador do port   \u2022   o jogo e as DLCs v\u00eam do seu pr\u00f3prio dump", sub, g_subtitle, ui::kMuted);
+    ui::Text(dc, ui::T(L"Instalador do port   \u2022   o jogo e as DLCs v\u00eam do seu pr\u00f3prio dump", L"Port installer   \u2022   the game and DLCs come from your own dump"), sub, g_subtitle, ui::kMuted);
     RECT label{S(48), header - S(8), S(kW - 48), header + S(14)};
-    ui::Text(dc, L"PASTA DE INSTALA\u00c7\u00c3O", label, g_label, ui::kMuted);
+    ui::Text(dc, ui::T(L"PASTA DE INSTALA\u00c7\u00c3O", L"INSTALL FOLDER"), label, g_label, ui::kMuted);
     RECT space{S(kW - 260), header - S(8), S(kW - 48), header + S(14)};
     ui::Text(dc, FreeSpace(GetText(g_dir)), space, g_label, ui::kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     RECT info{S(48), header + S(118), S(kW - 48), header + S(164)};
     ui::Text(dc,
-             L"Depois de instalar: abra o launcher, escolha a pasta do jogo (dump do PS4, CUSA01176) e a das DLCs, clique em Preparar "
-             L"(s\u00f3 na primeira vez: traduz os shaders do seu jogo para Vulkan) e depois em JOGAR.",
+             ui::T(L"Depois de instalar: abra o launcher, escolha a pasta do jogo (dump do PS4, CUSA01176) e a das DLCs, clique em Preparar "
+                   L"(s\u00f3 na primeira vez: traduz os shaders do seu jogo para Vulkan) e depois em JOGAR.",
+                   L"After installing: open the launcher, choose the game folder (PS4 dump, CUSA01176) and the DLC folder, click Prepare "
+                   L"(first time only: translates your game's shaders to Vulkan) and then PLAY."),
              info, g_small, ui::kMuted, DT_LEFT | DT_WORDBREAK);
     RECT step{S(48), S(kH - 154), S(kW - 120), S(kH - 130)}, pct{S(kW - 120), S(kH - 154), S(kW - 48), S(kH - 130)};
     ui::Text(dc, g_step, step, g_small, g_done ? ui::kGreen : ui::kText);
@@ -433,13 +435,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_done = true;
             g_pct = 100;
             g_launcher = *text;
-            g_step = L"Instalado! Abra o launcher, escolha a pasta do jogo e clique em Preparar.";
-            SetWindowTextW(g_install, L"Abrir o launcher");
-            SetWindowTextW(g_cancel, L"Fechar");
+            g_step = ui::T(L"Instalado! Abra o launcher, escolha a pasta do jogo e clique em Preparar.", L"Installed! Open the launcher, choose the game folder and click Prepare.");
+            SetWindowTextW(g_install, ui::T(L"Abrir o launcher", L"Open the launcher"));
+            SetWindowTextW(g_cancel, ui::T(L"Fechar", L"Close"));
             EnableWindow(g_install, TRUE);
             EnableWindow(g_cancel, TRUE);
         } else {
-            g_step = L"Falhou: " + *text;
+            g_step = std::wstring(ui::T(L"Falhou: ", L"Failed: ")) + *text;
             for (HWND h : {g_install, g_browse, g_dir, g_desktop, g_cancel}) {
                 EnableWindow(h, TRUE);
             }
@@ -484,7 +486,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
         return fs::is_regular_file(fs::path(dest) / L"LegoDimensionsLauncher.exe") ? 0 : 1;
     }
     if (!FindPayload().second) {
-        MessageBoxW(nullptr, L"Este e o desinstalador. Para desinstalar use \"Desinstalar LEGO Dimensions PC\" no menu Iniciar.", kAppName, MB_ICONINFORMATION);
+        MessageBoxW(nullptr, ui::T(L"Este e o desinstalador. Para desinstalar use \"Desinstalar LEGO Dimensions PC\" no menu Iniciar.", L"This is the uninstaller. To uninstall, use \"Uninstall LEGO Dimensions PC\" in the Start menu."), kAppName, MB_ICONINFORMATION);
         return 0;
     }
     ui::InitProcess();
@@ -510,18 +512,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
     RECT r{0, 0, S(kW), S(kH)};
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
     AdjustWindowRect(&r, style, FALSE);
-    g_main = CreateWindowExW(0, wc.lpszClassName, L"Instalar LEGO Dimensions PC", style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left,
+    g_main = CreateWindowExW(0, wc.lpszClassName, ui::T(L"Instalar LEGO Dimensions PC", L"Install LEGO Dimensions PC"), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left,
                              r.bottom - r.top, nullptr, nullptr, instance, nullptr);
     ui::DarkTitle(g_main);
     const int header = S(kHeader);
     g_dir = ui::Edit(g_main, S(58), header + S(26), S(kW - 300), S(24), kDir, g_font);
     SetWindowTextW(g_dir, L"C:\\Games\\LEGO Dimensions PC");
-    g_browse = ui::Button(g_main, L"Procurar...", ui::Style::kSecondary, S(kW - 216), header + S(16), S(168), S(44), kBrowse, g_button, ui::kPanel);
-    g_desktop = ui::Button(g_main, L"Criar atalho na \u00e1rea de trabalho", ui::Style::kToggle, S(48), header + S(72), S(360), S(40), kDesktop, g_font,
+    g_browse = ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), header + S(16), S(168), S(44), kBrowse, g_button, ui::kPanel);
+    g_desktop = ui::Button(g_main, ui::T(L"Criar atalho na \u00e1rea de trabalho", L"Create a desktop shortcut"), ui::Style::kToggle, S(48), header + S(72), S(360), S(40), kDesktop, g_font,
                            ui::kPanel);
     ui::SetChecked(g_desktop, true);
-    g_cancel = ui::Button(g_main, L"Cancelar", ui::Style::kSecondary, S(kW - 400), S(kH - 76), S(150), S(52), kCancel, g_button);
-    g_install = ui::Button(g_main, L"INSTALAR", ui::Style::kPrimary, S(kW - 236), S(kH - 76), S(212), S(52), kInstall, g_big_button);
+    g_cancel = ui::Button(g_main, ui::T(L"Cancelar", L"Cancel"), ui::Style::kSecondary, S(kW - 400), S(kH - 76), S(150), S(52), kCancel, g_button);
+    g_install = ui::Button(g_main, ui::T(L"INSTALAR", L"INSTALL"), ui::Style::kPrimary, S(kW - 236), S(kH - 76), S(212), S(52), kInstall, g_big_button);
     ShowWindow(g_main, show);
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {

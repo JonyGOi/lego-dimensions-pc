@@ -13,6 +13,7 @@
 // concluidos por uma thread de VSync, que e quem dita o ritmo do jogo.
 #include "hle/overrides/hle_videoout.h"
 #include "render/vulkan_backend.h"
+#include "runtime/lang.h"
 
 #include <atomic>
 #include <chrono>
@@ -97,13 +98,40 @@ u64 NowMicros() {
 // ------------------------------- janela -------------------------------------
 constexpr UINT_PTR kTitleTimer = 1;
 
+// Fase 60: tela cheia sem bordas (janela WS_POPUP do tamanho do monitor). O swapchain acompanha o novo
+// tamanho como num redimensionamento comum. F11 alterna; --fullscreen abre assim.
+std::atomic<bool> g_start_fullscreen{false};
+bool g_fullscreen = false;
+WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};
+
+void SetFullscreen(HWND hwnd, bool enabled) {
+    if (enabled == g_fullscreen) {
+        return;
+    }
+    if (enabled) {
+        GetWindowPlacement(hwnd, &g_windowed_placement);
+        MONITORINFO monitor{sizeof(monitor)};
+        GetMonitorInfoA(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+        const RECT& r = monitor.rcMonitor;
+        SetWindowLongPtrA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    } else {
+        SetWindowLongPtrA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPlacement(hwnd, &g_windowed_placement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    g_fullscreen = enabled;
+    log::Tagged("JANELA", "%s", enabled ? "tela cheia" : "janela");
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
     case WM_TIMER: {
         char title[224], warm[64];
         gnm::WarmupStatus(warm, sizeof(warm)); // Fase 36: "Compilando shaders: X / Y" enquanto aquece
         std::snprintf(title, sizeof(title),
-                      "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT abertos: %" PRIu64 " | Threads: %d%s",
+                      lang::Pt() ? "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT abertos: %" PRIu64 " | Threads: %d%s"
+                                 : "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT open: %" PRIu64 " | Threads: %d%s",
                       g_flip_count.load(), fs::DatFilesOpened(), runtime::AliveGuestThreads(), warm);
         SetWindowTextA(hwnd, title);
         if (!render::VulkanRenderer::Instance().Active()) {
@@ -131,6 +159,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         EndPaint(hwnd, &ps);
         return 0;
     }
+    case WM_KEYDOWN:
+        if (wparam == VK_F11 && !(lparam & (1 << 30))) { // Fase 60: F11 alterna a tela cheia (sem repeticao)
+            SetFullscreen(hwnd, !g_fullscreen);
+            return 0;
+        }
+        return DefWindowProcA(hwnd, msg, wparam, lparam);
+    case WM_SETCURSOR:
+        if (g_fullscreen && LOWORD(lparam) == HTCLIENT) {
+            SetCursor(nullptr); // sem seta do mouse por cima do jogo em tela cheia
+            return TRUE;
+        }
+        return DefWindowProcA(hwnd, msg, wparam, lparam);
     case WM_CLOSE:
         std::printf("\nJanela fechada pelo usuario.\n");
         log::Shutdown(0);
@@ -159,6 +199,9 @@ void WindowThread() {
         return;
     }
     g_hwnd.store(hwnd);
+    if (g_start_fullscreen.load()) {
+        SetFullscreen(hwnd, true); // antes do Vulkan: o swapchain ja nasce do tamanho do monitor
+    }
     // Backend grafico: superficie do Vulkan presa a esta janela. Se falhar, a janela continua
     // como antes (preta, com o texto por GDI).
     auto& renderer = render::VulkanRenderer::Instance();
@@ -344,6 +387,10 @@ void SetCheckModules(bool enabled) {
     g_check_modules = enabled;
 }
 
+void SetStartFullscreen(bool enabled) {
+    g_start_fullscreen = enabled;
+}
+
 void SetForce60Hz(bool enabled) {
     g_force_60hz = enabled;
 }
@@ -488,16 +535,16 @@ void RunLoadingScreen(u32 max_seconds) {
         vertices.clear();
         const std::string title = "LEGO DIMENSIONS";
         Text(vertices, title, 640.0f - TextWidth(title, 8.0f) / 2, 150.0f, 8.0f, kYellow);
-        const std::string subtitle = done ? "INICIANDO O JOGO" : "PREPARANDO SHADERS E PIPELINES";
+        const std::string subtitle = done ? lang::T("INICIANDO O JOGO", "STARTING THE GAME") : lang::T("PREPARANDO SHADERS E PIPELINES", "PREPARING SHADERS AND PIPELINES");
         Text(vertices, subtitle, 640.0f - TextWidth(subtitle, 3.0f) / 2, 230.0f, 3.0f, kWhite);
-        std::snprintf(line, sizeof(line), "PACOTE DE SHADERS AOT: %llu / %llu MB", static_cast<unsigned long long>(st.pack_done >> 20),
+        std::snprintf(line, sizeof(line), lang::T("PACOTE DE SHADERS AOT: %llu / %llu MB", "AOT SHADER PACK: %llu / %llu MB"), static_cast<unsigned long long>(st.pack_done >> 20),
                       static_cast<unsigned long long>(st.pack_total >> 20));
         Text(vertices, line, 300.0f, 320.0f, 2.5f, st.pack_finished ? kGreen : kWhite);
-        std::snprintf(line, sizeof(line), "SHADERS JA USADOS: %u / %u", st.pairs_done, st.pairs_total);
+        std::snprintf(line, sizeof(line), lang::T("SHADERS JA USADOS: %u / %u", "SHADERS ALREADY USED: %u / %u"), st.pairs_done, st.pairs_total);
         Text(vertices, line, 300.0f, 355.0f, 2.5f, st.pairs_finished ? kGreen : kWhite);
-        std::snprintf(line, sizeof(line), "PIPELINES JA VISTOS: %u / %u", st.pipelines_done, st.pipelines_total);
+        std::snprintf(line, sizeof(line), lang::T("PIPELINES JA VISTOS: %u / %u", "PIPELINES ALREADY SEEN: %u / %u"), st.pipelines_done, st.pipelines_total);
         Text(vertices, line, 300.0f, 390.0f, 2.5f, pipelines_finished ? kGreen : kWhite);
-        std::snprintf(line, sizeof(line), "TODOS OS SHADERS DO PACOTE: %u / %u", st.aot_done, st.aot_total);
+        std::snprintf(line, sizeof(line), lang::T("TODOS OS SHADERS DO PACOTE: %u / %u", "ALL SHADERS IN THE PACK: %u / %u"), st.aot_done, st.aot_total);
         Text(vertices, line, 300.0f, 425.0f, 2.5f, st.aot_finished ? kGreen : kWhite);
         // barra
         Quad(vertices, 296.0f, 476.0f, 984.0f, 504.0f, kGray);
@@ -505,8 +552,8 @@ void RunLoadingScreen(u32 max_seconds) {
         Quad(vertices, 300.0f, 480.0f, 300.0f + 680.0f * static_cast<float>(total), 500.0f, kYellow);
         std::snprintf(line, sizeof(line), "%d%%", static_cast<int>(total * 100.0 + 0.5));
         Text(vertices, line, 640.0f - TextWidth(line, 3.0f) / 2, 520.0f, 3.0f, kWhite);
-        Text(vertices, "TEXTURAS SAO LIDAS DA MEMORIA DO JOGO QUANDO APARECEM", 640.0f - TextWidth("TEXTURAS SAO LIDAS DA MEMORIA DO JOGO QUANDO APARECEM", 2.0f) / 2,
-             600.0f, 2.0f, kGray);
+        const std::string hint = lang::T("TEXTURAS SAO LIDAS DA MEMORIA DO JOGO QUANDO APARECEM", "TEXTURES ARE READ FROM GAME MEMORY WHEN THEY APPEAR");
+        Text(vertices, hint, 640.0f - TextWidth(hint, 2.0f) / 2, 600.0f, 2.0f, kGray);
         DrawLoading(vertices);
         if (done || seconds > max_seconds) {
             std::printf("[CARREGAMENTO] tela de carregamento: %.1f s (pacote %s, %u pares, %u de %u pipelines, %u de %u shaders do pacote)%s\n", seconds,

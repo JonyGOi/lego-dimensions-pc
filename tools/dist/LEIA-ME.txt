@@ -5,6 +5,12 @@ O QUE VEM AQUI
   O port (build\lego_dimensions.exe), o launcher, as ferramentas de preparacao e um Python portatil.
   NAO vem o jogo nem as DLCs: voce precisa do SEU proprio dump do LEGO Dimensions do PS4.
 
+IDIOMA
+  O launcher, o instalador e as telas do proprio port ficam em portugues quando o Windows esta em
+  portugues e em ingles nos outros casos. O jogo usa o idioma do Windows quando o jogo tem esse idioma
+  (portugues, ingles, frances, alemao, espanhol, italiano, holandes e dinamarques); nos outros, fica
+  em ingles.
+
 O QUE VOCE PRECISA
   - Windows 10 (1803 ou mais novo) ou Windows 11, 64 bits.
   - Placa de video com Vulkan 1.3 e driver atualizado. Testado so em AMD Radeon RX 6600.
@@ -35,6 +41,9 @@ COMO USAR
 
 DICAS
   - "60 FPS" liga os 60 quadros por segundo (o jogo original roda a 30).
+  - "Tela cheia" abre o jogo em tela cheia. Dentro do jogo, F11 alterna entre tela cheia e janela.
+  - O controle so mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad (ou em outra
+    janela) o personagem para. Um botao que ja estava apertado ao voltar so conta depois de solto.
   - Sem "Mostrar console", o log de cada sessao fica em build\logs\ (ajuda a achar problemas).
   - Na primeira visita a cada area o driver de video ainda compila pipelines novos (pode engasgar um
     pouco); eles ficam gravados e nas proximas vezes sao preparados na tela de carregamento.

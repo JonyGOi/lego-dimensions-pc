@@ -26,6 +26,7 @@
 #include "hle_symbol_table.h"
 #include "loader/elf_pie_loader.h"
 #include "patcher/fs_tls_patcher.h"
+#include "runtime/lang.h"
 #include "runtime/crash_handler.h"
 #include "runtime/orbis_tls.h"
 
@@ -40,6 +41,7 @@ bool SetPadInputScript(const char* text);
 void SetLoadGameMacro(bool enabled);
 void SetSkipIntroSpam(bool enabled);
 void SetPadKeyboardEnabled(bool enabled);
+void SetPadBackgroundInput(bool enabled);
 void SetNgs2VoiceClock(bool enabled);
 void SetNgs2VoiceLog(bool enabled);
 void SetAudioOutput(bool enabled);
@@ -1155,6 +1157,13 @@ int main(int argc, char** argv) {
             hle::gnm::SetSrgbDisplay(false); // (padrao)
         } else if (!std::strcmp(argv[i], "--srgb-display")) {
             hle::gnm::SetSrgbDisplay(true); // experimento: buffer de video como alvo sRGB (gama a mais)
+        } else if (!std::strcmp(argv[i], "--lang") && i + 1 < argc) {
+            ++i; // Fase 60: idioma dos textos do port e do jogo (pt / en); sem a opcao, o do Windows
+            lang::Choice() = !_strnicmp(argv[i], "pt", 2) ? 1 : !_strnicmp(argv[i], "en", 2) ? 0 : -1;
+        } else if (!std::strcmp(argv[i], "--background-pad")) {
+            hle::SetPadBackgroundInput(true); // Fase 60: o controle vale mesmo com a janela fora de foco
+        } else if (!std::strcmp(argv[i], "--fullscreen")) {
+            hle::videoout::SetStartFullscreen(true); // Fase 60: tela cheia sem bordas (F11 alterna)
         } else if (!std::strcmp(argv[i], "--fps60")) {
             hle::videoout::SetForce60Hz(true); // EXPERIMENTAL: flips a 60 Hz mesmo que o jogo peca 30
         } else if (!std::strcmp(argv[i], "--no-async-pipelines")) {
