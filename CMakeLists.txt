@@ -1,0 +1,107 @@
+cmake_minimum_required(VERSION 3.24)
+project(lego_dimensions_pc LANGUAGES C CXX RC)
+
+# Os stubs HLE usam __attribute__((sysv_abi)) e o salto para o entry point usa asm inline GNU:
+# so Clang (clang++ ou clang-cl) serve no Windows.
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR "Este projeto exige Clang (clang++ / clang-cl). Compilador atual: ${CMAKE_CXX_COMPILER_ID}")
+endif()
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Alvo suportado: Windows x64")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+
+# ---- Zydis ---------------------------------------------------------------
+set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_MAN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_ENCODER OFF CACHE BOOL "" FORCE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/zydis/CMakeLists.txt")
+    add_subdirectory(externals/zydis EXCLUDE_FROM_ALL)
+else()
+    include(FetchContent)
+    FetchContent_Declare(zydis
+        GIT_REPOSITORY https://github.com/zyantific/zydis.git
+        GIT_TAG v4.1.0
+        GIT_SUBMODULES_RECURSE ON)
+    FetchContent_MakeAvailable(zydis)
+endif()
+
+# ---- Executavel ----------------------------------------------------------
+include(src/hle/generated/sources.cmake)
+
+add_executable(lego_dimensions
+    src/main.cpp
+    tools/dist/app.rc # Fase 50: icone
+    src/loader/elf_pie_loader.cpp
+    src/patcher/fs_tls_patcher.cpp
+    src/runtime/orbis_tls.cpp
+    src/runtime/crash_handler.cpp
+    src/hle/hle_log.cpp
+    src/hle/hle_perf.cpp
+    src/hle/overrides/hle_override.cpp
+    src/hle/overrides/guest_format.cpp
+    src/hle/overrides/hle_kernel_memory.cpp
+    src/hle/overrides/hle_kernel_misc.cpp
+    src/hle/overrides/hle_pthread.cpp
+    src/hle/overrides/hle_libc.cpp
+    src/hle/overrides/hle_libc_stdio.cpp
+    src/hle/overrides/hle_filesystem.cpp
+    src/hle/overrides/hle_fios2.cpp
+    src/hle/overrides/hle_kernel_sync.cpp
+    src/hle/overrides/hle_userservice_pad.cpp
+    src/hle/overrides/hle_audio.cpp
+    src/hle/overrides/hle_usbd.cpp
+    src/hle/overrides/hle_videoout.cpp
+    src/hle/overrides/hle_gnm.cpp
+    src/hle/overrides/hle_toypad.cpp
+    src/hle/overrides/hle_toypad_listener.cpp
+    src/hle/overrides/hle_pad.cpp
+    src/hle/overrides/hle_pad_sdl.cpp
+    src/hle/overrides/hle_radar.cpp
+    src/hle/overrides/hle_savedata.cpp
+    src/hle/overrides/hle_offline.cpp
+    src/render/vulkan_backend.cpp
+    ${HLE_GENERATED_SOURCES}
+)
+target_include_directories(lego_dimensions PRIVATE src src/hle/generated)
+
+# SDL3 (Fase 24.5): so o subsistema de gamepad, para o DualShock 4. Biblioteca estatica ja
+# compilada (clang-cl, /MD) em externals/sdl3, copiada do build do shadPS4.
+target_include_directories(lego_dimensions PRIVATE externals/sdl3/include)
+target_link_libraries(lego_dimensions PRIVATE ${CMAKE_SOURCE_DIR}/externals/sdl3/lib/SDL3-static.lib
+    imm32 version setupapi ole32 oleaut32 cfgmgr32 advapi32 shell32 uuid)
+
+# Vulkan: so os cabecalhos sao necessarios para compilar (vulkan-1.dll e carregada em tempo de
+# execucao). Usa o Vulkan SDK se estiver instalado; senao, os cabecalhos em externals/.
+# Fase 19: o Vulkan SDK e exigido (cabecalhos e, em tempo de execucao, as camadas de validacao).
+# O CMake o encontra pela variavel de ambiente VULKAN_SDK, criada pelo instalador.
+find_package(Vulkan REQUIRED)
+message(STATUS "Vulkan SDK: ${Vulkan_INCLUDE_DIRS} (versao ${Vulkan_VERSION})")
+target_link_libraries(lego_dimensions PRIVATE Vulkan::Headers)
+target_link_libraries(lego_dimensions PRIVATE Zydis winmm user32 gdi32 xinput dbghelp)
+target_compile_definitions(lego_dimensions PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS
+    LD_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(lego_dimensions PRIVATE /W3 -Wno-unused-parameter)
+else()
+    target_compile_options(lego_dimensions PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+# O codigo do jogo roda na pilha da thread principal: 8 MiB, ja com commit total. O codigo do
+# Orbis nao faz stack probing, entao a pilha nao pode depender das guard pages do Windows.
+target_link_options(lego_dimensions PRIVATE "/STACK:8388608,8388608")
+
+# ---- Ferramenta: desmontagem dos call sites de imports no eboot ------------
+add_executable(callsites tools/callsites/callsites.cpp)
+target_include_directories(callsites PRIVATE src)
+target_link_libraries(callsites PRIVATE Zydis)
+target_compile_definitions(callsites PRIVATE _CRT_SECURE_NO_WARNINGS)

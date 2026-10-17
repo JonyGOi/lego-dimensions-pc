@@ -1,0 +1,34 @@
+# saidas de compilacao
+/build/
+/build_dist/
+/dist/
+tools/**/build/
+__pycache__/
+
+# conteudo do jogo e dados de cada usuario (nunca vao para o repositorio)
+sys_modules/
+assets/decrypted_elfs/*
+assets/dumped_shaders/*
+assets/shaders_aot/*
+assets/savedata*/*
+assets/temp0/*
+assets/download0/*
+assets/addcont/
+assets/shaders_spv/pairs/*
+assets/shaders_spv/pair_snapshots.txt
+assets/shaders_spv/ui_shader_pairs.tsv
+!assets/**/.manter
+*.DAT
+*.DAT2
+*.HDR
+*.HDR2
+*.pak
+*.idx
+*.elf
+*.prx
+*.sprx
+eboot.bin
+*.rdc
+*.log
+launcher.ini
+FASE*.md

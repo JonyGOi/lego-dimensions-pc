@@ -1,0 +1,30 @@
+#pragma once
+
+#include <filesystem>
+#include <string>
+
+#include "common/types.h"
+
+// "Radar de telas": diz QUAL arquivo do jogo esta sendo carregado.
+//
+// O eboot so abre os pacotes (.DAT); os arquivos de dentro sao lidos por offset, entao o nome
+// nunca passa por sceKernelOpen / sceFios*. O radar traduz (pacote, offset lido) em nome usando
+// os indices de tools/data/dat_index/<PACOTE>.tsv (gerados por tools/build_dat_index.py).
+//
+//   - Todo arquivo tocado pela primeira vez vai para o arquivo de log do radar, com o instante.
+//   - Os que casam com o filtro de "tela" (.gsc, .txt, .csv, .lip, "screen") tambem saem no
+//     terminal como  >>> [RADAR DE TELA] Carregando: <nome> <<<
+namespace hle::radar {
+
+void Configure(const std::filesystem::path& index_dir, const std::filesystem::path& log_file);
+
+// Chamado pelo VFS a cada leitura bem-sucedida. Ignora o que nao for pacote com indice.
+void OnRead(const std::string& guest_path, s64 offset, u64 size);
+
+// true se o nome casa com o filtro de "tela". `lower_name` em minusculas.
+bool IsScreenFile(const std::string& lower_name);
+
+u64 FilesSeen();
+void PrintStats();
+
+} // namespace hle::radar

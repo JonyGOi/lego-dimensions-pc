@@ -1,0 +1,530 @@
+// VFS do Orbis (/app0, /temp0, /savedata0) + I/O de arquivo do libkernel.
+#include "hle/overrides/hle_radar.h"
+#include "hle/overrides/hle_filesystem.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <cinttypes>
+#include <cstdio>
+#include <map>
+#include <set>
+#include <system_error>
+
+#include <windows.h>
+
+#include "hle/overrides/hle_override.h"
+
+namespace hle::fs {
+
+namespace {
+
+struct Mount {
+    std::string prefix; // "/app0"
+    std::filesystem::path host;
+    bool read_only;
+};
+
+std::mutex g_mounts_mutex;
+std::vector<Mount> g_mounts;
+std::filesystem::path g_app0;
+std::filesystem::path g_app0_patch; // Fase 58: atualizacao em pasta separada (CUSA01176-patch), por cima do /app0
+std::filesystem::path g_writable_root;
+std::atomic<u64> g_dat_opened{0};
+
+s64 FileTimeToUnix(const FILETIME& ft) {
+    const u64 ticks = (static_cast<u64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    return static_cast<s64>(ticks / 10000000ULL) - 11644473600LL;
+}
+
+int LastErrorToOrbis() {
+    switch (GetLastError()) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_INVALID_NAME:
+        return kENOENT;
+    case ERROR_FILE_EXISTS:
+    case ERROR_ALREADY_EXISTS:
+        return kEEXIST;
+    case ERROR_ACCESS_DENIED:
+        return kEISDIR; // CreateFile em diretorio sem FILE_FLAG_BACKUP_SEMANTICS
+    default:
+        return kEIO;
+    }
+}
+
+const char* ErrorName(int error) {
+    switch (error) {
+    case 0: return "OK";
+    case kENOENT: return "NAO ENCONTRADO";
+    case kEEXIST: return "JA EXISTE";
+    case kEISDIR: return "E DIRETORIO";
+    case kENOTDIR: return "NAO E DIRETORIO";
+    case kEROFS: return "SOMENTE LEITURA (/app0)";
+    default: return "ERRO DE E/S";
+    }
+}
+
+void LogAccess(const char* api, const char* guest, const Resolved& r, int error, const char* extra = "") {
+    if (!r.mounted) {
+        log::Fs("%s \"%s\" -> SEM MOUNT (fora de /app0, /temp0, /download0 e de um save montado)", api, guest ? guest : "(null)");
+    } else {
+        log::Fs("%s \"%s\" -> %s%s  [%s]", api, guest, ErrorName(error), extra, r.host.string().c_str());
+    }
+}
+
+} // namespace
+
+// ------------------------------- File ---------------------------------------
+File::File(void* handle, std::string guest_path, bool writable)
+    : handle_(handle), guest_path_(std::move(guest_path)), writable_(writable) {}
+
+File::~File() {
+    CloseHandle(handle_);
+}
+
+s64 File::Pread(void* buffer, u64 size, s64 offset) {
+    u8* out = static_cast<u8*>(buffer);
+    u64 total = 0;
+    while (total < size) {
+        OVERLAPPED ov{};
+        const u64 at = static_cast<u64>(offset) + total;
+        ov.Offset = static_cast<DWORD>(at);
+        ov.OffsetHigh = static_cast<DWORD>(at >> 32);
+        const DWORD chunk = static_cast<DWORD>(std::min<u64>(size - total, 0x40000000));
+        DWORD got = 0;
+        if (!ReadFile(handle_, out + total, chunk, &got, &ov)) {
+            if (GetLastError() == ERROR_HANDLE_EOF) {
+                break;
+            }
+            return total ? static_cast<s64>(total) : -1;
+        }
+        if (!got) {
+            break;
+        }
+        total += got;
+    }
+    if (total) {
+        radar::OnRead(guest_path_, offset, total); // radar de telas: qual arquivo do pacote e este
+    }
+    return static_cast<s64>(total);
+}
+
+s64 File::Pwrite(const void* buffer, u64 size, s64 offset) {
+    if (!writable_) {
+        return -1;
+    }
+    const u8* in = static_cast<const u8*>(buffer);
+    u64 total = 0;
+    while (total < size) {
+        OVERLAPPED ov{};
+        const u64 at = static_cast<u64>(offset) + total;
+        ov.Offset = static_cast<DWORD>(at);
+        ov.OffsetHigh = static_cast<DWORD>(at >> 32);
+        const DWORD chunk = static_cast<DWORD>(std::min<u64>(size - total, 0x40000000));
+        DWORD put = 0;
+        if (!WriteFile(handle_, in + total, chunk, &put, &ov) || !put) {
+            return total ? static_cast<s64>(total) : -1;
+        }
+        total += put;
+    }
+    return static_cast<s64>(total);
+}
+
+s64 File::Read(void* buffer, u64 size) {
+    std::lock_guard lock(mutex_);
+    const s64 n = Pread(buffer, size, position_);
+    if (n > 0) {
+        position_ += n;
+    }
+    return n;
+}
+
+s64 File::Write(const void* buffer, u64 size) {
+    std::lock_guard lock(mutex_);
+    const s64 n = Pwrite(buffer, size, position_);
+    if (n > 0) {
+        position_ += n;
+    }
+    return n;
+}
+
+s64 File::Seek(s64 offset, int whence) {
+    std::lock_guard lock(mutex_);
+    s64 base = 0;
+    if (whence == 1) {
+        base = position_;
+    } else if (whence == 2) {
+        base = Size();
+    } else if (whence != 0) {
+        return -1;
+    }
+    if (base + offset < 0) {
+        return -1;
+    }
+    position_ = base + offset;
+    return position_;
+}
+
+s64 File::Size() {
+    LARGE_INTEGER size;
+    return GetFileSizeEx(handle_, &size) ? size.QuadPart : -1;
+}
+
+s64 File::ModifiedTime() {
+    FILETIME write;
+    return GetFileTime(handle_, nullptr, nullptr, &write) ? FileTimeToUnix(write) : 0;
+}
+
+// ----------------------------- resolvedor -----------------------------------
+void Configure(const std::filesystem::path& app0, const std::filesystem::path& writable_root) {
+    std::lock_guard lock(g_mounts_mutex);
+    g_app0 = app0;
+    g_writable_root = writable_root;
+    // /savedataN nao e fixo: so existe entre sceSaveDataMount e sceSaveDataUmount.
+    g_mounts = {
+        {"/app0", app0, true},
+        {"/temp0", writable_root / "temp0", false},
+        {"/download0", writable_root / "download0", false},
+    };
+    std::error_code ec;
+    std::filesystem::create_directories(writable_root / "savedata0", ec);
+    for (const auto& m : g_mounts) {
+        if (!m.read_only) {
+            std::filesystem::create_directories(m.host, ec);
+        }
+    }
+}
+
+const std::filesystem::path& App0() {
+    return g_app0;
+}
+
+void SetApp0Patch(const std::filesystem::path& patch_dir) {
+    std::lock_guard lock(g_mounts_mutex);
+    g_app0_patch = patch_dir;
+}
+
+const std::filesystem::path& App0Patch() {
+    return g_app0_patch;
+}
+
+const std::filesystem::path& WritableRoot() {
+    return g_writable_root;
+}
+
+void SetMount(const std::string& prefix, const std::filesystem::path& host, bool read_only) {
+    std::lock_guard lock(g_mounts_mutex);
+    std::erase_if(g_mounts, [&](const Mount& m) { return m.prefix == prefix; });
+    g_mounts.push_back({prefix, host, read_only});
+}
+
+void RemoveMount(const std::string& prefix) {
+    std::lock_guard lock(g_mounts_mutex);
+    std::erase_if(g_mounts, [&](const Mount& m) { return m.prefix == prefix; });
+}
+
+u64 DatFilesOpened() {
+    return g_dat_opened.load();
+}
+
+Resolved Resolve(const char* guest_path) {
+    Resolved r;
+    if (!guest_path || !*guest_path) {
+        return r;
+    }
+    std::string p = guest_path;
+    for (char& c : p) {
+        if (c == '\\') {
+            c = '/';
+        }
+    }
+    // Caminho relativo: o diretorio corrente de um titulo do Orbis e /app0.
+    if (p[0] != '/') {
+        p = "/app0/" + p;
+    }
+    std::lock_guard lock(g_mounts_mutex);
+    for (const auto& m : g_mounts) {
+        if (p.compare(0, m.prefix.size(), m.prefix) != 0 ||
+            (p.size() > m.prefix.size() && p[m.prefix.size()] != '/')) {
+            continue;
+        }
+        const std::filesystem::path rel = std::filesystem::path(p.substr(m.prefix.size())).relative_path();
+        const std::filesystem::path full = (m.host / rel).lexically_normal();
+        // ".." nao pode escapar do mount
+        const auto base = m.host.lexically_normal();
+        const auto mismatch = std::mismatch(base.begin(), base.end(), full.begin(), full.end());
+        if (mismatch.first != base.end() && !mismatch.first->empty()) {
+            return r;
+        }
+        r.host = full;
+        r.mounted = true;
+        r.read_only = m.read_only;
+        // Fase 58: no /app0, o arquivo da atualizacao (se existir) vence o do jogo base
+        if (m.prefix == "/app0" && !g_app0_patch.empty()) {
+            const std::filesystem::path patched = (g_app0_patch / rel).lexically_normal();
+            std::error_code ec;
+            if (std::filesystem::exists(patched, ec)) {
+                r.host = patched;
+            }
+        }
+        return r;
+    }
+    return r;
+}
+
+std::shared_ptr<File> Open(const char* api, const char* guest_path, OpenMode mode, int* error) {
+    const Resolved r = Resolve(guest_path);
+    int err = 0;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    const bool wants_write = mode.write || mode.create || mode.truncate || mode.append;
+    if (!r.mounted) {
+        err = kENOENT;
+    } else if (r.read_only && wants_write) {
+        err = kEROFS;
+    } else {
+        std::error_code ec;
+        if (std::filesystem::is_directory(r.host, ec)) {
+            err = kEISDIR;
+        } else {
+            const DWORD access = GENERIC_READ | (wants_write ? GENERIC_WRITE : 0);
+            const DWORD disposition = mode.create ? (mode.truncate ? CREATE_ALWAYS : OPEN_ALWAYS)
+                                                  : (mode.truncate ? TRUNCATE_EXISTING : OPEN_EXISTING);
+            h = CreateFileW(r.host.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, disposition,
+                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
+            if (h == INVALID_HANDLE_VALUE) {
+                err = LastErrorToOrbis();
+            }
+        }
+    }
+    std::shared_ptr<File> file;
+    char extra[64] = "";
+    if (!err) {
+        const std::string ext = r.host.extension().string();
+        if (_stricmp(ext.c_str(), ".dat") == 0) {
+            g_dat_opened.fetch_add(1);
+        }
+        file = std::make_shared<File>(h, guest_path, wants_write);
+        if (mode.append) {
+            file->Seek(0, 2);
+        }
+        std::snprintf(extra, sizeof(extra), " (%s, %" PRId64 " bytes)", wants_write ? "escrita" : "leitura",
+                      file->Size());
+    }
+    LogAccess(api, guest_path, r, err, extra);
+    if (error) {
+        *error = err;
+    }
+    return file;
+}
+
+int Stat(const char* api, const char* guest_path, StatInfo* out) {
+    const Resolved r = Resolve(guest_path);
+    int err = kENOENT;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (r.mounted && GetFileAttributesExW(r.host.c_str(), GetFileExInfoStandard, &data)) {
+        err = 0;
+        if (out) {
+            out->is_directory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            out->size = (static_cast<s64>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+            out->mtime = FileTimeToUnix(data.ftLastWriteTime);
+        }
+    }
+    LogAccess(api, guest_path, r, err);
+    return err;
+}
+
+int ListDirectory(const char* api, const char* guest_path, std::vector<DirEntry>* out) {
+    const Resolved r = Resolve(guest_path);
+    int err = kENOENT;
+    std::error_code ec;
+    if (r.mounted && std::filesystem::exists(r.host, ec)) {
+        if (!std::filesystem::is_directory(r.host, ec)) {
+            err = kENOTDIR;
+        } else {
+            err = 0;
+            // Fase 58: pasta do /app0 com atualizacao separada: junta as duas (a da atualizacao vence)
+            std::vector<std::filesystem::path> dirs{r.host};
+            if (!g_app0_patch.empty()) {
+                std::string p = guest_path ? guest_path : "";
+                for (char& c : p) {
+                    if (c == '\\') {
+                        c = '/';
+                    }
+                }
+                if (!p.empty() && p[0] != '/') {
+                    p = "/app0/" + p;
+                }
+                if (p.compare(0, 5, "/app0") == 0) {
+                    const auto rel = std::filesystem::path(p.substr(5)).relative_path();
+                    const auto base = (g_app0 / rel).lexically_normal(), over = (g_app0_patch / rel).lexically_normal();
+                    dirs = {over, base};
+                }
+            }
+            std::set<std::string> names;
+            for (const auto& dir_path : dirs) {
+                for (const auto& entry : std::filesystem::directory_iterator(dir_path, ec)) {
+                    const std::string name = entry.path().filename().string();
+                    if (!names.insert(name).second) {
+                        continue;
+                    }
+                    const bool dir = entry.is_directory(ec);
+                    out->push_back({name, dir, dir ? 0 : static_cast<s64>(entry.file_size(ec))});
+                }
+                ec.clear();
+            }
+        }
+    }
+    char extra[32] = "";
+    if (!err) {
+        std::snprintf(extra, sizeof(extra), " (%zu entradas)", out->size());
+    }
+    LogAccess(api, guest_path, r, err, extra);
+    return err;
+}
+
+int Remove(const char* api, const char* guest_path, bool directory) {
+    const Resolved r = Resolve(guest_path);
+    int err = 0;
+    if (!r.mounted) {
+        err = kENOENT;
+    } else if (r.read_only) {
+        err = kEROFS;
+    } else if (directory ? !RemoveDirectoryW(r.host.c_str()) : !DeleteFileW(r.host.c_str())) {
+        err = LastErrorToOrbis();
+    }
+    LogAccess(api, guest_path, r, err);
+    return err;
+}
+
+int Rename(const char* api, const char* from, const char* to) {
+    const Resolved a = Resolve(from);
+    const Resolved b = Resolve(to);
+    int err = 0;
+    if (!a.mounted || !b.mounted) {
+        err = kENOENT;
+    } else if (a.read_only || b.read_only) {
+        err = kEROFS;
+    } else if (!MoveFileExW(a.host.c_str(), b.host.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        err = LastErrorToOrbis();
+    }
+    LogAccess(api, from, a, err);
+    log::Fs("%s    para \"%s\"", api, to ? to : "(null)");
+    return err;
+}
+
+int MakeDirectory(const char* api, const char* guest_path) {
+    const Resolved r = Resolve(guest_path);
+    int err = 0;
+    if (!r.mounted) {
+        err = kENOENT;
+    } else if (r.read_only) {
+        err = kEROFS;
+    } else if (!CreateDirectoryW(r.host.c_str(), nullptr)) {
+        err = LastErrorToOrbis();
+    }
+    LogAccess(api, guest_path, r, err);
+    return err;
+}
+
+} // namespace hle::fs
+
+// ============================ libkernel: arquivos ============================
+namespace {
+
+using namespace hle;
+
+// Flags de open() do FreeBSD
+constexpr int kOAccMode = 0x3;
+constexpr int kOAppend = 0x8;
+constexpr int kOCreat = 0x200;
+constexpr int kOTrunc = 0x400;
+
+std::mutex g_fd_mutex;
+std::map<int, std::shared_ptr<fs::File>> g_fds;
+int g_next_fd = 3; // 0-2 sao stdin/stdout/stderr
+
+std::shared_ptr<fs::File> GetFd(int fd) {
+    std::lock_guard lock(g_fd_mutex);
+    const auto it = g_fds.find(fd);
+    return it == g_fds.end() ? nullptr : it->second;
+}
+
+HLE_IMPL(int, sceKernelOpen, const char* path, int flags, u32 mode) {
+    fs::OpenMode open_mode;
+    open_mode.write = (flags & kOAccMode) != 0;
+    open_mode.create = (flags & kOCreat) != 0;
+    open_mode.truncate = (flags & kOTrunc) != 0;
+    open_mode.append = (flags & kOAppend) != 0;
+    int error = 0;
+    auto file = fs::Open("sceKernelOpen", path, open_mode, &error);
+    int result = error;
+    if (file) {
+        std::lock_guard lock(g_fd_mutex);
+        result = g_next_fd++;
+        g_fds[result] = std::move(file);
+    }
+    HLE_QUIET("\"%s\", 0x%x -> %d", path, flags, result);
+    return result;
+}
+HLE_OVERRIDE(sceKernelOpen);
+
+HLE_IMPL(int, sceKernelClose, int fd) {
+    HLE_QUIET("%d", fd);
+    std::lock_guard lock(g_fd_mutex);
+    return g_fds.erase(fd) ? err::OK : fs::kEBADF;
+}
+HLE_OVERRIDE(sceKernelClose);
+
+HLE_IMPL(s64, sceKernelRead, int fd, void* buffer, u64 size) {
+    HLE_QUIET("%d, %p, %" PRIu64, fd, buffer, size);
+    const auto file = GetFd(fd);
+    if (!file) {
+        return fs::kEBADF;
+    }
+    const s64 n = file->Read(buffer, size);
+    return n < 0 ? fs::kEIO : n;
+}
+HLE_OVERRIDE(sceKernelRead);
+
+HLE_IMPL(s64, sceKernelPread, int fd, void* buffer, u64 size, s64 offset) {
+    HLE_QUIET("%d, %p, %" PRIu64 ", @%" PRId64, fd, buffer, size, offset);
+    const auto file = GetFd(fd);
+    if (!file) {
+        return fs::kEBADF;
+    }
+    if (offset < 0) {
+        return err::kEINVAL;
+    }
+    const s64 n = file->Pread(buffer, size, offset);
+    return n < 0 ? fs::kEIO : n;
+}
+HLE_OVERRIDE(sceKernelPread);
+
+HLE_IMPL(s64, sceKernelPwrite, int fd, const void* buffer, u64 size, s64 offset) {
+    HLE_QUIET("%d, %p, %" PRIu64 ", @%" PRId64, fd, buffer, size, offset);
+    const auto file = GetFd(fd);
+    if (!file) {
+        return fs::kEBADF;
+    }
+    if (offset < 0) {
+        return err::kEINVAL;
+    }
+    const s64 n = file->Pwrite(buffer, size, offset);
+    return n < 0 ? fs::kEBADF : n;
+}
+HLE_OVERRIDE(sceKernelPwrite);
+
+HLE_IMPL(int, sceKernelUnlink, const char* path) {
+    HLE_QUIET("\"%s\"", path);
+    return fs::Remove("sceKernelUnlink", path, false);
+}
+HLE_OVERRIDE(sceKernelUnlink);
+
+HLE_IMPL(int, sceKernelRename, const char* from, const char* to) {
+    HLE_QUIET("\"%s\" -> \"%s\"", from, to);
+    return fs::Rename("sceKernelRename", from, to);
+}
+HLE_OVERRIDE(sceKernelRename);
+
+} // namespace
