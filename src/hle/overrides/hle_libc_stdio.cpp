@@ -207,17 +207,17 @@ HLE_IMPL(void*, fopen, const char* path, const char* mode) {
         status = "SEM MOUNT";
     } else if (resolved.read_only && writes) {
         status = "SOMENTE LEITURA (/app0)";
-    } else if ((fp = std::fopen(resolved.host.string().c_str(), bin_mode.c_str())) != nullptr) {
+    } else if ((fp = _wfopen(resolved.host.c_str(), std::wstring(bin_mode.begin(), bin_mode.end()).c_str())) != nullptr) { // Fase 60: caminho largo
         status = "OK";
     }
     HostFile* file = nullptr;
     if (fp) {
         file = new HostFile;
         file->fp = fp;
-        file->path = resolved.host.string();
+        file->path = fs::PathText(resolved.host);
     }
     log::Fs("fopen \"%s\" modo \"%s\" -> %s  [%s]", path ? path : "(null)", mode ? mode : "", status,
-            resolved.host.string().c_str());
+            fs::PathText(resolved.host).c_str());
     HLE_QUIET("\"%s\", \"%s\"", path, mode);
     return file;
 }

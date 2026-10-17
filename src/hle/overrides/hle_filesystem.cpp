@@ -69,7 +69,7 @@ void LogAccess(const char* api, const char* guest, const Resolved& r, int error,
     if (!r.mounted) {
         log::Fs("%s \"%s\" -> SEM MOUNT (fora de /app0, /temp0, /download0 e de um save montado)", api, guest ? guest : "(null)");
     } else {
-        log::Fs("%s \"%s\" -> %s%s  [%s]", api, guest, ErrorName(error), extra, r.host.string().c_str());
+        log::Fs("%s \"%s\" -> %s%s  [%s]", api, guest, ErrorName(error), extra, PathText(r.host).c_str());
     }
 }
 
@@ -300,7 +300,7 @@ std::shared_ptr<File> Open(const char* api, const char* guest_path, OpenMode mod
     std::shared_ptr<File> file;
     char extra[64] = "";
     if (!err) {
-        const std::string ext = r.host.extension().string();
+        const std::string ext = PathText(r.host.extension());
         if (_stricmp(ext.c_str(), ".dat") == 0) {
             g_dat_opened.fetch_add(1);
         }
@@ -364,7 +364,7 @@ int ListDirectory(const char* api, const char* guest_path, std::vector<DirEntry>
             std::set<std::string> names;
             for (const auto& dir_path : dirs) {
                 for (const auto& entry : std::filesystem::directory_iterator(dir_path, ec)) {
-                    const std::string name = entry.path().filename().string();
+                    const std::string name = PathText(entry.path().filename());
                     if (!names.insert(name).second) {
                         continue;
                     }

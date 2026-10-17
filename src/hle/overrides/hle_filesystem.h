@@ -17,6 +17,13 @@
 //   /download0/...  -> assets/download0/
 namespace hle::fs {
 
+// Fase 60: caminho do host como texto UTF-8 (para log e mensagens). path::string() converte para a pagina de
+// codigo ANSI e lanca excecao com caracteres fora dela (ex.: pastas de DLC com dois-pontos de largura cheia, U+FF1A, no nome).
+inline std::string PathText(const std::filesystem::path& p) {
+    const std::u8string u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 // Erros do Orbis usados pelo VFS (0x80020000 | errno do FreeBSD)
 constexpr int kENOENT = static_cast<int>(0x80020002);
 constexpr int kEBADF = static_cast<int>(0x80020009);

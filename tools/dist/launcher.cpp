@@ -626,6 +626,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
     g_root = fs::path(exe).parent_path();
     SetEnvironmentVariableW(L"LD_LANG", ui::Pt() ? L"pt" : L"en"); // Fase 60
+    SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8"); // Fase 60: o log da preparacao chega em UTF-8 (nomes de DLC)
     g_font = ui::Font(15);
     g_small = ui::Font(13);
     g_label = ui::Font(11.5f, FW_SEMIBOLD);

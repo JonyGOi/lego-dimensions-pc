@@ -287,7 +287,7 @@ void ScanAddcont() {
     g_addcont.clear();
     std::error_code ec;
     if (g_addcont_dir.empty() || !std::filesystem::is_directory(g_addcont_dir, ec)) {
-        log::Tagged("DLC", "pasta de DLC nao encontrada (%s): nenhum DLC", g_addcont_dir.string().c_str());
+        log::Tagged("DLC", "pasta de DLC nao encontrada (%s): nenhum DLC", fs::PathText(g_addcont_dir).c_str());
         return;
     }
     for (std::filesystem::directory_iterator it(g_addcont_dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -298,12 +298,12 @@ void ScanAddcont() {
         const auto category = ReadSfoString(sfo, "CATEGORY");
         const auto content_id = ReadSfoString(sfo, "CONTENT_ID");
         if (!category || category->compare(0, 2, "ac") != 0 || !content_id || content_id->size() <= 20) {
-            log::Tagged("DLC", "%s: sem param.sfo de conteudo adicional, ignorado", it->path().filename().string().c_str());
+            log::Tagged("DLC", "%s: sem param.sfo de conteudo adicional, ignorado", fs::PathText(it->path().filename()).c_str());
             continue;
         }
         const std::string label = content_id->substr(20, 16);
         g_addcont.push_back({label, it->path()});
-        log::Tagged("DLC", "%s instalado [%s]", label.c_str(), it->path().string().c_str());
+        log::Tagged("DLC", "%s instalado [%s]", label.c_str(), fs::PathText(it->path()).c_str());
     }
 }
 

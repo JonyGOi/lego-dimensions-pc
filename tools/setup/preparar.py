@@ -39,6 +39,14 @@ def _portuguese():
 
 PT = _portuguese()
 
+# Fase 60: a saida vai por um pipe para o launcher, que le UTF-8. Sem isto o Python usa a pagina ANSI e
+# para com UnicodeEncodeError num nome de pasta de DLC com caractere fora dela (ex.: dois-pontos U+FF1A).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 
 def T(pt, en):
     return pt if PT else en
@@ -154,7 +162,7 @@ def english_line(line):
 def run_step(args, label, start, end):
     """Roda uma etapa do extrator; 'lote N/M' vira progresso entre start e end."""
     proc = subprocess.Popen([sys.executable, '-u', EXTRACTOR] + args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, encoding='utf-8', errors='replace')
+                            text=True, encoding='utf-8', errors='replace', env=dict(os.environ, PYTHONIOENCODING='utf-8'))
     for line in proc.stdout:
         line = line.rstrip()
         print(line if PT else english_line(line), flush=True)

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include <timeapi.h>
 
@@ -95,7 +96,7 @@ namespace {
 // Fase 58: pasta da atualizacao separada (CUSA01176-patch), dentro da pasta do jogo ou ao lado dela.
 std::filesystem::path FindPatchDir(const std::filesystem::path& app0) {
     std::error_code ec;
-    const std::string name = app0.filename().string();
+    const std::string name = hle::fs::PathText(app0.filename());
     const std::filesystem::path candidates[] = {app0 / (name + "-patch"), app0.parent_path() / (name + "-patch"),
                                                 app0 / "CUSA01176-patch", app0.parent_path() / "CUSA01176-patch"};
     for (const auto& dir : candidates) {
@@ -1072,6 +1073,21 @@ int SelfTest() {
 
 } // namespace
 
+// Fase 60: argumento `i` como caminho, lido da linha de comando Unicode (argv chega na pagina ANSI e perde
+// caracteres fora dela, como o dois-pontos de largura cheia que ferramentas de extracao poem nos nomes).
+std::filesystem::path WideArg(int i, const char* fallback) {
+    static const std::vector<std::wstring> args = [] {
+        std::vector<std::wstring> out;
+        int count = 0;
+        if (LPWSTR* list = CommandLineToArgvW(GetCommandLineW(), &count)) {
+            out.assign(list, list + count);
+            LocalFree(list);
+        }
+        return out;
+    }();
+    return i >= 0 && i < static_cast<int>(args.size()) ? std::filesystem::path(args[static_cast<size_t>(i)]) : std::filesystem::path(fallback);
+}
+
 int main(int argc, char** argv) {
     const std::filesystem::path root = FindRoot(argc, argv);
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
@@ -1110,9 +1126,9 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--timeout") && i + 1 < argc) {
             timeout_s = std::strtoul(argv[++i], nullptr, 0);
         } else if (!std::strcmp(argv[i], "--app0") && i + 1 < argc) {
-            app0 = argv[++i];
+            app0 = WideArg(i + 1, argv[i + 1]), ++i; // Fase 60: caminho lido da linha de comando Unicode
         } else if (!std::strcmp(argv[i], "--patch") && i + 1 < argc) {
-            app0_patch = argv[++i]; // Fase 58: atualizacao em pasta separada (sem a opcao = procurar; "-" = nenhuma)
+            app0_patch = WideArg(i + 1, argv[i + 1]), ++i; // Fase 58: atualizacao em pasta separada (sem a opcao = procurar; "-" = nenhuma)
         } else if (!std::strcmp(argv[i], "--root") && i + 1 < argc) {
             ++i; // Fase 49: lido antes, em FindRoot
         } else if (!std::strcmp(argv[i], "--verbose-hle")) {
@@ -1261,7 +1277,7 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--test-save-ui")) {
             test_save_ui = true;
         } else if (!std::strcmp(argv[i], "--addcont") && i + 1 < argc) {
-            addcont_dir = argv[++i]; // Fase 46: pasta com uma subpasta por DLC (sce_sys/param.sfo)
+            addcont_dir = WideArg(i + 1, argv[i + 1]), ++i; // Fase 46: pasta com uma subpasta por DLC (sce_sys/param.sfo)
             addcont_set = true;
         } else if (!std::strcmp(argv[i], "--no-dlc")) {
             addcont_dir.clear();
@@ -1344,12 +1360,12 @@ int main(int argc, char** argv) {
         hle::gnm::StartPerfThread();
         hle::radar::Configure(root / "tools" / "data" / "dat_index", radar_log);
         std::printf("radar      : %s  (todo arquivo lido de dentro dos .DAT)\n",
-                    radar_log.string().c_str());
+                    hle::fs::PathText(radar_log).c_str());
     }
     hle::SetVirtualToypadConnected(toypad);
     if (toypad && !selftest) {
         hle::StartPortalWatcher(portal_file);
-        std::printf("portal     : %s  (relido a cada 500 ms)\n", portal_file.string().c_str());
+        std::printf("portal     : %s  (relido a cada 500 ms)\n", hle::fs::PathText(portal_file).c_str());
         hle::StartToypadListener(toypad_port);
     }
     hle::videoout::SetWindowEnabled(window && !selftest);
@@ -1361,25 +1377,25 @@ int main(int argc, char** argv) {
         std::error_code ec;
         const bool has_eboot = std::filesystem::exists(app0 / "eboot.bin", ec);
         const bool has_data = std::filesystem::is_directory(app0 / "data", ec);
-        std::printf("/app0      : %s  (eboot.bin: %s, data/: %s) - somente leitura\n", app0.string().c_str(),
+        std::printf("/app0      : %s  (eboot.bin: %s, data/: %s) - somente leitura\n", hle::fs::PathText(app0).c_str(),
                     has_eboot ? "sim" : "NAO", has_data ? "sim" : "NAO");
         if (!app0_patch.empty()) {
-            std::printf("atualizacao: %s  (por cima do /app0)\n", app0_patch.string().c_str());
+            std::printf("atualizacao: %s  (por cima do /app0)\n", hle::fs::PathText(app0_patch).c_str());
         }
-        std::printf("/temp0     : %s\n", (root / "assets" / "temp0").string().c_str());
+        std::printf("/temp0     : %s\n", hle::fs::PathText((root / "assets" / "temp0")).c_str());
         std::printf("saves      : %s  (montados em /savedataN por sceSaveDataMount)\n",
-                    (root / "assets" / "savedata0").string().c_str());
+                    hle::fs::PathText((root / "assets" / "savedata0")).c_str());
     }
     runtime::RegisterCurrentThread("main");
 
     // ---- 1. carga ---------------------------------------------------------
     loader::ElfPieLoader elf;
     if (!elf.Load(elf_path)) {
-        std::printf("ERRO ao carregar %s: %s\n", elf_path.string().c_str(), elf.error().c_str());
+        std::printf("ERRO ao carregar %s: %s\n", hle::fs::PathText(elf_path).c_str(), elf.error().c_str());
         return 1;
     }
     runtime::SetGuestImage(elf.base_address(), elf.image_size(), loader::ElfPieLoader::kReserveSize);
-    std::printf("ELF        : %s\n", elf_path.string().c_str());
+    std::printf("ELF        : %s\n", hle::fs::PathText(elf_path).c_str());
     std::printf("Base       : 0x%" PRIx64 "  (reserva de %" PRIu64 " MiB, imagem de %.1f MiB)\n",
                 elf.base_address(), loader::ElfPieLoader::kReserveSize >> 20,
                 elf.image_size() / 1048576.0);
