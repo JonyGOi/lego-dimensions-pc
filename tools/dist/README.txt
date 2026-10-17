@@ -48,6 +48,8 @@ TIPS
     app (or any other window) the character stops. A button that was already held when you come back
     only counts after it is released.
   - Without "Show console", each session's log goes to build\logs\ (helps to track down problems).
+  - With the LegoToypad app 1.6 or newer ("Toypad LEDs" setting on), the portal lights show in the app
+    the way the game lights them: colour, flashes and fades.
   - The first time you visit each area the graphics driver still compiles new pipelines (it may hitch
     a little); they are stored and prepared on the loading screen the next times.
   - If you notice stutters, send the session log (build\logs\): the [ENGASGO], [QUADRO-LENTO] and

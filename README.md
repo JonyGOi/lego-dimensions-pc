@@ -39,6 +39,7 @@ The launcher, the installer and the port's own screens (loading screen, save pic
 
 - The story, Vorton and the DLC levels are playable at 60 fps (the "60 FPS" option in the launcher).
 - Audio, saves, controller and the portal (virtual Toy Pad or the LegoToypad app) work.
+- The LegoToypad app (1.6 or newer) mirrors the portal lights the way the game drives them: colour, flashes and fades.
 - Fullscreen ("Fullscreen" option in the launcher, or F11 in game).
 - The controller only drives the game while the game window is in front: clicking the Toy Pad app makes the character stop.
 - The first time you visit a new area the graphics driver still compiles pipelines. That can cause a short hitch, but objects never disappear (no pop-in).

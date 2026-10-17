@@ -50,8 +50,11 @@ std::vector<Packet> MoveIndex(int new_pad, int new_index, int old_index); // rem
 std::vector<Packet> PresentEvents();                                      // "colocada" de tudo o que esta no portal
 // Id do personagem / veiculo guardado numa tag (0 se nao der para ler).
 u32 TagCharacterId(const TagData& tag);
-// Estado dos LEDs no formato que o app pede (30 bytes: 'L', contador, 3, 9 bytes por zona).
-void LedSnapshot(u8 out[30]);
+// Fase 60: estado dos LEDs no formato v2 do GET_LED (o do listener do Cemu "Remote Toypad", que o app
+// LegoToypad 1.6+ le): 'L', contador, versao 2, 3 zonas, e por zona 12 bytes (zona, modo, r, g, b, cor de
+// origem do fade r/g/b, aceso, apagado, vezes, velocidade).
+constexpr u32 kLedSnapshotBytes = 4 + 3 * 12;
+void LedSnapshot(u8 out[kLedSnapshotBytes]);
 
 // Monta a tag de um personagem (id < 1000) ou veiculo/gadget (id >= 1000).
 TagData BuildTag(const Uid& uid, u32 character_id);

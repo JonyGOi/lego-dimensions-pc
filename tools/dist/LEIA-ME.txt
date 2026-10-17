@@ -45,6 +45,8 @@ DICAS
   - O controle so mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad (ou em outra
     janela) o personagem para. Um botao que ja estava apertado ao voltar so conta depois de solto.
   - Sem "Mostrar console", o log de cada sessao fica em build\logs\ (ajuda a achar problemas).
+  - Com o app LegoToypad 1.6 ou mais novo (opcao "Toypad LEDs" ligada), as luzes do portal aparecem no
+    app como o jogo as acende: cor, piscadas e fades.
   - Na primeira visita a cada area o driver de video ainda compila pipelines novos (pode engasgar um
     pouco); eles ficam gravados e nas proximas vezes sao preparados na tela de carregamento.
   - Se notar travadas, mande o log da sessao (build\logs\): as linhas [ENGASGO], [QUADRO-LENTO] e

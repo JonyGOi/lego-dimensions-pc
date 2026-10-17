@@ -47,4 +47,8 @@ elif step == 'move':
 elif step == 'remove':
     send(bytes([2, 1, 0, 0, 0]))
 elif step == 'led':
-    print('LED', send(bytes([4, 0, 0, 0, 0]), 30).hex())
+    r = send(bytes([4, 0, 0, 0, 0]), 40)  # Fase 60: formato v2 ('L', contador, 2, 3, 12 bytes por zona)
+    print('LED contador %d versao %d' % (r[1], r[2]))
+    for z in range(3):
+        b = r[4 + 12 * z:16 + 12 * z]
+        print('  zona %d modo %d cor %02x%02x%02x origem %02x%02x%02x aceso %d apagado %d vezes %d velocidade %d' % tuple(b))

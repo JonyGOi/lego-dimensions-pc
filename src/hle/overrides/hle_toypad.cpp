@@ -39,8 +39,124 @@ bool g_session_ready = false;
 // Indice da figura no protocolo = posicao neste vetor (0..6). As figuras do portal.json usam o
 // indice igual a zona (1..3), como desde a Fase 8; o app LegoToypad escolhe o indice.
 Figure g_figures[kSlotCount];
-u8 g_led[kPadCount][3] = {}; // ultima cor pedida pelo jogo em cada zona
-u8 g_led_counter = 0;
+// Fase 60: estado dos LEDs de cada zona (0 = centro, 1 = esquerda, 2 = direita), como no listener do Cemu
+// "Remote Toypad" que o app LegoToypad le: o app anima piscadas e fades sozinho a partir deste estado.
+// Tempos em "ticks" do portal (~40 ms cada), como chegam do jogo.
+struct LedState {
+    u8 pad = 0, mode = 0; // mode: 0 apagado, 1 cor fixa, 2 piscando, 3 fade
+    u8 r = 0, g = 0, b = 0;
+    u8 from_r = 0, from_g = 0, from_b = 0; // cor de onde o fade parte (a que estava acesa)
+    u8 on = 0, off = 0, count = 0, speed = 0;
+};
+LedState g_led[kPadCount];
+u8 g_led_counter = 0; // muda a cada estado novo (o app so redesenha quando muda)
+
+u8 LedRandomByte() {
+    static u32 state = 0x2545F491u; // independente do gerador do desafio do portal
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return static_cast<u8>(state >> 24);
+}
+
+// pad: 1 centro, 2 esquerda, 3 direita, 0 todas.
+void SetLed(u8 pad, u8 mode, u8 r, u8 g, u8 b, u8 on, u8 off, u8 count, u8 speed) {
+    auto apply = [&](u8 target) {
+        if (target < 1 || target > kPadCount) {
+            return;
+        }
+        LedState& state = g_led[target - 1];
+        if (state.pad == target && state.mode == mode && state.r == r && state.g == g && state.b == b && state.on == on && state.off == off &&
+            state.count == count && state.speed == speed) {
+            return; // nada mudou
+        }
+        if (mode == 3) { // fade: parte da cor que estava na zona
+            state.from_r = state.r;
+            state.from_g = state.g;
+            state.from_b = state.b;
+        }
+        state.pad = target;
+        state.mode = mode;
+        state.r = r;
+        state.g = g;
+        state.b = b;
+        state.on = on;
+        state.off = off;
+        state.count = count;
+        state.speed = speed;
+        ++g_led_counter;
+    };
+    if (pad == 0) {
+        for (u8 target = 1; target <= kPadCount; ++target) {
+            apply(target);
+        }
+    } else {
+        apply(pad);
+    }
+}
+
+// Comandos de LED do jogo (0xC0..0xC8); `p` = payload (bytes depois de 0x55, tamanho, comando, sequencia).
+void HandleLedCommand(u8 cmd, const u8* p, u32 size) {
+    auto has = [&](u32 bytes) { return size >= bytes; };
+    switch (cmd) {
+    case 0xC0: // cor: zona, r, g, b
+        if (has(4)) {
+            SetLed(p[0], 1, p[1], p[2], p[3], 0, 0, 0, 0);
+        }
+        break;
+    case 0xC2: // fade: zona, tempo do passo, passos, r, g, b
+        if (has(6)) {
+            SetLed(p[0], 3, p[3], p[4], p[5], 0, 0, p[2], p[1]);
+        }
+        break;
+    case 0xC3: // piscar: zona, aceso, apagado, vezes (0xFF = sempre), r, g, b
+        if (has(7)) {
+            SetLed(p[0], 2, p[4], p[5], p[6], p[1], p[2], p[3] == 0xFF ? 0 : p[3], 0);
+        }
+        break;
+    case 0xC4: // fade para uma cor aleatoria: zona, tempo do passo, passos (cada zona sorteia a sua)
+        if (has(3)) {
+            for (u8 target = 1; target <= kPadCount; ++target) {
+                if (p[0] == 0 || p[0] == target) {
+                    SetLed(target, 3, LedRandomByte(), LedRandomByte(), LedRandomByte(), 0, 0, p[2], p[1]);
+                }
+            }
+        }
+        break;
+    case 0xC6: // fade em todas: por zona [ligada][tempo][passos][r][g][b]
+        for (u8 zone = 0; zone < kPadCount && has((zone + 1) * 6u); ++zone) {
+            const u8* z = p + zone * 6;
+            if (z[0]) {
+                SetLed(zone + 1, 3, z[3], z[4], z[5], 0, 0, z[2], z[1]);
+            } else {
+                SetLed(zone + 1, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        break;
+    case 0xC7: // piscar em todas: por zona [ligada][aceso][apagado][vezes][r][g][b]
+        for (u8 zone = 0; zone < kPadCount && has((zone + 1) * 7u); ++zone) {
+            const u8* z = p + zone * 7;
+            if (z[0]) {
+                SetLed(zone + 1, 2, z[4], z[5], z[6], z[1], z[2], z[3] == 0xFF ? 0 : z[3], 0);
+            } else {
+                SetLed(zone + 1, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        break;
+    case 0xC8: // cor em todas: por zona [ligada][r][g][b]
+        for (u8 zone = 0; zone < kPadCount && has((zone + 1) * 4u); ++zone) {
+            const u8* z = p + zone * 4;
+            if (z[0]) {
+                SetLed(zone + 1, 1, z[1], z[2], z[3], 0, 0, 0, 0);
+            } else {
+                SetLed(zone + 1, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        break;
+    default: // 0xC1: consulta, nao muda nada
+        break;
+    }
+}
 
 u32 Load32(const u8* p) {
     return p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<u32>(p[3]) << 24);
@@ -307,14 +423,28 @@ std::vector<Packet> PresentEvents() {
     return events;
 }
 
-void LedSnapshot(u8 out[30]) {
+void LedSnapshot(u8 out[kLedSnapshotBytes]) {
     std::lock_guard lock(g_mutex);
-    std::memset(out, 0, 30);
+    std::memset(out, 0, kLedSnapshotBytes);
     out[0] = 'L';
     out[1] = g_led_counter;
-    out[2] = 3;
-    for (int pad = 0; pad < kPadCount; ++pad) { // 9 bytes por zona; os 3 primeiros levam a cor atual
-        std::memcpy(out + 3 + pad * 9, g_led[pad], 3);
+    out[2] = 2; // versao do formato (a que o LegoToypad 1.6+ aceita)
+    out[3] = kPadCount;
+    for (int zone = 0; zone < kPadCount; ++zone) { // 12 bytes por zona
+        const LedState& led = g_led[zone];
+        u8* z = out + 4 + zone * 12;
+        z[0] = static_cast<u8>(zone + 1); // a zona e conhecida mesmo antes do primeiro comando
+        z[1] = led.mode;
+        z[2] = led.r;
+        z[3] = led.g;
+        z[4] = led.b;
+        z[5] = led.from_r;
+        z[6] = led.from_g;
+        z[7] = led.from_b;
+        z[8] = led.on;
+        z[9] = led.off;
+        z[10] = led.count;
+        z[11] = led.speed;
     }
 }
 
@@ -387,20 +517,7 @@ std::optional<Packet> HandleCommand(const u8* command, u32 length) {
     case 0xC8: // cor em todos
         name = "LED";
         quiet = ++g_stats.led > 4; // chegam aos montes
-        ++g_led_counter;
-        if (cmd == 0xC0 && len >= 6) { // [zona (0 = todas)][r][g][b]
-            for (int pad = 0; pad < kPadCount; ++pad) {
-                if (payload[0] == 0 || payload[0] == pad + 1) {
-                    std::memcpy(g_led[pad], payload + 1, 3);
-                }
-            }
-        } else if (cmd == 0xC8 && len >= 14) { // por zona: [ligado][r][g][b]
-            for (int pad = 0; pad < kPadCount; ++pad) {
-                if (payload[pad * 4]) {
-                    std::memcpy(g_led[pad], payload + pad * 4 + 1, 3);
-                }
-            }
-        }
+        HandleLedCommand(cmd, payload, len >= 2 ? len - 2u : 0u); // len conta comando + sequencia + payload
         reply = Reply(sequence, nullptr, 0);
         break;
     case 0xD2: { // leitura: [indice][pagina] -> status + 4 paginas (16 bytes)

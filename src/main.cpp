@@ -688,6 +688,31 @@ int SelfTest() {
     check("Toy Pad: resposta do WAKE byte a byte, SEED (TEA) devolve a confirmacao, ack de LED com checksum",
           wake_ok && seed_ok && tea_ok && led_ok);
 
+    // ---- Fase 60: estado dos LEDs para o app (GET_LED v2): cor, piscar e fade, com a cor de origem do fade
+    {
+        auto led = [](std::initializer_list<u8> body) { // monta 0x55, tamanho, comando, sequencia, payload, checksum
+            u8 cmd[32] = {0x55, static_cast<u8>(body.size())}; // o tamanho conta comando + sequencia + payload
+            std::copy(body.begin(), body.end(), cmd + 2);
+            cmd[2 + cmd[1]] = tp::Checksum(cmd, 2 + cmd[1]);
+            tp::HandleCommand(cmd, 32);
+        };
+        u8 before[tp::kLedSnapshotBytes];
+        tp::LedSnapshot(before);
+        led({0xc0, 0x10, 0x02, 0x10, 0x20, 0x30});                   // esquerda: cor fixa
+        led({0xc3, 0x11, 0x03, 0x05, 0x06, 0xff, 0x00, 0xff, 0x00}); // direita: pisca 5/6 ticks para sempre
+        led({0xc2, 0x12, 0x02, 0x19, 0x04, 0x40, 0x50, 0x60});        // esquerda: fade a partir da cor anterior
+        u8 snap[tp::kLedSnapshotBytes];
+        tp::LedSnapshot(snap);
+        const u8* left = snap + 4 + 1 * 12;
+        const u8* right = snap + 4 + 2 * 12;
+        const bool led_v2_ok = snap[0] == 'L' && snap[2] == 2 && snap[3] == 3 && snap[1] != before[1] && left[0] == 2 && left[1] == 3 &&
+                               left[2] == 0x40 && left[3] == 0x50 && left[4] == 0x60 && left[5] == 0x10 && left[6] == 0x20 && left[7] == 0x30 &&
+                               left[10] == 0x04 && left[11] == 0x19 && right[0] == 3 && right[1] == 2 && right[2] == 0 && right[3] == 0xff &&
+                               right[8] == 5 && right[9] == 6 && right[10] == 0;
+        led({0xc8, 0x13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); // apaga tudo
+        check("Toy Pad: LEDs para o app (GET_LED v2, 40 bytes): cor, piscar, fade com a cor de origem; cor em todas apaga", led_v2_ok);
+    }
+
     // ---- figura sintetica: tag coerente com o UID, evento de colocacao, leitura e modelo
     const tp::Uid fig_uid = {4, 163, 55, 18, 34, 55, 66};
     const tp::TagData fig_tag = tp::BuildTag(fig_uid, 1);

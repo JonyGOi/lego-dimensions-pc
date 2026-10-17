@@ -11,7 +11,8 @@
 //                   (se o arquivo existir com >= 180 bytes, e ele que vale e recebe as escritas)
 //   cmd 2 REMOVE
 //   cmd 3 MOVE    da posicao de origem para (pad, indice)
-//   cmd 4 GET_LED -> 30 bytes: 'L', contador, 3, e 9 bytes por pad
+//   cmd 4 GET_LED -> 40 bytes (formato v2, Fase 60): 'L', contador, 2, 3, e 12 bytes por zona
+//   Varios comandos podem vir na mesma conexao (como no listener do Cemu); cada um e atendido na ordem.
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -58,22 +59,23 @@ void Announce(const std::vector<toypad::Packet>& packets) {
     }
 }
 
-void HandleClient(SOCKET s) {
+// Um comando; false = a conexao acabou (ou veio algo depois do qual nao da para achar o proximo cabecalho).
+bool HandleCommand(SOCKET s) {
     u8 header[5];
     if (!RecvAll(s, header, 5)) {
-        return;
+        return false;
     }
     const u8 cmd = header[0], pad = header[1], index = header[2];
     ++g_requests;
     if (cmd == 4) { // GET_LED
-        u8 snapshot[30];
+        u8 snapshot[toypad::kLedSnapshotBytes];
         toypad::LedSnapshot(snapshot);
         send(s, reinterpret_cast<const char*>(snapshot), sizeof(snapshot), 0);
-        return;
+        return true;
     }
     if (pad < 1 || pad > 3 || index >= toypad::kSlotCount) {
         std::printf("[TOYPAD-APP] pedido recusado: cmd %u pad %u indice %u\n", cmd, pad, index);
-        return;
+        return false;
     }
     TakeToypadExternalControl();
     switch (cmd) {
@@ -81,12 +83,12 @@ void HandleClient(SOCKET s) {
         toypad::TagData tag{};
         u8 length_bytes[2];
         if (!RecvAll(s, tag.data(), static_cast<int>(tag.size())) || !RecvAll(s, length_bytes, 2)) {
-            return;
+            return false;
         }
         const u32 length = length_bytes[0] | (length_bytes[1] << 8);
         std::string path(length, '\0');
         if (length && !RecvAll(s, path.data(), static_cast<int>(length))) {
-            return;
+            return false;
         }
         bool from_file = false;
         if (!path.empty()) { // o arquivo da figura manda, se existir: e nele que o progresso fica gravado
@@ -123,7 +125,7 @@ void HandleClient(SOCKET s) {
         const u8 old_pad = header[3], old_index = header[4];
         if (old_pad < 1 || old_pad > 3 || old_index >= toypad::kSlotCount) {
             std::printf("[TOYPAD-APP] MOVE recusado: origem pad %u indice %u\n", old_pad, old_index);
-            return;
+            return true;
         }
         const std::vector<toypad::Packet> events = toypad::MoveIndex(pad, index, old_index);
         std::printf("[TOYPAD-APP] MOVE %u/%u -> %u/%u%s\n", old_pad, old_index, pad, index, events.empty() ? " (origem vazia)" : "");
@@ -132,7 +134,15 @@ void HandleClient(SOCKET s) {
     }
     default:
         std::printf("[TOYPAD-APP] comando desconhecido 0x%02x\n", cmd);
-        break;
+        return false; // tamanho desconhecido: o proximo cabecalho se perde
+    }
+    return true;
+}
+
+// Fase 60: varios comandos na mesma conexao, atendidos em ordem (como no listener do Cemu); o app
+// LegoToypad abre uma conexao por acao e por consulta de LEDs, o que tambem funciona.
+void HandleClient(SOCKET s) {
+    while (HandleCommand(s)) {
     }
 }
 

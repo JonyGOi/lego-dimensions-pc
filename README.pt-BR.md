@@ -35,6 +35,7 @@ Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 
 - Dá para jogar a história, Vorton e as fases com DLCs, a 60 fps (opção "60 FPS" no launcher).
 - Áudio, saves, controle e portal (Toy Pad virtual ou o app LegoToypad) funcionam.
+- O app LegoToypad (1.6 ou mais novo) mostra as luzes do portal como o jogo as acende: cor, piscadas e fades.
 - Tela cheia (opção "Tela cheia" no launcher ou F11 no jogo).
 - O controle só mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad, o personagem para.
 - Launcher, instalador e telas do port em português ou inglês, conforme o idioma do Windows.
