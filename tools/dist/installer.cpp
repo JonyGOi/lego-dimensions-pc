@@ -496,6 +496,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
         return 0;
     }
     ui::InitProcess();
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    const RECT place = ui::FitWindow(kW, kH, style); // Fase 61: cabe em telas pequenas
     g_font = ui::Font(15);
     g_small = ui::Font(13);
     g_label = ui::Font(11.5f, FW_SEMIBOLD);
@@ -515,11 +517,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
     wc.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, S(16), S(16), 0));
     wc.lpszClassName = L"LegoDimensionsPcSetup";
     RegisterClassExW(&wc);
-    RECT r{0, 0, S(kW), S(kH)};
-    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    AdjustWindowRect(&r, style, FALSE);
-    g_main = CreateWindowExW(0, wc.lpszClassName, ui::T(L"Instalar LEGO Dimensions PC", L"Install LEGO Dimensions PC"), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left,
-                             r.bottom - r.top, nullptr, nullptr, instance, nullptr);
+    g_main = CreateWindowExW(0, wc.lpszClassName, ui::T(L"Instalar LEGO Dimensions PC", L"Install LEGO Dimensions PC"), style, place.left, place.top, place.right,
+                             place.bottom, nullptr, nullptr, instance, nullptr);
     ui::DarkTitle(g_main);
     const int header = S(kHeader);
     g_dir = ui::Edit(g_main, S(58), header + S(26), S(kW - 300), S(24), kDir, g_font);

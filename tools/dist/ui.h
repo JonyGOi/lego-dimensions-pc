@@ -42,6 +42,31 @@ inline const wchar_t* T(const wchar_t* pt, const wchar_t* en) { return Pt() ? pt
 inline float g_scale = 1.0f;
 inline int S(float v) { return static_cast<int>(v * g_scale + 0.5f); }
 
+// Fase 61: lugar da janela. Numa tela pequena (ou com escala alta, ex. 1080p a 125%) a escala desce ate a
+// janela inteira caber na area de trabalho (sem a barra de tarefas); a janela abre centralizada nela.
+// Chamar antes de criar as fontes e os controles. Devolve {x, y, largura, altura}.
+inline RECT FitWindow(int w, int h, DWORD style) {
+    RECT work{0, 0, 1920, 1040};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    wchar_t test[32] = {}; // LD_UI_WORKAREA=LxA: so para testes (simula uma tela menor)
+    if (int tw = 0, th = 0; GetEnvironmentVariableW(L"LD_UI_WORKAREA", test, 32) && swscanf_s(test, L"%dx%d", &tw, &th) == 2) {
+        work = RECT{0, 0, tw, th};
+    }
+    RECT frame{0, 0, 0, 0};
+    AdjustWindowRect(&frame, style, FALSE);
+    const float room_w = static_cast<float>((work.right - work.left) - (frame.right - frame.left));
+    const float room_h = static_cast<float>((work.bottom - work.top) - (frame.bottom - frame.top));
+    const float fit = std::min(room_w / w, room_h / h);
+    if (fit < g_scale) {
+        g_scale = std::max(0.5f, fit);
+    }
+    RECT r{0, 0, S(static_cast<float>(w)), S(static_cast<float>(h))};
+    AdjustWindowRect(&r, style, FALSE);
+    const int ww = r.right - r.left, wh = r.bottom - r.top;
+    return RECT{work.left + std::max(0, (static_cast<int>(work.right - work.left) - ww) / 2),
+                work.top + std::max(0, (static_cast<int>(work.bottom - work.top) - wh) / 2), ww, wh};
+}
+
 inline void InitProcess() {
     using SetCtx = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
     if (auto set = reinterpret_cast<SetCtx>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"))) {

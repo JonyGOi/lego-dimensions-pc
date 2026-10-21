@@ -907,6 +907,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     }
     SetEnvironmentVariableW(L"LD_LANG", ui::Pt() ? L"pt" : L"en"); // Fase 60
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8"); // Fase 60: o log da preparacao chega em UTF-8 (nomes de DLC)
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    const RECT place = ui::FitWindow(kW, kH, style); // Fase 61: cabe em telas pequenas
     g_font = ui::Font(15);
     g_small = ui::Font(13);
     g_label = ui::Font(11.5f, FW_SEMIBOLD);
@@ -926,10 +928,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, S(16), S(16), 0));
     wc.lpszClassName = L"LegoDimensionsPcLauncher";
     RegisterClassExW(&wc);
-    RECT r{0, 0, S(kW), S(kH)};
-    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    AdjustWindowRect(&r, style, FALSE);
-    g_main = CreateWindowExW(0, wc.lpszClassName, L"LEGO Dimensions PC", style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
+    g_main = CreateWindowExW(0, wc.lpszClassName, L"LEGO Dimensions PC", style, place.left, place.top, place.right, place.bottom,
                              nullptr, nullptr, instance, nullptr);
     ui::DarkTitle(g_main);
     CleanOldFiles(); // Fase 61
