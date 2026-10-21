@@ -10,6 +10,10 @@ IDIOMA
   portugues e em ingles nos outros casos. O jogo usa o idioma do Windows quando o jogo tem esse idioma
   (portugues, ingles, frances, alemao, espanhol, italiano, holandes e dinamarques); nos outros, fica
   em ingles.
+  O seletor "Idioma" do launcher escolhe na mao (o launcher reabre se o idioma dos textos dele mudar).
+  Os idiomas alem de portugues e ingles leem os textos originais do jogo: um dump com traducao feita
+  por fa (text.csv trocado, so com uma coluna) fecha o jogo nesses idiomas. Nesse caso use Portugues
+  ou English.
 
 O QUE VOCE PRECISA
   - Windows 10 (1803 ou mais novo) ou Windows 11, 64 bits.
@@ -42,6 +46,12 @@ COMO USAR
 DICAS
   - "60 FPS" liga os 60 quadros por segundo (o jogo original roda a 30).
   - "Tela cheia" abre o jogo em tela cheia. Dentro do jogo, F11 alterna entre tela cheia e janela.
+  - "Resolucao" e o tamanho da janela do jogo (1280x720 por padrao). O jogo desenha em 1920x1080 como
+    no PS4 e a imagem e escalada para a janela. Em tela cheia vale o tamanho do monitor.
+  - "Atualizar" procura uma versao nova do port nas releases do GitHub e, se tiver, baixa e instala por
+    cima. Saves, arquivos preparados, opcoes e portal.json ficam como estao; feche o jogo antes.
+  - "Pular todas as cutscenes" deixa pular qualquer cutscene (botao de pular do jogo), mesmo as que o
+    jogo so deixaria pular depois de ja vistas ou com 100%.
   - O controle so mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad (ou em outra
     janela) o personagem para. Um botao que ja estava apertado ao voltar so conta depois de solto.
   - Sem "Mostrar console", o log de cada sessao fica em build\logs\ (ajuda a achar problemas).

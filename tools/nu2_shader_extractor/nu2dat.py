@@ -60,15 +60,55 @@ def unpack(raw, size):
     return bytes(out)
 
 
-def entries(pack, suffix='.ps4_shaders'):
-    path = os.path.join(INDEX_DIR, pack + '.tsv')
-    if not os.path.exists(path):
-        return
-    with open(path, encoding='latin-1') as f:
-        for line in f:
-            p = line.rstrip('\n').split('\t')
-            if len(p) >= 5 and p[0].lower().endswith(suffix):
-                yield p[0], int(p[1]), int(p[2]), int(p[3]), int(p[4])
+def read_tsv(path, suffix):
+    rows = []
+    if os.path.exists(path):
+        with open(path, encoding='latin-1') as f:
+            for line in f:
+                p = line.rstrip('\n').split('\t')
+                if len(p) >= 5 and p[0].lower().endswith(suffix):
+                    rows.append((p[0], int(p[1]), int(p[2]), int(p[3]), int(p[4])))
+    return rows
+
+
+# Fase 60: indice de cada pacote tirado da tabela do proprio .DAT de quem prepara (o que vem em
+# tools/data/dat_index foi gerado de um dump so, e um PATCH.DAT de outra origem nao batia com ele).
+# Fica guardado em assets/dat_index/<PACOTE>.tsv, refeito quando o .DAT muda (tamanho ou data).
+LOCAL_INDEX_DIR = os.path.join(ROOT, 'assets', 'dat_index')
+
+
+def local_index(pack, dat_path):
+    path = os.path.join(LOCAL_INDEX_DIR, pack + '.tsv')
+    stamp = '%d %d' % (os.path.getsize(dat_path), int(os.path.getmtime(dat_path)))
+    try:
+        if open(path + '.carimbo', encoding='ascii').read() == stamp:
+            return path
+    except OSError:
+        pass
+    import nu2toc
+    rows = nu2toc.read_toc(dat_path)
+    if not rows:
+        raise ValueError('tabela vazia')
+    os.makedirs(LOCAL_INDEX_DIR, exist_ok=True)
+    nu2toc.write_tsv(rows, path)
+    with open(path + '.carimbo', 'w', encoding='ascii') as f:
+        f.write(stamp)
+    return path
+
+
+def entries(pack, suffix='.ps4_shaders', dat_path=None):
+    """Arquivos do pacote com o sufixo: os da tabela do proprio .DAT (se der para ler) e, para o que ela nao
+    tiver, os do indice que vem com o port."""
+    shipped = read_tsv(os.path.join(INDEX_DIR, pack + '.tsv'), suffix)
+    own = []
+    if dat_path:
+        try:
+            own = read_tsv(local_index(pack, dat_path), suffix)
+        except Exception as e:  # formato inesperado: fica o indice que vem com o port, como antes
+            print('AVISO: tabela de %s nao lida (%s): usando o indice que vem com o port' % (pack, e), flush=True)
+    seen = {row[0] for row in own}
+    yield from own
+    yield from (row for row in shipped if row[0] not in seen)
 
 
 def iter_files(app0, suffix='.ps4_shaders', addcont=None, errors=None, patch=None):
@@ -78,7 +118,7 @@ def iter_files(app0, suffix='.ps4_shaders', addcont=None, errors=None, patch=Non
     for pack in sorted(dats):
         size_on_disk = os.path.getsize(dats[pack])
         with open(dats[pack], 'rb') as f:  # so leitura
-            for name, size, packed, offset, method in entries(pack, suffix):
+            for name, size, packed, offset, method in entries(pack, suffix, dats[pack]):
                 if offset + packed > size_on_disk:
                     if errors is None:
                         raise ValueError('%s: %s fora do pacote' % (pack, name))

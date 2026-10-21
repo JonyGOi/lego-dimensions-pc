@@ -131,6 +131,10 @@ std::condition_variable g_cv;
 std::deque<Transfer*> g_completed;       // aguardando callback em sceUsbdHandleEvents
 std::deque<Transfer*> g_pending_reads;   // leituras do endpoint IN ainda sem dado
 std::deque<toypad::Packet> g_responses;  // respostas do portal ainda sem leitura para recebe-las
+// Fase 60: avisos de figura colocada / removida esperam numa fila propria e so saem quando nao ha resposta
+// de comando pendente (como no portal emulado do Cemu): o jogo recebe a resposta do que acabou de pedir
+// antes de um aviso, e nenhum aviso fica no lugar de uma resposta.
+std::deque<toypad::Packet> g_events;
 u64 g_reads_completed = 0;
 
 // Entrega uma resposta do portal a uma leitura. Chamar com g_mutex travado.
@@ -155,6 +159,7 @@ HLE_IMPL(void, sceUsbdExit) {
     g_completed.clear();
     g_pending_reads.clear();
     g_responses.clear();
+    g_events.clear();
 }
 HLE_OVERRIDE(sceUsbdExit);
 
@@ -248,6 +253,7 @@ HLE_IMPL(int, sceUsbdResetDevice, Handle* handle) {
     std::lock_guard lock(g_mutex);
     g_pending_reads.clear(); // o jogo realoca e rearma as transferencias depois do reset
     g_responses.clear();
+    g_events.clear();
     return handle == &g_handle ? err::OK : kErrorNoDevice;
 }
 HLE_OVERRIDE(sceUsbdResetDevice);
@@ -296,6 +302,10 @@ HLE_IMPL(int, sceUsbdSubmitTransfer, Transfer* transfer) {
         if (!g_responses.empty()) {
             CompleteRead(transfer, g_responses.front());
             g_responses.pop_front();
+            g_cv.notify_all();
+        } else if (!g_events.empty()) {
+            CompleteRead(transfer, g_events.front());
+            g_events.pop_front();
             g_cv.notify_all();
         } else {
             g_pending_reads.push_back(transfer);
@@ -407,6 +417,7 @@ PadConfig ParsePad(const std::string& json, int pad) {
 std::filesystem::path g_portal_file;
 PadConfig g_applied[toypad::kPadCount];
 bool g_was_ready = false;
+u32 g_seen_session = 0; // Fase 60: ultima sessao em que as figuras foram anunciadas
 // Fase 27: o app LegoToypad assumiu o portal (mandou LOAD / REMOVE / MOVE). O portal.json deixa de
 // valer; as figuras que ele tinha colocado saem na proxima passada da vigia.
 std::atomic<bool> g_external_control{false};
@@ -421,7 +432,7 @@ void InjectPacket(const toypad::Packet& packet) {
             g_pending_reads.pop_front();
             CompleteRead(read, packet);
         } else {
-            g_responses.push_back(packet);
+            g_events.push_back(packet);
         }
     }
     g_cv.notify_all();
@@ -431,10 +442,14 @@ void InjectPacket(const toypad::Packet& packet) {
 void PortalWatcher() {
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        const bool ready = toypad::SessionReady();
-        if (!ready) {
+        const u32 session = toypad::SessionNumber();
+        if (!session) {
             g_was_ready = false;
             continue;
+        }
+        if (session != g_seen_session) { // sessao nova, mesmo que tenha fechado e aberto entre duas passadas
+            g_seen_session = session;
+            g_was_ready = false;
         }
         if (g_external_control) {
             if (!g_external_applied) { // (as figuras do portal.json ja sairam em TakeToypadExternalControl)

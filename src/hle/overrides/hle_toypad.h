@@ -36,6 +36,9 @@ std::optional<Packet> HandleCommand(const u8* command, u32 length);
 
 // true depois que o jogo completou WAKE + desafio: so entao eventos de figura fazem sentido.
 bool SessionReady();
+// Fase 60: numero da sessao aberta (0 = fechada); muda a cada sessao nova, mesmo se WAKE e desafio vierem
+// entre duas passadas da vigia do portal.
+u32 SessionNumber();
 
 // Coloca / remove a figura de uma zona (1..3) e devolve o pacote de evento a enviar ao jogo.
 // PlaceFigure devolve nullopt se a zona for invalida ou ja tiver a mesma figura.

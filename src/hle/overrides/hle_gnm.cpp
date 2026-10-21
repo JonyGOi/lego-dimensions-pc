@@ -1488,7 +1488,8 @@ bool ReadTsharp(const u32* w, GuestTexture* out) {
     // Sem compressao: RGBA8 (0x0A), RGBA16 / RGBA16F (0x0C) e RGBA32F (0x0E) em tiling 8 (linear);
     // RGBA32F tambem em tiling 13 (microtiles de 8x8 pixels na mesma ordem de Morton dos blocos BC).
     t.number = (w[1] >> 26) & 0xF;
-    const bool linear = (t.format == 0x0A || t.format == 0x0C || t.format == 0x0E) && t.tiling == 8;
+    // Fase 60: 8 bits / 1 canal (0x01) linear: os planos Y / U / V dos videos .fmv da colecao de personagens
+    const bool linear = (t.format == 0x0A || t.format == 0x0C || t.format == 0x0E || (t.format == 0x01 && t.number == 0)) && t.tiling == 8;
     const bool float_tiled = t.format == 0x0E && t.tiling == 13 && t.depth == 1 && !t.cube;
     const bool rgba = (linear || float_tiled) && (t.format != 0x0C || t.number == 7 || t.number == 0) &&
                       (t.format != 0x0E || t.number == 7);
@@ -1597,8 +1598,8 @@ bool ReadGuestTexture(const GuestTexture& t, PixelVector* out, render::TextureDa
     u32 element = 16; // bytes por elemento
     bool block = false;
     if (linear) {
-        element = t.format == 0x0A ? 4 : t.format == 0x0C ? 8 : 16;
-        data->format = t.format == 0x0A   ? render::TextureData::kRgba8
+        element = t.format == 0x01 ? 1 : t.format == 0x0A ? 4 : t.format == 0x0C ? 8 : 16;
+        data->format = t.format == 0x0A || t.format == 0x01 ? render::TextureData::kRgba8
                        : t.format == 0x0E ? render::TextureData::kRgba32F
                        : t.number == 7    ? render::TextureData::kRgba16F
                                           : render::TextureData::kRgba16;
@@ -1677,6 +1678,22 @@ bool ReadGuestTexture(const GuestTexture& t, PixelVector* out, render::TextureDa
     }
     if (!done) {
         return false;
+    }
+    if (t.format == 0x01) { // Fase 60: 1 canal -> RGBA8 (r, 0, 0, 1), o que o hardware devolve ao amostrar um R8
+        static thread_local PixelVector expanded;
+        expanded.resize(out->size() * 4);
+        const u8* source = out->data();
+        u8* target = expanded.data();
+        for (size_t i = 0; i < out->size(); ++i) {
+            target[4 * i] = source[i];
+            target[4 * i + 1] = 0;
+            target[4 * i + 2] = 0;
+            target[4 * i + 3] = 255;
+        }
+        out->swap(expanded);
+        for (u32 level = 0; level < done; ++level) {
+            data->level_offsets[level] *= 4;
+        }
     }
     data->levels = done;
     data->width = t.width;
@@ -1908,7 +1925,8 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         }
         return hash;
     };
-    const bool small_linear = texture.tiling == 8 && static_cast<u64>(texture.width) * texture.height * texture.depth <= (128u << 10);
+    const bool small_linear = texture.tiling == 8 && (static_cast<u64>(texture.width) * texture.height * texture.depth <= (128u << 10) ||
+                                                      texture.format == 0x01); // Fase 60: planos de video mudam todo quadro
     static thread_local PixelVector pixels;
     // Fase 29: as demais texturas sao conferidas por amostragem a cada ~30 frames (nivel 0).
     using Tracked = TexTracked;
@@ -1920,7 +1938,7 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         if (texture.tiling == 13 && BlockFormat(texture.format, &block_bytes, &unused)) {
             level0_bytes = static_cast<u64>((texture.pitch + 3) / 4) * ((texture.height + 3) / 4) * block_bytes;
         } else {
-            const u32 element = texture.format == 0x0A ? 4 : texture.format == 0x0C ? 8 : 16;
+            const u32 element = texture.format == 0x01 ? 1 : texture.format == 0x0A ? 4 : texture.format == 0x0C ? 8 : 16;
             level0_bytes = static_cast<u64>(texture.pitch) * texture.height * texture.depth * element;
         }
     }

@@ -202,7 +202,13 @@ void Install(fs::path dest, bool desktop) {
     HKEY key;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kUninstallKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
         SetRegString(key, L"DisplayName", kAppName);
-        SetRegString(key, L"DisplayVersion", ui::T(L"Fase 49", L"1.1"));
+        std::string version; // Fase 61: version.txt do pacote
+        std::ifstream version_file(dest / L"version.txt");
+        std::getline(version_file, version);
+        while (!version.empty() && (version.back() == 13 || version.back() == 32)) {
+            version.pop_back();
+        }
+        SetRegString(key, L"DisplayVersion", std::wstring(version.begin(), version.end()));
         SetRegString(key, L"Publisher", ui::T(L"Port nao oficial (feito em casa)", L"Unofficial fan port"));
         SetRegString(key, L"InstallLocation", dest.wstring());
         SetRegString(key, L"DisplayIcon", launcher.wstring());

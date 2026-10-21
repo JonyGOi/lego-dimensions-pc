@@ -17,6 +17,7 @@
 #include <ws2tcpip.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -49,6 +50,11 @@ bool RecvAll(SOCKET s, void* buffer, int length) {
     }
     return true;
 }
+
+// Fase 60: entre tirar uma figura e pousar outra (ou a mesma) o jogo precisa de um intervalo, como num
+// portal de verdade; sem ele, o "colocada" que chega junto com o "removida" as vezes nao conta e a figura
+// tinha de ser colocada de novo. O listener do Cemu "Remote Toypad" usa os mesmos 500 ms.
+constexpr auto kPickupDelay = std::chrono::milliseconds(500);
 
 void Announce(const std::vector<toypad::Packet>& packets) {
     if (!toypad::SessionReady()) {
@@ -100,8 +106,9 @@ bool HandleCommand(SOCKET s) {
             }
         }
         std::vector<toypad::Packet> events;
-        if (const auto removed = toypad::RemoveIndex(index)) {
-            events.push_back(*removed);
+        if (const auto removed = toypad::RemoveIndex(index)) { // a posicao estava ocupada: sai antes, com intervalo
+            Announce({*removed});
+            std::this_thread::sleep_for(kPickupDelay);
         }
         u32 id = 0;
         if (const auto added = toypad::LoadTag(pad, index, tag, from_file ? path : std::string(), &id)) {
@@ -127,8 +134,15 @@ bool HandleCommand(SOCKET s) {
             std::printf("[TOYPAD-APP] MOVE recusado: origem pad %u indice %u\n", old_pad, old_index);
             return true;
         }
-        const std::vector<toypad::Packet> events = toypad::MoveIndex(pad, index, old_index);
+        std::vector<toypad::Packet> events = toypad::MoveIndex(pad, index, old_index);
         std::printf("[TOYPAD-APP] MOVE %u/%u -> %u/%u%s\n", old_pad, old_index, pad, index, events.empty() ? " (origem vazia)" : "");
+        if (events.size() > 1) { // "removida" (e o que ocupava o destino) agora, "colocada" depois do intervalo
+            const toypad::Packet placed = events.back();
+            events.pop_back();
+            Announce(events);
+            std::this_thread::sleep_for(kPickupDelay);
+            events = {placed};
+        }
         Announce(events);
         break;
     }

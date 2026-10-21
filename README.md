@@ -28,19 +28,23 @@ Get the installer (`LEGO_Dimensions_PC_Setup.exe`) or the portable zip from the 
 2. Choose the game folder. A separate update folder is found automatically. Choose the DLC folder too, if you have one.
 3. Click **Prepare** (first time only). This converts the `eboot.bin` from your dump and translates all of the game's shaders to Vulkan. It takes 20 to 60 minutes.
 4. Click **PLAY**.
+5. Later, **Check updates** in the launcher downloads and installs new versions from the GitHub releases (from 1.3 on).
 
 Details and tips in the [README](tools/dist/README.txt) that ships with the port.
 
 ## Language
 
-The launcher, the installer and the port's own screens (loading screen, save picker) are in Portuguese when Windows is in Portuguese and in English otherwise. The game itself is told your Windows language when the game has it (English, French, German, Spanish, Italian, Dutch, Danish, Portuguese); anything else falls back to English.
+The launcher, the installer and the port's own screens (loading screen, save picker) are in Portuguese when Windows is in Portuguese and in English otherwise. The game itself is told your Windows language when the game has it (English, French, German, Spanish, Italian, Dutch, Danish, Portuguese); anything else falls back to English. The **Language** selector in the launcher picks one by hand (Portuguese, English, Spanish, French, German, Italian, Dutch, Danish).
+
+The languages other than Portuguese and English need the game's original text files: a dump with a fan translation that replaced `text.csv` closes the game in those languages.
 
 ## Status
 
 - The story, Vorton and the DLC levels are playable at 60 fps (the "60 FPS" option in the launcher).
 - Audio, saves, controller and the portal (virtual Toy Pad or the LegoToypad app) work.
 - The LegoToypad app (1.6 or newer) mirrors the portal lights the way the game drives them: colour, flashes and fades.
-- Fullscreen ("Fullscreen" option in the launcher, or F11 in game).
+- Fullscreen ("Fullscreen" option in the launcher, or F11 in game) and a window size selector ("Resolution"; the game still renders at 1920x1080 and is scaled to the window).
+- "Skip all cutscenes" option: any cutscene can be skipped, even the ones the game only lets you skip after watching them or at 100%.
 - The controller only drives the game while the game window is in front: clicking the Toy Pad app makes the character stop.
 - The first time you visit a new area the graphics driver still compiles pipelines. That can cause a short hitch, but objects never disappear (no pop-in).
 - Very heavy scenes (~6000 draws per frame) run below 60 fps on 6-core CPUs.

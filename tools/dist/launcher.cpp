@@ -11,10 +11,15 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 
+#include <tlhelp32.h>
+
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "uxtheme.lib")
@@ -29,11 +34,36 @@ using ui::S;
 
 namespace {
 
-constexpr int kW = 980, kH = 840, kHero = 380; // Fase 58: +80 para o campo da atualizacao
+constexpr int kW = 980, kH = 840, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
-enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen };
+enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
+          kResolution, kLanguage, kSkipCutscenes, kUpdate };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
+HWND g_resolution, g_language, g_skip, g_update; // Fase 61
+
+// Fase 61: o que o Python em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar)
+enum class Task { kPrepare, kCheck, kUpdate } g_task = Task::kPrepare;
+std::wstring g_version, g_new_version, g_notes;
+
+// Fase 61: tamanhos da janela do jogo (o jogo desenha em 1920x1080 e a imagem e escalada para a janela)
+const wchar_t* const kResolutions[] = {L"1280x720", L"1600x900", L"1920x1080", L"2560x1440", L"3840x2160"};
+// Idioma do jogo e do port: codigo do --lang, nome no menu (pt / en). Fora pt / en, o port fala ingles.
+struct Language {
+    const wchar_t *code, *pt, *en;
+};
+const Language kLanguages[] = {
+    {L"auto", L"Autom\u00e1tico (Windows)", L"Automatic (Windows)"},
+    {L"pt", L"Portugu\u00eas (Brasil)", L"Portugu\u00eas (Brasil)"},
+    {L"en", L"English", L"English"},
+    {L"es", L"Espa\u00f1ol", L"Espa\u00f1ol"},
+    {L"fr", L"Fran\u00e7ais", L"Fran\u00e7ais"},
+    {L"de", L"Deutsch", L"Deutsch"},
+    {L"it", L"Italiano", L"Italiano"},
+    {L"nl", L"Nederlands", L"Nederlands"},
+    {L"da", L"Dansk", L"Dansk"},
+};
+std::wstring g_res_value = L"1280x720", g_lang_value = L"auto";
 std::unique_ptr<Gdiplus::Bitmap> g_art;
 HICON g_icon;
 HFONT g_font, g_small, g_label, g_title, g_subtitle, g_button, g_play_font;
@@ -260,6 +290,7 @@ void UpdateStatus() {
     }
     EnableWindow(g_play, !g_busy && game_ok);
     EnableWindow(g_prepare, !g_busy && game_ok);
+    EnableWindow(g_update, !g_busy);
     InvalidateCard();
 }
 
@@ -299,24 +330,102 @@ void SaveSettings() {
     WriteIni(L"fps60", ui::Checked(g_fps) ? L"1" : L"0");
     WriteIni(L"console", ui::Checked(g_console) ? L"1" : L"0");
     WriteIni(L"telacheia", ui::Checked(g_fullscreen) ? L"1" : L"0");
+    WriteIni(L"resolucao", g_res_value);
+    WriteIni(L"idioma", g_lang_value);
+    WriteIni(L"pularcenas", ui::Checked(g_skip) ? L"1" : L"0");
+}
+
+const Language& CurrentLanguage() {
+    for (const Language& language : kLanguages) {
+        if (g_lang_value == language.code) {
+            return language;
+        }
+    }
+    return kLanguages[0];
+}
+
+void UpdateChoiceLabels() {
+    SetWindowTextW(g_resolution, (ui::T(L"Resolu\u00e7\u00e3o:  ", L"Resolution:  ") + g_res_value + L"  \u25be").c_str());
+    SetWindowTextW(g_language, (ui::T(L"Idioma:  ", L"Language:  ") + std::wstring(ui::T(CurrentLanguage().pt, CurrentLanguage().en)) + L"  \u25be").c_str());
+    InvalidateRect(g_resolution, nullptr, FALSE);
+    InvalidateRect(g_language, nullptr, FALSE);
+}
+
+// Menu suspenso logo abaixo do botao; devolve o indice escolhido ou -1.
+int PopupChoice(HWND button, const std::vector<std::wstring>& items, int current) {
+    HMENU menu = CreatePopupMenu();
+    for (size_t i = 0; i < items.size(); ++i) {
+        AppendMenuW(menu, MF_STRING | (static_cast<int>(i) == current ? MF_CHECKED : 0), i + 1, items[i].c_str());
+    }
+    RECT r;
+    GetWindowRect(button, &r);
+    const int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY, r.left, r.bottom + S(2), 0, g_main, nullptr);
+    DestroyMenu(menu);
+    return picked - 1;
+}
+
+void PickResolution() {
+    std::vector<std::wstring> items;
+    int current = -1;
+    for (const wchar_t* res : kResolutions) {
+        if (g_res_value == res) {
+            current = static_cast<int>(items.size());
+        }
+        items.push_back(std::wstring(res) + (std::wstring(res) == L"1280x720" ? ui::T(L"   (padr\u00e3o)", L"   (default)") : L""));
+    }
+    const int picked = PopupChoice(g_resolution, items, current);
+    if (picked >= 0) {
+        g_res_value = kResolutions[picked];
+        UpdateChoiceLabels();
+        SaveSettings();
+    }
+}
+
+void PickLanguage() {
+    std::vector<std::wstring> items;
+    int current = 0;
+    for (const Language& language : kLanguages) {
+        if (g_lang_value == language.code) {
+            current = static_cast<int>(items.size());
+        }
+        items.push_back(ui::T(language.pt, language.en));
+    }
+    const int picked = PopupChoice(g_language, items, current);
+    if (picked < 0 || g_lang_value == kLanguages[picked].code) {
+        return;
+    }
+    g_lang_value = kLanguages[picked].code;
+    SaveSettings();
+    // Textos do launcher: portugues so com "pt" (ou automatico num Windows em portugues). Se mudar, reabre.
+    const bool pt = g_lang_value == L"pt" || (g_lang_value == L"auto" && PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_PORTUGUESE);
+    if (pt == ui::Pt() || g_busy) {
+        UpdateChoiceLabels();
+        return;
+    }
+    SetEnvironmentVariableW(L"LD_LANG", pt ? L"pt" : L"en");
+    wchar_t exe[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
+    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, g_root.c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        DestroyWindow(g_main);
+    } else {
+        UpdateChoiceLabels();
+    }
 }
 
 std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 
 // ---- preparacao: python tools\setup\preparar.py, saida lida por uma thread ----
-void RunPrepare() {
-    SaveSettings();
+// Roda um script de tools\setup no Python portatil; a saida chega linha a linha em OnLine e o fim em WM_APP_DONE.
+bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
     fs::path python = g_root / L"tools" / L"python" / L"python.exe";
     std::error_code ec;
     std::wstring command = fs::is_regular_file(python, ec) ? Quote(python.wstring()) : L"python";
-    command += L" -u " + Quote((g_root / L"tools" / L"setup" / L"preparar.py").wstring()) + L" --app0 " + Quote(GetText(g_game));
-    const std::wstring dlc = GetText(g_dlc);
-    if (!dlc.empty()) {
-        command += L" --addcont " + Quote(dlc);
-    }
-    if (const std::wstring patch = GetText(g_patch); !patch.empty()) {
-        command += L" --patch " + Quote(patch); // Fase 58
-    }
+    command += L" -u " + Quote((g_root / L"tools" / L"setup" / script).wstring()) + args;
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE read_pipe = nullptr, write_pipe = nullptr;
     CreatePipe(&read_pipe, &write_pipe, &sa, 0);
@@ -328,16 +437,15 @@ void RunPrepare() {
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, g_root.c_str(),
                         &si, &pi)) {
-        AppendLog(ui::T(L"ERRO: nao consegui abrir o Python para a preparacao.", L"ERROR: could not start Python for the preparation."));
+        AppendLog(ui::T(L"ERRO: nao consegui abrir o Python.", L"ERROR: could not start Python."));
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
-        return;
+        return false;
     }
     CloseHandle(write_pipe);
     g_busy = true;
+    g_task = task;
     g_pct = 1;
-    g_step = ui::T(L"Preparando... (a tradu\u00e7\u00e3o dos shaders leva de 20 a 60 minutos, s\u00f3 na primeira vez)", L"Preparing... (translating the shaders takes 20 to 60 minutes, first time only)");
-    UpdateStatus();
     std::thread([read_pipe, pi] {
         std::string pending;
         char buffer[4096];
@@ -364,9 +472,115 @@ void RunPrepare() {
         CloseHandle(read_pipe);
         PostMessageW(g_main, WM_APP_DONE, code, 0);
     }).detach();
+    return true;
+}
+
+void RunPrepare() {
+    SaveSettings();
+    std::wstring args = L" --app0 " + Quote(GetText(g_game));
+    const std::wstring dlc = GetText(g_dlc);
+    if (!dlc.empty()) {
+        args += L" --addcont " + Quote(dlc);
+    }
+    if (const std::wstring patch = GetText(g_patch); !patch.empty()) {
+        args += L" --patch " + Quote(patch); // Fase 58
+    }
+    if (RunPython(L"preparar.py", args, Task::kPrepare)) {
+        g_step = ui::T(L"Preparando... (a tradu\u00e7\u00e3o dos shaders leva de 20 a 60 minutos, s\u00f3 na primeira vez)", L"Preparing... (translating the shaders takes 20 to 60 minutes, first time only)");
+        UpdateStatus();
+    }
+}
+
+// ---- Fase 61: atualizacao pelas releases do GitHub (tools\setup\atualizar.py) ----
+bool GameRunning() {
+    bool running = false;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32W entry{sizeof(entry)};
+    for (BOOL ok = Process32FirstW(snap, &entry); ok && !running; ok = Process32NextW(snap, &entry)) {
+        running = _wcsicmp(entry.szExeFile, L"lego_dimensions.exe") == 0;
+    }
+    CloseHandle(snap);
+    return running;
+}
+
+void CheckUpdate() {
+    if (g_busy) {
+        return;
+    }
+    g_new_version.clear();
+    g_notes.clear();
+    if (RunPython(L"atualizar.py", L" --check", Task::kCheck)) {
+        g_step = ui::T(L"Procurando atualiza\u00e7\u00f5es...", L"Looking for updates...");
+        UpdateStatus();
+    }
+}
+
+void ApplyUpdate() {
+    if (GameRunning()) {
+        MessageBoxW(g_main, ui::T(L"Feche o jogo antes de atualizar.", L"Close the game before updating."), L"LEGO Dimensions PC", MB_ICONINFORMATION);
+        return;
+    }
+    SaveSettings();
+    if (RunPython(L"atualizar.py", L" --apply", Task::kUpdate)) {
+        g_step = ui::T(L"Atualizando...", L"Updating...");
+        UpdateStatus();
+    }
+}
+
+void RestartLauncher() {
+    wchar_t exe[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
+    std::wstring command = Quote(exe);
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, g_root.c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        DestroyWindow(g_main);
+    }
+}
+
+// Sobras de uma atualizacao: arquivos que estavam em uso foram renomeados para *.antigo
+void CleanOldFiles() {
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(g_root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->path().filename() == L"assets" && it.depth() == 0) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        const std::wstring ext = it->path().extension().wstring();
+        if (ext.rfind(L".antigo", 0) == 0 || ext == L".novo") {
+            fs::remove(it->path(), ec);
+        }
+    }
+}
+
+std::wstring ReadVersion() {
+    std::ifstream in(g_root / L"version.txt");
+    std::string text;
+    std::getline(in, text);
+    while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) {
+        text.pop_back();
+    }
+    return text.empty() ? L"?" : std::wstring(text.begin(), text.end());
 }
 
 void OnLine(const std::wstring& line) {
+    if (line.rfind(L"VERSAO_NOVA ", 0) == 0) { // Fase 61
+        g_new_version = line.substr(12, line.find(L' ', 12) - 12);
+        return;
+    }
+    if (line.rfind(L"NOTA ", 0) == 0) {
+        g_notes += L"\u2022 " + line.substr(5) + L"\n";
+        return;
+    }
+    if (line.rfind(L"SEM_ATUALIZACAO", 0) == 0) {
+        return;
+    }
+    if (line.rfind(L"ATUALIZADO ", 0) == 0 || line.rfind(L"arquivos trocados", 0) == 0 || line.rfind(L"files replaced", 0) == 0) {
+        AppendLog(line);
+        return;
+    }
     if (line.rfind(L"PROGRESSO ", 0) == 0) {
         g_pct = std::max(1, _wtoi(line.c_str() + 10));
         const size_t space = line.find(L' ', 10);
@@ -417,6 +631,13 @@ void RunGame() {
     if (ui::Checked(g_fullscreen)) {
         command += L" --fullscreen"; // Fase 60: tela cheia sem bordas (F11 alterna dentro do jogo)
     }
+    command += L" --resolution " + g_res_value; // Fase 61: tamanho da janela
+    if (g_lang_value != L"auto") {
+        command += L" --lang " + g_lang_value; // Fase 61: idioma do jogo (e do port)
+    }
+    if (ui::Checked(g_skip)) {
+        command += L" --skip-cutscenes"; // Fase 61: qualquer cutscene pode ser pulada, mesmo sem 100%
+    }
     command += L" --hitch-log";
     const bool console = ui::Checked(g_console);
     STARTUPINFOW si{sizeof(si)};
@@ -462,6 +683,14 @@ void CreateControls() {
     ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero + 138), S(168), S(44), kDlcBrowse, g_button, ui::kPanel);
     g_log = ui::Edit(g_main, S(58), S(kH - 170), S(kW - 116), S(60), kLog, g_small, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL);
     SetWindowTheme(g_log, L"DarkMode_Explorer", nullptr); // barra de rolagem escura (Windows 10 1809+)
+    // Fase 61: resolucao, idioma e o mod de pular cutscenes, entre as etiquetas de estado e o progresso
+    g_resolution = ui::Button(g_main, L"", ui::Style::kSecondary, S(48), S(kHero + 234), S(250), S(40), kResolution, g_font, ui::kPanel);
+    g_language = ui::Button(g_main, L"", ui::Style::kSecondary, S(310), S(kHero + 234), S(300), S(40), kLanguage, g_font, ui::kPanel);
+    g_version = ReadVersion();
+    g_update = ui::Button(g_main, (ui::T(L"Atualizar   \u2022   v", L"Check updates  \u2022  v") + g_version).c_str(), ui::Style::kSecondary, S(kW - 250), S(kHero + 195),
+                          S(202), S(32), kUpdate, g_font, ui::kPanel);
+    g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(632), S(kHero + 234), S(300), S(40),
+                        kSkipCutscenes, g_font, ui::kPanel);
     g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
     g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
     g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
@@ -493,6 +722,14 @@ void LoadSettings() {
     ui::SetChecked(g_fps, ReadIni(L"fps60", L"1") == L"1");
     ui::SetChecked(g_console, ReadIni(L"console", L"0") == L"1");
     ui::SetChecked(g_fullscreen, ReadIni(L"telacheia", L"0") == L"1");
+    ui::SetChecked(g_skip, ReadIni(L"pularcenas", L"0") == L"1");
+    g_res_value = ReadIni(L"resolucao", L"1280x720");
+    if (std::find(std::begin(kResolutions), std::end(kResolutions), g_res_value) == std::end(kResolutions)) {
+        g_res_value = L"1280x720";
+    }
+    g_lang_value = ReadIni(L"idioma", L"auto");
+    g_lang_value = CurrentLanguage().code;
+    UpdateChoiceLabels();
     LoadArt(game);
     AppendLog(ui::T(L"Bem-vindo! Escolha as pastas, clique em Preparar na primeira vez e depois em JOGAR.", L"Welcome! Choose the folders, click Prepare the first time and then PLAY."));
     UpdateStatus();
@@ -578,9 +815,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kPlay:
             RunGame();
             break;
+        case kResolution:
+            PickResolution();
+            break;
+        case kUpdate:
+            CheckUpdate();
+            break;
+        case kLanguage:
+            PickLanguage();
+            break;
         case kFps:
         case kConsole:
         case kFullscreen:
+        case kSkipCutscenes:
             ui::Toggle(reinterpret_cast<HWND>(lp));
             SaveSettings();
             break;
@@ -594,6 +841,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_DONE:
         g_busy = false;
+        if (g_task == Task::kCheck) { // Fase 61
+            g_pct = 0;
+            g_step.clear();
+            UpdateStatus();
+            if (wp == 2) {
+                MessageBoxW(hwnd, (ui::T(L"Voc\u00ea j\u00e1 tem a vers\u00e3o mais nova (", L"You already have the latest version (") + g_version + L").").c_str(),
+                            L"LEGO Dimensions PC", MB_ICONINFORMATION);
+            } else if (wp == 0 && !g_new_version.empty()) {
+                std::wstring text = ui::T(L"A vers\u00e3o ", L"Version ") + g_new_version + ui::T(L" est\u00e1 dispon\u00edvel (voc\u00ea tem a ", L" is available (you have ") +
+                                    g_version + L").\n\n" + g_notes + (g_notes.empty() ? L"" : L"\n") +
+                                    ui::T(L"Baixar e instalar agora? Seus saves, os arquivos preparados e as op\u00e7\u00f5es ficam como est\u00e3o; o launcher reabre no fim.",
+                                          L"Download and install it now? Your saves, the prepared files and the options stay as they are; the launcher reopens at the end.");
+                if (MessageBoxW(hwnd, text.c_str(), L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                    ApplyUpdate();
+                }
+            }
+            return 0;
+        }
+        if (g_task == Task::kUpdate) {
+            UpdateStatus();
+            if (wp == 0) {
+                MessageBoxW(hwnd, ui::T(L"Atualizado! O launcher vai reabrir.", L"Updated! The launcher will reopen."), L"LEGO Dimensions PC", MB_ICONINFORMATION);
+                RestartLauncher();
+            } else {
+                AppendLog(ui::T(L"A atualiza\u00e7\u00e3o falhou (veja acima). Nada do que j\u00e1 estava funcionando foi apagado.",
+                                L"The update failed (see above). Nothing that was already working was removed."));
+            }
+            return 0;
+        }
         if (wp == 0) {
             g_pct = 100;
             g_step = ui::T(L"Pronto! Clique em JOGAR.", L"Done! Click PLAY.");
@@ -625,6 +901,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wchar_t exe[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
     g_root = fs::path(exe).parent_path();
+    // Fase 61: idioma escolhido no launcher (launcher.ini); "auto" segue LD_LANG / Windows
+    if (const std::wstring choice = ReadIni(L"idioma", L"auto"); choice != L"auto" && !choice.empty()) {
+        SetEnvironmentVariableW(L"LD_LANG", choice == L"pt" ? L"pt" : L"en");
+    }
     SetEnvironmentVariableW(L"LD_LANG", ui::Pt() ? L"pt" : L"en"); // Fase 60
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8"); // Fase 60: o log da preparacao chega em UTF-8 (nomes de DLC)
     g_font = ui::Font(15);
@@ -652,6 +932,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     g_main = CreateWindowExW(0, wc.lpszClassName, L"LEGO Dimensions PC", style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
                              nullptr, nullptr, instance, nullptr);
     ui::DarkTitle(g_main);
+    CleanOldFiles(); // Fase 61
     CreateControls();
     LoadSettings();
     ShowWindow(g_main, show);

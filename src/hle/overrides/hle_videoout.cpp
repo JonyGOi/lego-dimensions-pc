@@ -15,6 +15,7 @@
 #include "render/vulkan_backend.h"
 #include "runtime/lang.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cinttypes>
@@ -101,6 +102,9 @@ constexpr UINT_PTR kTitleTimer = 1;
 // Fase 60: tela cheia sem bordas (janela WS_POPUP do tamanho do monitor). O swapchain acompanha o novo
 // tamanho como num redimensionamento comum. F11 alterna; --fullscreen abre assim.
 std::atomic<bool> g_start_fullscreen{false};
+// Fase 61: tamanho da area util da janela (--resolution LxA). O jogo continua desenhando em 1920x1080 e a
+// imagem e escalada para a janela, como no tamanho padrao.
+std::atomic<u32> g_window_width{1280}, g_window_height{720};
 bool g_fullscreen = false;
 WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};
 
@@ -189,7 +193,17 @@ void WindowThread() {
     wc.hIcon = LoadIconA(wc.hInstance, MAKEINTRESOURCEA(1)); // Fase 50: icone do port (recurso 1)
     wc.hCursor = LoadCursorA(nullptr, IDC_ARROW);
     RegisterClassA(&wc);
-    RECT rect{0, 0, 1280, 720}; // buffers do jogo sao 1920x1080; a janela e so metade disso
+    RECT rect{0, 0, static_cast<LONG>(g_window_width.load()), static_cast<LONG>(g_window_height.load())};
+    RECT work{};
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0) && work.right > work.left) {
+        // Maior que a area de trabalho: encolhe mantendo a proporcao pedida
+        const RECT frame = [] { RECT r{0, 0, 0, 0}; AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE); return r; }();
+        const double room_w = (work.right - work.left) - (frame.right - frame.left);
+        const double room_h = (work.bottom - work.top) - (frame.bottom - frame.top);
+        const double scale = std::min({1.0, room_w / rect.right, room_h / rect.bottom});
+        rect.right = static_cast<LONG>(rect.right * scale);
+        rect.bottom = static_cast<LONG>(rect.bottom * scale);
+    }
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
     HWND hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                               CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
@@ -389,6 +403,11 @@ void SetCheckModules(bool enabled) {
 
 void SetStartFullscreen(bool enabled) {
     g_start_fullscreen = enabled;
+}
+
+void SetWindowSize(u32 width, u32 height) {
+    g_window_width = std::clamp(width, 320u, 7680u);
+    g_window_height = std::clamp(height, 180u, 4320u);
 }
 
 void SetForce60Hz(bool enabled) {

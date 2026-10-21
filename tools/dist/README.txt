@@ -10,6 +10,10 @@ LANGUAGE
   Portuguese and in English otherwise. The game itself uses your Windows language when the game has it
   (English, French, German, Spanish, Italian, Dutch, Danish and Portuguese); any other language
   falls back to English.
+  The launcher's "Language" selector picks one by hand (the launcher reopens when its own text language
+  changes). The languages other than Portuguese and English read the game's original text: a dump with a
+  fan translation (a replaced text.csv with a single column) closes the game in those languages. Use
+  Portugues or English in that case.
 
 WHAT YOU NEED
   - Windows 10 (1803 or newer) or Windows 11, 64-bit.
@@ -44,6 +48,13 @@ HOW TO USE
 TIPS
   - "60 FPS" turns on 60 frames per second (the original game runs at 30).
   - "Fullscreen" starts the game in fullscreen. In game, F11 switches between fullscreen and window.
+  - "Resolution" is the size of the game window (1280x720 by default). The game renders at 1920x1080 as
+    on the PS4 and the picture is scaled to the window. In fullscreen the monitor size is used.
+  - "Update" looks for a newer version of the port in the GitHub releases and, if there is one, downloads
+    and installs it on top. Saves, prepared files, options and portal.json stay as they are; close the
+    game first.
+  - "Skip all cutscenes" lets you skip any cutscene (the game's own skip button), even the ones the game
+    would only let you skip after watching them or at 100%.
   - The controller only drives the game while the game window is in front: when you click the Toy Pad
     app (or any other window) the character stops. A button that was already held when you come back
     only counts after it is released.

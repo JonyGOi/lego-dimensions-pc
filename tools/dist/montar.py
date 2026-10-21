@@ -74,10 +74,12 @@ def stage():
         for dll in VC_DLLS:
             copy(os.path.join(REDIST, dll), os.path.join(d, dll))
     # ferramentas de preparacao
-    for f in ('nu2_shader_extractor.py', 'gcn.py', 'nu2dat.py', 'winpack.py'):
+    for f in ('nu2_shader_extractor.py', 'gcn.py', 'nu2dat.py', 'nu2toc.py', 'winpack.py'):  # Fase 60: nu2toc le a tabela do .DAT
         copy(R('tools', 'nu2_shader_extractor', f), S('tools', 'nu2_shader_extractor', f))
     copy(R('tools', 'check_binaries.py'), S('tools', 'check_binaries.py'))
     copy(R('tools', 'setup', 'preparar.py'), S('tools', 'setup', 'preparar.py'))
+    copy(R('tools', 'setup', 'atualizar.py'), S('tools', 'setup', 'atualizar.py'))  # Fase 61: botao Atualizar do launcher
+    copy(R('tools', 'dist', 'VERSION'), S('version.txt'))  # Fase 61: versao instalada (comparada com a release do GitHub)
     copy_tree(R('tools', 'data', 'dat_index'), S('tools', 'data', 'dat_index'), suffixes=('.tsv',))
     copy(R('tools', 'data', 'layout_dictionary.json'), S('tools', 'data', 'layout_dictionary.json'))
     copy(R('tools', 'data', 'vs_reais.txt'), S('tools', 'data', 'vs_reais.txt'))  # Fase 51: leituras de vertice reais (so numeros)

@@ -38,8 +38,37 @@ const C* T(const C* pt, const C* en) {
     return Pt() ? pt : en;
 }
 
+// Fase 61: idioma do jogo escolhido a mao (codigo do PS4); -1 = segue Choice() / Windows
+inline int& GameChoice() {
+    static int code = -1;
+    return code;
+}
+
+// `--lang pt|en|es|fr|de|it|nl|da`: fora pt, os textos do port ficam em ingles.
+inline void SetFromCode(const char* code) {
+    static const struct {
+        const char* name;
+        int ps4;
+    } kCodes[] = {{"en", 1}, {"fr", 2}, {"es", 3}, {"de", 4}, {"it", 5}, {"nl", 6}, {"da", 14}};
+    if (!_strnicmp(code, "pt", 2)) {
+        Choice() = 1;
+        return;
+    }
+    for (const auto& entry : kCodes) {
+        if (!_strnicmp(code, entry.name, 2)) {
+            Choice() = 0;
+            GameChoice() = entry.ps4;
+            return;
+        }
+    }
+    Choice() = -1;
+}
+
 // Codigo de idioma do sistema do PS4 (SCE_SYSTEM_PARAM_LANG_*) para o jogo.
 inline int Ps4SystemLanguage() {
+    if (GameChoice() >= 0) {
+        return GameChoice();
+    }
     if (Choice() == 1 || (Choice() < 0 && Pt())) {
         return SUBLANGID(WindowsLanguage()) == SUBLANG_PORTUGUESE && PRIMARYLANGID(WindowsLanguage()) == LANG_PORTUGUESE ? 7 : 17;
     }

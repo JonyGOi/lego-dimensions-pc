@@ -1,6 +1,8 @@
 #include "hle/overrides/hle_toypad.h"
 
 #include <bit>
+#include <chrono>
+#include <filesystem>
 #include <cstdio>
 #include <fstream>
 #include <cstring>
@@ -36,6 +38,7 @@ std::mutex g_mutex;
 Stats g_stats;
 u32 g_rng[4] = {}; // gerador do desafio, semeado pelo jogo no comando 0xB1
 bool g_session_ready = false;
+u32 g_session_number = 0; // Fase 60: conta as sessoes abertas (cada desafio depois de um WAKE)
 // Indice da figura no protocolo = posicao neste vetor (0..6). As figuras do portal.json usam o
 // indice igual a zona (1..3), como desde a Fase 8; o app LegoToypad escolhe o indice.
 Figure g_figures[kSlotCount];
@@ -333,6 +336,11 @@ bool SessionReady() {
     return g_session_ready;
 }
 
+u32 SessionNumber() {
+    std::lock_guard lock(g_mutex);
+    return g_session_ready ? g_session_number : 0;
+}
+
 std::optional<Packet> PlaceFigure(int pad, const Uid& uid, u32 character_id) {
     std::lock_guard lock(g_mutex);
     if (pad < 1 || pad > kPadCount) {
@@ -369,11 +377,43 @@ std::optional<Packet> LoadTag(int pad, int index, const TagData& tag, const std:
         return std::nullopt;
     }
     Figure& figure = g_figures[index];
+    // Fase 60: o app manda sempre o mesmo arquivo para um personagem; colocar uma segunda copia dele com o
+    // mesmo UID e um estado impossivel num portal de verdade, e o jogo descarta a segunda figura (como no
+    // listener do Cemu "Remote Toypad"). A copia ganha um UID novo, com o id e a senha recifrados para ele.
+    TagData data = tag;
+    const Uid incoming{tag[0], tag[1], tag[2], tag[4], tag[5], tag[6], tag[7]};
+    bool collides = false;
+    for (int other = 0; other < kSlotCount; ++other) {
+        collides |= other != index && g_figures[other].present && g_figures[other].uid == incoming;
+    }
+    if (collides) {
+        const u32 id = TagCharacterId(tag);
+        static u32 seed = static_cast<u32>(std::chrono::steady_clock::now().time_since_epoch().count()) | 1u;
+        Uid fresh{0x04, 0, 0, 0, 0, 0, 0x80};
+        for (int i = 1; i < 6; ++i) {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            fresh[i] = static_cast<u8>(seed >> 24);
+        }
+        const TagData rebuilt = BuildTag(fresh, id);
+        std::memcpy(data.data(), rebuilt.data(), 16);                         // UID e paginas 0-3
+        std::memcpy(&data[0x24 * 4], &rebuilt[0x24 * 4], id < 1000 ? 8 : 4); // id (cifrado com a chave nova)
+        std::memcpy(&data[0x2B * 4], &rebuilt[0x2B * 4], 4);                  // senha
+        log::Tagged("PORTAL", "segunda copia do personagem %u no portal: UID novo %02x %02x %02x %02x %02x %02x %02x", id, fresh[0],
+                    fresh[1], fresh[2], fresh[3], fresh[4], fresh[5], fresh[6]);
+        if (!path.empty()) { // como no Cemu: o arquivo da copia guarda o UID novo
+            std::ofstream out(std::filesystem::u8path(path), std::ios::binary | std::ios::in | std::ios::out);
+            if (out) {
+                out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            }
+        }
+    }
     figure.present = true;
     figure.pad = pad;
-    figure.uid = {tag[0], tag[1], tag[2], tag[4], tag[5], tag[6], tag[7]};
-    figure.data = tag;
-    figure.id = TagCharacterId(tag);
+    figure.uid = {data[0], data[1], data[2], data[4], data[5], data[6], data[7]};
+    figure.data = data;
+    figure.id = TagCharacterId(data);
     figure.path = path;
     if (character_id) {
         *character_id = figure.id;
@@ -504,6 +544,9 @@ std::optional<Packet> HandleCommand(const u8* command, u32 length) {
         Store32(answer, NextRandom());
         std::memcpy(answer + 4, plain.data(), 4);
         reply = Reply(sequence, Encrypt(answer).data(), 8);
+        if (!g_session_ready) {
+            ++g_session_number;
+        }
         g_session_ready = true;
         break;
     }

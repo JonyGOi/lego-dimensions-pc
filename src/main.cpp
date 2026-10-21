@@ -93,6 +93,22 @@ void StartPerfThread();
 
 namespace {
 
+// Fase 61: mod "pular qualquer cutscene". A funcao do eboot em 0x173fd80 decide se a cutscene atual aceita
+// ser pulada: depois das checagens de estado, vale o "allowcutskip" do nivel ou o bit 0 de [obj+0xe8] (cena
+// ja vista / jogo completo). Troca essa ultima leitura por "mov al, 1", mantendo as checagens de antes.
+bool g_skip_cutscenes = false;
+
+bool PatchCutsceneSkip(u8* base) {
+    constexpr u64 kSite = 0x173fe10;
+    static const u8 kOriginal[] = {0x8A, 0x83, 0xE8, 0x00, 0x00, 0x00, 0x24, 0x01}; // mov al, [rbx+0xe8]; and al, 1
+    static const u8 kPatched[] = {0xB0, 0x01, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // mov al, 1; nop x6
+    if (std::memcmp(base + kSite, kOriginal, sizeof(kOriginal)) != 0) {
+        return false; // outro eboot: nao mexe
+    }
+    std::memcpy(base + kSite, kPatched, sizeof(kPatched));
+    return true;
+}
+
 // Fase 58: pasta da atualizacao separada (CUSA01176-patch), dentro da pasta do jogo ou ao lado dela.
 std::filesystem::path FindPatchDir(const std::filesystem::path& app0) {
     std::error_code ec;
@@ -801,6 +817,21 @@ int SelfTest() {
         tp::RemoveFigure(1);
         tp::RemoveFigure(3);
         check("Toy Pad multi-tag: tres figuras colocadas, lidas pelo indice e removidas de forma independente", multi_ok);
+        // Fase 60: a mesma tag (mesmo arquivo do app) em duas posicoes: a segunda copia ganha um UID novo, com o
+        // id recifrado para ele (o jogo descartaria duas figuras com o mesmo UID)
+        const tp::TagData copy_tag = tp::BuildTag(uids[0], ids[0]);
+        tp::RemoveIndex(4);
+        tp::RemoveIndex(5);
+        const auto first_copy = tp::LoadTag(1, 4, copy_tag, std::string());
+        const auto second_copy = tp::LoadTag(2, 5, copy_tag, std::string());
+        const bool dup_ok = first_copy && second_copy && !std::memcmp(first_copy->data() + 6, copy_tag.data(), 3) &&
+                            std::memcmp(second_copy->data() + 6, first_copy->data() + 6, 7) != 0 && (*second_copy)[6] == 0x04;
+        u32 second_id = 0;
+        tp::RemoveIndex(5);
+        const auto again = tp::LoadTag(2, 5, copy_tag, std::string(), &second_id);
+        tp::RemoveIndex(4);
+        tp::RemoveIndex(5);
+        check("Toy Pad: segunda copia da mesma tag ganha UID novo e continua o mesmo personagem", dup_ok && again && second_id == ids[0]);
     }
 
     // ---- extrator de shaders: acha o OrbShdr a partir dos registradores e grava um arquivo por shader distinto
@@ -1199,10 +1230,17 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--srgb-display")) {
             hle::gnm::SetSrgbDisplay(true); // experimento: buffer de video como alvo sRGB (gama a mais)
         } else if (!std::strcmp(argv[i], "--lang") && i + 1 < argc) {
-            ++i; // Fase 60: idioma dos textos do port e do jogo (pt / en); sem a opcao, o do Windows
-            lang::Choice() = !_strnicmp(argv[i], "pt", 2) ? 1 : !_strnicmp(argv[i], "en", 2) ? 0 : -1;
+            // Fase 60/61: idioma dos textos do port e do jogo (pt / en / es / fr / de / it / nl / da); sem a opcao, o do Windows
+            lang::SetFromCode(argv[++i]);
         } else if (!std::strcmp(argv[i], "--background-pad")) {
             hle::SetPadBackgroundInput(true); // Fase 60: o controle vale mesmo com a janela fora de foco
+        } else if (!std::strcmp(argv[i], "--skip-cutscenes")) {
+            g_skip_cutscenes = true; // Fase 61: toda cutscene pode ser pulada, mesmo sem 100%
+        } else if (!std::strcmp(argv[i], "--resolution") && i + 1 < argc) {
+            unsigned width = 0, height = 0; // Fase 61: tamanho da janela, ex. 1920x1080
+            if (std::sscanf(argv[++i], "%ux%u", &width, &height) == 2 && width && height) {
+                hle::videoout::SetWindowSize(width, height);
+            }
         } else if (!std::strcmp(argv[i], "--fullscreen")) {
             hle::videoout::SetStartFullscreen(true); // Fase 60: tela cheia sem bordas (F11 alterna)
         } else if (!std::strcmp(argv[i], "--fps60")) {
@@ -1454,6 +1492,10 @@ int main(int argc, char** argv) {
                     ps.other_forms);
     }
 
+    if (g_skip_cutscenes) {
+        std::printf("Cutscenes : %s\n", PatchCutsceneSkip(elf.base()) ? "todas podem ser puladas (--skip-cutscenes)"
+                                                                       : "AVISO: eboot diferente, mod de pular nao aplicado");
+    }
     if (!elf.Protect()) {
         std::printf("ERRO: %s\n", elf.error().c_str());
         return 1;

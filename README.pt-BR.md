@@ -28,6 +28,7 @@ Baixe o instalador (`LEGO_Dimensions_PC_Setup.exe`) ou o zip portátil na págin
 2. Escolha a pasta do jogo. A pasta da atualização separada é achada sozinha. Escolha também a das DLCs, se tiver.
 3. Clique em **Preparar** (só na primeira vez). Isso converte o `eboot.bin` do seu dump e traduz todos os shaders do jogo para Vulkan. Leva de 20 a 60 minutos.
 4. Clique em **JOGAR**.
+5. Depois, **Atualizar** no launcher baixa e instala as versões novas das releases do GitHub (a partir da 1.3).
 
 Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 
@@ -36,9 +37,10 @@ Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 - Dá para jogar a história, Vorton e as fases com DLCs, a 60 fps (opção "60 FPS" no launcher).
 - Áudio, saves, controle e portal (Toy Pad virtual ou o app LegoToypad) funcionam.
 - O app LegoToypad (1.6 ou mais novo) mostra as luzes do portal como o jogo as acende: cor, piscadas e fades.
-- Tela cheia (opção "Tela cheia" no launcher ou F11 no jogo).
+- Tela cheia (opção "Tela cheia" no launcher ou F11 no jogo) e seletor do tamanho da janela ("Resolução"; o jogo continua desenhando em 1920x1080 e é escalado para a janela).
+- Opção "Pular todas as cutscenes": qualquer cutscene pode ser pulada, mesmo as que o jogo só deixa pular depois de vistas ou com 100%.
 - O controle só mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad, o personagem para.
-- Launcher, instalador e telas do port em português ou inglês, conforme o idioma do Windows.
+- Launcher, instalador e telas do port em português ou inglês, conforme o idioma do Windows. O seletor **Idioma** do launcher escolhe na mão (português, inglês, espanhol, francês, alemão, italiano, holandês, dinamarquês); os idiomas fora português e inglês precisam dos textos originais do jogo (um dump com tradução de fã no `text.csv` fecha o jogo nesses idiomas).
 - Na primeira visita a uma área nova o driver de vídeo ainda compila pipelines. Isso pode dar um engasgo curto, mas os objetos não somem (sem pop-in).
 - Cenas muito pesadas (~6000 draws por quadro) ficam abaixo de 60 fps em processadores de 6 núcleos.
 - Algumas cenas abertas (por exemplo a tomada aérea de Metropolis) ficam com muito mais névoa que no PS4. Em investigação.

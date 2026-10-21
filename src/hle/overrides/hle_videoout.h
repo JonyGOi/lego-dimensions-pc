@@ -41,6 +41,8 @@ void SetForce60Hz(bool enabled);
 void SetCheckModules(bool enabled);
 // Fase 60 (--fullscreen): janela abre em tela cheia sem bordas. F11 alterna a qualquer momento.
 void SetStartFullscreen(bool enabled);
+// Fase 61: tamanho inicial da area util da janela (padrao 1280x720)
+void SetWindowSize(u32 width, u32 height);
 
 FlipStatus GetFlipStatus(int handle);
 u64 FlipCount();
