@@ -64,6 +64,7 @@ def stage():
     R = lambda *p: os.path.join(ROOT, *p)  # noqa: E731
     # programas
     copy(R('tools', 'dist', 'build', 'LegoDimensionsLauncher.exe'), S('LegoDimensionsLauncher.exe'))
+    copy(R('tools', 'dist', 'build', 'LD_PC_Transfer.exe'), S('LD_PC_Transfer.exe'))  # Fase 63: conversor de saves
     # o port: o build mais novo entre build\ e build_dist\ (este ultimo e compilado por tools/dist/build_jogo_dist.bat
     # quando o build\ esta em uso pelo jogo aberto)
     game = max((R(d, 'lego_dimensions.exe') for d in ('build', 'build_dist') if os.path.exists(R(d, 'lego_dimensions.exe'))), key=os.path.getmtime)
@@ -80,6 +81,7 @@ def stage():
     copy(R('tools', 'setup', 'preparar.py'), S('tools', 'setup', 'preparar.py'))
     copy(R('tools', 'setup', 'atualizar.py'), S('tools', 'setup', 'atualizar.py'))  # Fase 61: botao Atualizar do launcher
     copy(R('tools', 'setup', 'botoes.py'), S('tools', 'setup', 'botoes.py'))  # Fase 62: icones dos botoes de outras plataformas
+    copy(R('tools', 'setup', 'ld_transfer.py'), S('tools', 'setup', 'ld_transfer.py'))  # Fase 63: LD PC Transfer
     keep(S('assets', 'buttons'))
     copy(R('tools', 'dist', 'VERSION'), S('version.txt'))  # Fase 61: versao instalada (comparada com a release do GitHub)
     copy_tree(R('tools', 'data', 'dat_index'), S('tools', 'data', 'dat_index'), suffixes=('.tsv',))

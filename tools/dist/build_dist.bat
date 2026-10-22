@@ -14,5 +14,6 @@ if not exist "%OUT%" mkdir "%OUT%"
 set FLAGS=/nologo /std:c++20 /O2 /MT /EHsc /W3 /DNDEBUG
 rc /nologo /fo "%OUT%\app.res" "%~dp0app.rc" || exit /b 1
 clang-cl %FLAGS% "%~dp0launcher.cpp" /Fo"%OUT%\launcher.obj" /Fe"%OUT%\LegoDimensionsLauncher.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED "%OUT%\app.res" || exit /b 1
+clang-cl %FLAGS% "%~dp0transfer.cpp" /Fo"%OUT%\transfer.obj" /Fe"%OUT%\LD_PC_Transfer.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED "%OUT%\app.res" || exit /b 1
 clang-cl %FLAGS% "%~dp0installer.cpp" /Fo"%OUT%\installer.obj" /Fe"%OUT%\installer_stub.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED "%OUT%\app.res" || exit /b 1
-echo OK: %OUT%\LegoDimensionsLauncher.exe e installer_stub.exe
+echo OK: %OUT%\LegoDimensionsLauncher.exe, LD_PC_Transfer.exe e installer_stub.exe

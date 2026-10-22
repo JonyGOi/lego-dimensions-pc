@@ -38,6 +38,7 @@ Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 - Áudio, saves, controle e portal (o Toy Pad de verdade no USB, o app LegoToypad ou um Toy Pad virtual) funcionam.
 - Co-op local: até 4 controles; o jogador 2 entra em tela dividida apertando Options.
 - Ícones dos botões conforme o controle (Xbox 360, Xbox One/Series, PS3, PS4/PS5, Wii U para controles da Nintendo), montados a partir dos arquivos do próprio jogo; o launcher também deixa fixar um conjunto.
+- **LD PC Transfer** (botão no launcher): converte o progresso entre o port, PS4 / shadPS4, Xbox 360 (Xenia), Wii U (Cemu) e PS3 (RPCS3, experimental). O save original não é alterado e o que o destino já tinha vai para a pasta `saves_backup`. Xbox One não dá: os saves dele ficam na nuvem, criptografados.
 - O app LegoToypad (1.6 ou mais novo) mostra as luzes do portal como o jogo as acende: cor, piscadas e fades.
 - Tela cheia (opção "Tela cheia" no launcher ou F11 no jogo) e seletor do tamanho da janela ("Resolução"; o jogo continua desenhando em 1920x1080 e é escalado para a janela).
 - Opção "Pular todas as cutscenes": qualquer cutscene pode ser pulada, mesmo as que o jogo só deixa pular depois de vistas ou com 100%.

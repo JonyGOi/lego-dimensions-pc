@@ -37,7 +37,7 @@ namespace {
 constexpr int kW = 980, kH = 840, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
@@ -760,6 +760,24 @@ void CreateControls() {
     g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
     g_prepare = ui::Button(g_main, ui::T(L"Preparar", L"Prepare"), ui::Style::kSecondary, S(kW - 420), S(kH - 82), S(170), S(54), kPrepare, g_button);
     g_play = ui::Button(g_main, ui::T(L"JOGAR", L"PLAY"), ui::Style::kPrimary, S(kW - 236), S(kH - 82), S(212), S(54), kPlay, g_play_font);
+    // Fase 63: LD PC Transfer (conversor de saves) no canto da arte; a regiao arredondada deixa a arte aparecer nas pontas
+    HWND transfer = ui::Button(g_main, L"LD PC Transfer", ui::Style::kSecondary, S(kW - 236), S(30), S(196), S(40), kTransfer, g_button);
+    SetWindowRgn(transfer, CreateRoundRectRgn(0, 0, S(196) + 1, S(40) + 1, S(18), S(18)), TRUE);
+}
+
+// Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
+void OpenTransfer() {
+    const fs::path exe = g_root / L"LD_PC_Transfer.exe";
+    std::error_code ec;
+    std::wstring command = Quote(exe.wstring());
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (!fs::is_regular_file(exe, ec) || !CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, g_root.c_str(), &si, &pi)) {
+        MessageBoxW(g_main, ui::T(L"Não achei o LD_PC_Transfer.exe na pasta do port.", L"LD_PC_Transfer.exe was not found in the port folder."), L"LEGO Dimensions PC", MB_ICONERROR);
+        return;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
 }
 
 void LoadSettings() {
@@ -892,6 +910,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case kLanguage:
             PickLanguage();
+            break;
+        case kTransfer:
+            OpenTransfer();
             break;
         case kFps:
         case kConsole:

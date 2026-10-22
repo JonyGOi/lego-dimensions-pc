@@ -71,4 +71,10 @@ DICAS
   - Se notar travadas, mande o log da sessao (build\logs\): as linhas [ENGASGO], [QUADRO-LENTO] e
     [TRAVADA-PILHAS] dizem onde o tempo foi gasto.
   - Saves ficam em assets\savedata0.
+  - LD PC Transfer (botao no launcher, ou LD_PC_Transfer.exe): converte o progresso entre este port,
+    PS4 / shadPS4, Xbox 360 (Xenia), Wii U (Cemu, jogo atualizado) e PS3 (RPCS3, experimental). Escolha
+    a pasta do save de origem (ou uma acima dela) e o destino; o original nao e alterado e o que o
+    destino ja tinha vai para a pasta saves_backup. So o progresso vem; as opcoes voltam ao padrao.
+    Num console de verdade o save ainda precisa ser reassinado (Apollo / Save Wizard / Horizon).
+    Xbox One nao da: os saves dele ficam na nuvem, criptografados.
   - Use pastas com nomes sem acento (o port recebe os caminhos em ANSI).

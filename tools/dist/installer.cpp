@@ -195,6 +195,7 @@ void Install(fs::path dest, bool desktop) {
     const fs::path menu = KnownFolder(FOLDERID_Programs) / kAppName;
     fs::create_directories(menu, ec);
     Shortcut(menu / L"LEGO Dimensions PC.lnk", launcher, dest);
+    Shortcut(menu / L"LD PC Transfer.lnk", dest / L"LD_PC_Transfer.exe", dest); // Fase 63
     Shortcut(menu / ui::T(L"Desinstalar LEGO Dimensions PC.lnk", L"Uninstall LEGO Dimensions PC.lnk"), dest / L"Desinstalar.exe", dest);
     if (desktop) {
         Shortcut(KnownFolder(FOLDERID_Desktop) / L"LEGO Dimensions PC.lnk", launcher, dest);
@@ -237,7 +238,7 @@ int Uninstall() {
     RegDeleteTreeW(HKEY_CURRENT_USER, kUninstallKey);
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path p = it->path();
-        if (p.filename() == L"Desinstalar.exe") {
+        if (p.filename() == L"Desinstalar.exe" || (keep_saves && p.filename() == L"saves_backup")) { // Fase 63: backups do LD PC Transfer
             continue;
         }
         if (keep_saves && p.filename() == L"assets") {
