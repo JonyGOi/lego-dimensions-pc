@@ -6022,6 +6022,7 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
         end_lap(2);
         DrainTextureResults(8.0); // Fase 39: o envio agora e so uma copia para o staging do frame
         end_lap(3);
+        videoout::QueueStatsOverlay(); // Fase 65: contador de FPS / info por cima do quadro
         renderer.DrawFrame(videoout::BufferAddress(static_cast<int>(buffer_index)));
         end_lap(4);
         if (const double total = end_ms[0] + end_ms[1] + end_ms[2] + end_ms[3] + end_ms[4]; total > 40.0) {

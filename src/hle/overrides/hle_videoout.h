@@ -54,6 +54,11 @@ bool OpenWindowEarly(u32 timeout_ms);
 // vistos, e volta quando tudo terminou (ou depois de `max_seconds`).
 void RunLoadingScreen(u32 max_seconds);
 
+// Fase 65: contador de FPS / info no canto de cima, a esquerda (--stats-overlay; F10 alterna no jogo).
+void SetStatsOverlay(bool enabled);
+// Chamado uma vez por quadro do jogo, antes do DrawFrame: mede o tempo do quadro e, ligado, enfileira o desenho.
+void QueueStatsOverlay();
+
 // true se a janela do jogo existe e esta em primeiro plano (o teclado so vale nesse caso).
 bool WindowHasFocus();
 // HWND da janela do jogo (nullptr se nao ha janela): dona dos dialogos do port.

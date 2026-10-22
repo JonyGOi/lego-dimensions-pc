@@ -97,18 +97,22 @@ HLE_IMPL(int, sceUserServiceGetLoginUserIdList, LoginUserIdList* list) {
 }
 HLE_OVERRIDE(sceUserServiceGetLoginUserIdList);
 
+std::string g_player_names[kMaxUsers]; // Fase 65: apelidos escolhidos no launcher (vazio = PlayerN)
+
 HLE_IMPL(int, sceUserServiceGetUserName, int user_id, char* name, u64 size) {
-    char text[sizeof(kUserName)];
-    std::memcpy(text, kUserName, sizeof(kUserName));
-    text[sizeof(kUserName) - 2] = static_cast<char>('0' + (user_id - kUserId + 1)); // Fase 61: Player1..Player4
-    HLE_TRACE("user=%d -> \"%s\"", user_id, text);
     if (!name || user_id < kUserId || user_id >= kUserId + kMaxUsers) {
         return kUserServiceErrorInvalidArgument;
     }
-    if (size < sizeof(text)) {
+    std::string text = g_player_names[user_id - kUserId];
+    if (text.empty()) {
+        text = kUserName;
+        text.back() = static_cast<char>('0' + (user_id - kUserId + 1)); // Fase 61: Player1..Player4
+    }
+    HLE_TRACE("user=%d -> \"%s\"", user_id, text.c_str());
+    if (size < text.size() + 1) {
         return kUserServiceErrorBufferTooShort;
     }
-    std::memcpy(name, text, sizeof(text));
+    std::memcpy(name, text.c_str(), text.size() + 1);
     return err::OK;
 }
 HLE_OVERRIDE(sceUserServiceGetUserName);
@@ -466,6 +470,18 @@ HLE_OVERRIDE(sceAppContentTemporaryDataMount2);
 } // namespace
 
 namespace hle {
+
+// Fase 65: apelido do jogador `index` (0 = jogador 1), em UTF-8; o PS4 aceita ate 16 bytes.
+void SetPlayerName(int index, const std::string& name) {
+    if (index < 0 || index >= kMaxUsers) {
+        return;
+    }
+    std::string text = name.substr(0, 16);
+    while (text.size() < name.size() && !text.empty() && (static_cast<unsigned char>(name[text.size()]) & 0xC0) == 0x80) {
+        text.pop_back(); // nao corta um caractere acentuado no meio
+    }
+    g_player_names[index] = text;
+}
 
 // Fase 46: pasta com uma subpasta por DLC (vazia = sem DLC).
 void SetAddcontDirectory(const std::filesystem::path& directory) {

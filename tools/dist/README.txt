@@ -75,10 +75,25 @@ TIPS
   - If you notice stutters, send the session log (build\logs\): the [ENGASGO], [QUADRO-LENTO] and
     [TRAVADA-PILHAS] lines show where the time went.
   - Saves are kept in assets\savedata0.
+  - "FPS and info counter" shows, in the top-left corner, FPS, frame time (with a graph), graphics card
+    temperature / load / clock / power, video memory, CPU load and RAM. F10 turns it on and off in game.
+    Graphics card readings come from the driver (AMD and NVIDIA); CPU temperature and power need a
+    separate driver (like Afterburner's), so they are not shown.
+  - "Player nicknames..." changes the name the game shows instead of Player1, Player2... (up to 16
+    letters; stored in jogadores.txt in the port folder).
   - LD PC Transfer (button in the launcher, or LD_PC_Transfer.exe): converts the progress between this
     port, PS4 / shadPS4, Xbox 360 (Xenia), Wii U (Cemu, updated game) and PS3 (RPCS3, experimental).
     Pick the source save folder (or a folder above it) and the destination; the original is not changed
     and whatever the destination had goes to the saves_backup folder. Only the progress comes over; the
     options go back to default. On a real console the save still has to be re-signed (Apollo / Save
     Wizard / Horizon). Xbox One is not possible: its saves live in the cloud, encrypted.
+  - Mods ("Mods" button in the launcher): takes the PS4 / shadPS4 LEGO Dimensions mods. "Install a mod
+    from a .zip" puts the mod in the port's mods\ folder (or extract it there yourself, one folder per
+    mod); clicking its name turns it on / off. Mods already in the shadPS4 mods folder (CUSA01176-mods,
+    next to the game) or in CUSA01176\Mods work too. Accepted kinds: a .HDR + .DAT pack (e.g. made with
+    BrickVault) and loose files laid out like the game folder (data\, sce_sys\). The game and its
+    original packs are not changed: the port just shows the game the mod's files instead of the original
+    ones. The launcher prepares the mods when you click PLAY (the first time with a new mod takes a few
+    seconds). A mod can only replace files the game already has; new files are left out (the launcher
+    says so in its log).
   - Use folder names without accents (the port receives paths in ANSI).

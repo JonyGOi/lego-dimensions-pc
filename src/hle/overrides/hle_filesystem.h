@@ -37,6 +37,10 @@ struct Resolved {
     std::filesystem::path host;
     bool mounted = false;   // false: caminho fora de qualquer mount conhecido
     bool read_only = false; // /app0
+    // Fase 64: .DAT com a cauda dos mods (vazio = arquivo normal)
+    std::filesystem::path tail;
+    u64 tail_base = 0;
+    std::string pack;
 };
 
 struct OpenMode {
@@ -74,10 +78,17 @@ public:
     s64 Size();
     s64 ModifiedTime();
     const std::string& guest_path() const { return guest_path_; }
+    // Fase 64: a partir de `base`, as leituras vem de `tail` (bytes dos mods depois do fim do .DAT do jogo)
+    void SetTail(void* tail, u64 base, std::string pack);
 
 private:
+    s64 PreadHost(void* handle, void* buffer, u64 size, s64 offset);
+
     void* handle_;
     std::string guest_path_;
+    void* tail_ = nullptr;
+    u64 tail_base_ = 0;
+    std::string tail_radar_; // "/PATCH_MODS.DAT": o radar acha o nome no indice que o mods.py escreveu
     bool writable_;
     s64 position_ = 0;
     std::mutex mutex_;
@@ -92,6 +103,23 @@ void SetApp0Patch(const std::filesystem::path& patch_dir);
 const std::filesystem::path& App0Patch();
 // Raiz dos mounts gravaveis (assets/).
 const std::filesystem::path& WritableRoot();
+
+// Fase 64: mods.
+// Pastas no formato do /app0 (arquivos soltos, como a CUSA01176-mods do shadPS4): a primeira vence, e todas
+// vencem a atualizacao e o jogo base; as listagens de pasta juntam tudo.
+void SetModOverlays(std::vector<std::filesystem::path> dirs);
+// Pacote do jogo com arquivos trocados por mods (preparado pelo tools/setup/mods.py): o jogo ve a tabela mudada
+// (.HDR do cache) e o .DAT de verdade com a "cauda" dos bytes dos mods depois do fim dele.
+// Vale para qualquer mount (o /app0 e as pastas de DLC): a troca e pelo arquivo do host.
+struct PackRedirect {
+    std::string pack;                // "PATCH", "DLC10"
+    std::filesystem::path real_hdr;  // a tabela do jogo (.HDR / .HDR2), trocada pela do cache
+    std::filesystem::path cache_hdr; // tabela mudada
+    std::filesystem::path real_dat;  // o .DAT / .DAT2 do jogo (so lido)
+    u64 real_size = 0;               // tamanho dele quando o cache foi feito: a cauda comeca ai
+    std::filesystem::path tail;      // bytes dos mods
+};
+void SetPackRedirects(std::vector<PackRedirect> redirects);
 
 // Mounts criados em tempo de execucao (saves). SetMount substitui um prefixo ja existente.
 void SetMount(const std::string& prefix, const std::filesystem::path& host, bool read_only);

@@ -19,6 +19,7 @@
 #include "hle/hle_log.h"
 #include "hle/overrides/hle_equeue.h"
 #include "hle/overrides/hle_filesystem.h"
+#include "hle/overrides/hle_mods.h"
 #include "hle/overrides/hle_toypad.h"
 #include "hle/overrides/hle_videoout.h"
 #include "render/vulkan_backend.h"
@@ -51,6 +52,7 @@ void SetAudioDump(const char* path);
 void SetSaveUi(bool enabled);
 void SetSavesDirName(const char* name);
 void SetAddcontDirectory(const std::filesystem::path& directory); // Fase 46: DLC
+void SetPlayerName(int index, const std::string& name);           // Fase 65: apelidos dos jogadores
 int TestSaveUi();
 void SetPadStickLog(bool enabled);
 namespace padsdl {
@@ -1157,6 +1159,7 @@ int main(int argc, char** argv) {
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
     std::filesystem::path app0 = kDefaultApp0;
     std::filesystem::path app0_patch; // Fase 58
+    std::filesystem::path mods_cache = root / "assets" / "mods_cache"; // Fase 64: mods preparados pelo mods.py ("-" = --no-mods)
     bool live_compiler = true;
     bool shader_warmup = true;
     bool sync_shaders = true;   // Fase 38
@@ -1194,6 +1197,10 @@ int main(int argc, char** argv) {
             app0 = WideArg(i + 1, argv[i + 1]), ++i; // Fase 60: caminho lido da linha de comando Unicode
         } else if (!std::strcmp(argv[i], "--patch") && i + 1 < argc) {
             app0_patch = WideArg(i + 1, argv[i + 1]), ++i; // Fase 58: atualizacao em pasta separada (sem a opcao = procurar; "-" = nenhuma)
+        } else if (!std::strcmp(argv[i], "--mods-cache") && i + 1 < argc) {
+            mods_cache = WideArg(i + 1, argv[i + 1]), ++i; // Fase 64: saida do tools/setup/mods.py (padrao: assets\mods_cache)
+        } else if (!std::strcmp(argv[i], "--no-mods")) {
+            mods_cache = "-"; // Fase 64: nenhum mod
         } else if (!std::strcmp(argv[i], "--root") && i + 1 < argc) {
             ++i; // Fase 49: lido antes, em FindRoot
         } else if (!std::strcmp(argv[i], "--verbose-hle")) {
@@ -1238,6 +1245,13 @@ int main(int argc, char** argv) {
             hle::gnm::SetSrgbDisplay(false); // (padrao)
         } else if (!std::strcmp(argv[i], "--srgb-display")) {
             hle::gnm::SetSrgbDisplay(true); // experimento: buffer de video como alvo sRGB (gama a mais)
+        } else if (!std::strcmp(argv[i], "--player-name") && i + 2 < argc) {
+            // Fase 65: --player-name N APELIDO (N = 1..4): o nome que o jogo mostra no lugar de PlayerN
+            const int player = std::atoi(argv[i + 1]);
+            hle::SetPlayerName(player - 1, hle::fs::PathText(WideArg(i + 2, argv[i + 2])));
+            i += 2;
+        } else if (!std::strcmp(argv[i], "--stats-overlay")) {
+            hle::videoout::SetStatsOverlay(true); // Fase 65: contador de FPS / info (F10 alterna no jogo)
         } else if (!std::strcmp(argv[i], "--lang") && i + 1 < argc) {
             // Fase 60/61: idioma dos textos do port e do jogo (pt / en / es / fr / de / it / nl / da); sem a opcao, o do Windows
             lang::SetFromCode(argv[++i]);
@@ -1408,6 +1422,12 @@ int main(int argc, char** argv) {
         app0_patch.clear();
     }
     hle::fs::SetApp0Patch(app0_patch);
+    // Fase 64: mods de PS4 / shadPS4 (pacotes da TT Games e arquivos soltos), depois da atualizacao
+    if (!selftest && mods_cache != "-") {
+        if (const int mods = hle::mods::Setup(mods_cache / "mods.txt")) {
+            std::printf("mods       : %d pacote(s) / pasta(s) com mods  [%s]  (--no-mods desliga)\n", mods, hle::fs::PathText(mods_cache).c_str());
+        }
+    }
     // Fase 46: DLC. Padrao: assets\addcont se existir; senao a pasta de addcont do shadPS4 para este
     // jogo (%APPDATA%\shadPS4\addcont\CUSA01176), lida no lugar (sem copiar os pacotes).
     if (!addcont_set) {
@@ -1437,6 +1457,7 @@ int main(int argc, char** argv) {
         hle::gnm::SetCutsceneWatchdog(cutscene_watchdog_s);
         hle::gnm::StartPerfThread();
         hle::radar::Configure(root / "tools" / "data" / "dat_index", radar_log);
+        hle::radar::SetLocalIndexDir(root / "assets" / "dat_index"); // Fase 64: pacotes do jogador e dos mods
         std::printf("radar      : %s  (todo arquivo lido de dentro dos .DAT)\n",
                     hle::fs::PathText(radar_log).c_str());
     }

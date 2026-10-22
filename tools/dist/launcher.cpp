@@ -34,14 +34,16 @@ using ui::S;
 
 namespace {
 
-constexpr int kW = 980, kH = 840, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma
+constexpr int kW = 980, kH = 890, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma; Fase 65: +50 para a linha do contador / apelidos
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
 HWND g_icons; // Fase 62
+HWND g_mods;  // Fase 64
+HWND g_overlay, g_names_button; // Fase 65: contador de FPS / info, apelidos dos jogadores
 
 // Fase 61: o que o Python em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar)
 enum class Task { kPrepare, kCheck, kUpdate } g_task = Task::kPrepare;
@@ -353,6 +355,7 @@ void SaveSettings() {
     WriteIni(L"icones", g_icons_value);
     WriteIni(L"idioma", g_lang_value);
     WriteIni(L"pularcenas", ui::Checked(g_skip) ? L"1" : L"0");
+    WriteIni(L"contador", ui::Checked(g_overlay) ? L"1" : L"0"); // Fase 65
 }
 
 const Language& CurrentLanguage() {
@@ -644,6 +647,347 @@ void OnLine(const std::wstring& line) {
     }
 }
 
+// ---- mods (Fase 64) ----
+fs::path ModsDir() { return g_root / L"mods"; }
+
+// Roda um script de tools\setup e espera; a saida fica em build\logs\<log> e as linhas de aviso vao para o log da janela.
+int RunSetupScript(const wchar_t* script, const std::wstring& args, const wchar_t* log_name, DWORD timeout_ms) {
+    std::error_code ec;
+    fs::create_directories(g_root / L"build" / L"logs", ec);
+    const fs::path log_path = g_root / L"build" / L"logs" / log_name;
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE log = CreateFileW(log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    fs::path python = g_root / L"tools" / L"python" / L"python.exe";
+    std::wstring command = (fs::is_regular_file(python, ec) ? Quote(python.wstring()) : L"python") + L" -I " +
+                           Quote((g_root / L"tools" / L"setup" / script).wstring()) + args + (ui::Pt() ? L" --lingua pt" : L" --lingua en");
+    STARTUPINFOW si{sizeof(si)};
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = si.hStdError = log;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi{};
+    DWORD code = 1;
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, g_root.c_str(), &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, timeout_ms);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    if (log != INVALID_HANDLE_VALUE) {
+        CloseHandle(log);
+    }
+    std::ifstream in(log_path);
+    std::string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.rfind("AVISO ", 0) == 0 || line.rfind("ERRO ", 0) == 0 || line.rfind("MOD ", 0) == 0 || line.rfind("INSTALADO ", 0) == 0) {
+            const int n = MultiByteToWideChar(CP_UTF8, 0, line.c_str(), static_cast<int>(line.size()), nullptr, 0);
+            std::wstring text(n, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, line.c_str(), static_cast<int>(line.size()), text.data(), n);
+            AppendLog(text);
+        }
+    }
+    return static_cast<int>(code);
+}
+
+// Antes de abrir o jogo: tools\setup\mods.py prepara (ou confere que ja estao prontos) os mods da pasta mods\,
+// da <jogo>-mods do shadPS4 e da <jogo>\Mods. Sem mod nenhum, o manifesto fica vazio e o jogo abre normal.
+void PrepareMods() {
+    std::wstring args = L" --root " + Quote(g_root.wstring()) + L" --app0 " + Quote(GetText(g_game));
+    if (const std::wstring patch = GetText(g_patch); !patch.empty()) {
+        args += L" --patch " + Quote(patch);
+    }
+    if (const std::wstring dlc = GetText(g_dlc); !dlc.empty()) {
+        args += L" --addcont " + Quote(dlc);
+    }
+    g_step = ui::T(L"Preparando os mods...", L"Preparing the mods...");
+    InvalidateCard();
+    UpdateWindow(g_main);
+    RunSetupScript(L"mods.py", args, L"mods.log", 300000);
+    g_step.clear();
+    UpdateStatus();
+}
+
+std::vector<std::wstring> ListMods() {
+    std::vector<std::wstring> mods;
+    std::error_code ec;
+    for (fs::directory_iterator it(ModsDir(), ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->is_directory(ec)) {
+            mods.push_back(it->path().filename().wstring());
+        }
+    }
+    std::sort(mods.begin(), mods.end(), [](const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) < 0; });
+    return mods;
+}
+
+// mods\desligados.txt: um nome de pasta por linha (o mods.py deixa essas de fora)
+std::vector<std::wstring> ReadDisabledMods() {
+    std::vector<std::wstring> off;
+    std::wifstream in(ModsDir() / L"desligados.txt");
+    std::wstring line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == L'\r' || line.back() == L' ')) {
+            line.pop_back();
+        }
+        if (!line.empty()) {
+            off.push_back(line);
+        }
+    }
+    return off;
+}
+
+void WriteDisabledMods(const std::vector<std::wstring>& off) {
+    std::error_code ec;
+    fs::create_directories(ModsDir(), ec);
+    std::ofstream out(ModsDir() / L"desligados.txt", std::ios::trunc);
+    for (const std::wstring& name : off) {
+        const int n = WideCharToMultiByte(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), nullptr, 0, nullptr, nullptr);
+        std::string text(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), text.data(), n, nullptr, nullptr);
+        out << text << "\n";
+    }
+}
+
+std::wstring BrowseZip() {
+    std::wstring result;
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+        const COMDLG_FILTERSPEC filter[] = {{L"Mod (.zip)", L"*.zip"}};
+        dialog->SetFileTypes(1, filter);
+        dialog->SetTitle(ui::T(L"Mod para instalar (.zip)", L"Mod to install (.zip)"));
+        if (SUCCEEDED(dialog->Show(g_main))) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&item))) {
+                PWSTR path = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                    result = path;
+                    CoTaskMemFree(path);
+                }
+                item->Release();
+            }
+        }
+        dialog->Release();
+    }
+    return result;
+}
+
+// Menu do botao Mods: cada pasta de mods\ com marca (clicar liga / desliga), abrir a pasta, instalar um .zip.
+void ModsMenu(HWND button) {
+    const std::vector<std::wstring> mods = ListMods();
+    std::vector<std::wstring> off = ReadDisabledMods();
+    const auto is_off = [&](const std::wstring& name) {
+        return std::any_of(off.begin(), off.end(), [&](const std::wstring& o) { return _wcsicmp(o.c_str(), name.c_str()) == 0; });
+    };
+    HMENU menu = CreatePopupMenu();
+    if (mods.empty()) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"Nenhum mod instalado", L"No mods installed"));
+    }
+    for (size_t i = 0; i < mods.size(); ++i) {
+        AppendMenuW(menu, MF_STRING | (is_off(mods[i]) ? 0 : MF_CHECKED), 100 + i, mods[i].c_str());
+    }
+    std::error_code ec;
+    const fs::path game = GetText(g_game);
+    fs::path shad = game;
+    shad += L"-mods";
+    if (!game.empty() && (fs::is_directory(game / L"Mods", ec) || fs::is_directory(shad, ec))) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"(também os da pasta do jogo: Mods / -mods)", L"(also the ones in the game folder: Mods / -mods)"));
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod de um .zip...", L"Install a mod from a .zip..."));
+    AppendMenuW(menu, MF_STRING, 2, ui::T(L"Abrir a pasta de mods", L"Open the mods folder"));
+    RECT r;
+    GetWindowRect(button, &r);
+    const int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY, r.left, r.bottom + S(2), 0, g_main, nullptr);
+    DestroyMenu(menu);
+    if (picked >= 100 && picked < 100 + static_cast<int>(mods.size())) {
+        const std::wstring& name = mods[picked - 100];
+        if (is_off(name)) {
+            std::erase_if(off, [&](const std::wstring& o) { return _wcsicmp(o.c_str(), name.c_str()) == 0; });
+            AppendLog(ui::T(L"Mod ligado: ", L"Mod on: ") + name);
+        } else {
+            off.push_back(name);
+            AppendLog(ui::T(L"Mod desligado: ", L"Mod off: ") + name);
+        }
+        WriteDisabledMods(off);
+    } else if (picked == 1) {
+        if (const std::wstring zip = BrowseZip(); !zip.empty()) {
+            RunSetupScript(L"mods.py", L" --instalar " + Quote(zip) + L" --mods " + Quote(ModsDir().wstring()), L"mods_instalar.log", 300000);
+        }
+    } else if (picked == 2) {
+        fs::create_directories(ModsDir(), ec);
+        ShellExecuteW(g_main, L"open", ModsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+}
+
+// ---- apelidos dos jogadores (Fase 65) ----
+// jogadores.txt na pasta do port: um apelido por linha (jogador 1 a 4), em UTF-8; linha vazia = PlayerN.
+constexpr int kPlayers = 4;
+constexpr UINT kNamesLimit = 16; // o PS4 aceita nomes de ate 16 caracteres
+
+std::wstring Utf8ToWide(const std::string& text) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring out(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), n);
+    return out;
+}
+
+std::string WideToUtf8(const std::wstring& text) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+std::vector<std::wstring> ReadPlayerNames() {
+    std::vector<std::wstring> names(kPlayers);
+    std::ifstream in(g_root / L"jogadores.txt", std::ios::binary);
+    std::string line;
+    for (int i = 0; i < kPlayers && std::getline(in, line); ++i) {
+        if (i == 0 && line.rfind("\xEF\xBB\xBF", 0) == 0) {
+            line.erase(0, 3); // BOM do Bloco de Notas
+        }
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+            line.pop_back();
+        }
+        std::erase(line, '"');
+        names[i] = Utf8ToWide(line).substr(0, kNamesLimit);
+    }
+    return names;
+}
+
+void WritePlayerNames(const std::vector<std::wstring>& names) {
+    std::ofstream out(g_root / L"jogadores.txt", std::ios::binary | std::ios::trunc);
+    for (const std::wstring& name : names) {
+        out << WideToUtf8(name) << "\r\n";
+    }
+}
+
+HWND g_names_window = nullptr;
+HWND g_name_edits[kPlayers] = {};
+HWND g_names_focus = nullptr;
+constexpr int kNamesW = 440, kNamesH = 430;
+enum NamesId { kNamesSave = 1, kNamesCancel = 2, kNamesEdit = 300 };
+
+LRESULT CALLBACK NamesProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC target = BeginPaint(hwnd, &ps);
+        RECT client;
+        GetClientRect(hwnd, &client);
+        {
+            ui::Buffered buffer(target, client);
+            HBRUSH bg = CreateSolidBrush(ui::kBg);
+            FillRect(buffer.dc, &client, bg);
+            DeleteObject(bg);
+            Gdiplus::Graphics g(buffer.dc);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            for (HWND edit : g_name_edits) {
+                ui::FieldBox(g, hwnd, edit, g_names_focus == edit);
+            }
+            g.Flush();
+            RECT title{S(28), S(18), S(kNamesW - 28), S(46)};
+            ui::Text(buffer.dc, ui::T(L"Apelidos dos jogadores", L"Player nicknames"), title, g_button, ui::kText);
+            RECT hint{S(28), S(48), S(kNamesW - 28), S(92)};
+            ui::Text(buffer.dc, ui::T(L"O nome que o jogo mostra no lugar de Player1, Player2... (até 16 letras; vazio = padrão)",
+                                      L"The name the game shows instead of Player1, Player2... (up to 16 letters; empty = default)"),
+                     hint, g_small, ui::kMuted, DT_LEFT | DT_TOP | DT_WORDBREAK);
+            for (int i = 0; i < kPlayers; ++i) {
+                RECT label{S(28), S(104.0f + i * 64), S(kNamesW - 28), S(122.0f + i * 64)};
+                ui::Text(buffer.dc, std::wstring(ui::T(L"JOGADOR ", L"PLAYER ")) + std::to_wstring(i + 1), label, g_label, ui::kMuted);
+            }
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_DRAWITEM:
+        ui::DrawButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lp));
+        return TRUE;
+    case WM_CTLCOLOREDIT: {
+        HDC dc = reinterpret_cast<HDC>(wp);
+        SetBkColor(dc, ui::kField);
+        SetTextColor(dc, ui::kText);
+        return reinterpret_cast<LRESULT>(g_field_brush);
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) >= kNamesEdit && LOWORD(wp) < kNamesEdit + kPlayers && (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS)) {
+            g_names_focus = HIWORD(wp) == EN_SETFOCUS ? reinterpret_cast<HWND>(lp) : nullptr;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        } else if (LOWORD(wp) == kNamesSave) {
+            std::vector<std::wstring> names;
+            for (HWND edit : g_name_edits) {
+                std::wstring name = GetText(edit);
+                std::erase(name, L'"');
+                names.push_back(name);
+            }
+            WritePlayerNames(names);
+            std::wstring summary;
+            for (int i = 0; i < kPlayers; ++i) {
+                summary += (i ? L", " : L"") + (names[i].empty() ? L"Player" + std::to_wstring(i + 1) : names[i]);
+            }
+            AppendLog(ui::T(L"Apelidos: ", L"Nicknames: ") + summary);
+            DestroyWindow(hwnd);
+        } else if (LOWORD(wp) == kNamesCancel) {
+            DestroyWindow(hwnd);
+        }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        EnableWindow(g_main, TRUE);
+        SetForegroundWindow(g_main);
+        g_names_window = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Janelinha com os 4 apelidos; o launcher fica travado enquanto ela esta aberta.
+void OpenNamesDialog() {
+    if (g_names_window) {
+        SetForegroundWindow(g_names_window);
+        return;
+    }
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc{sizeof(wc)};
+        wc.lpfnWndProc = NamesProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = g_bg_brush;
+        wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));
+        wc.lpszClassName = L"LegoDimensionsPcNames";
+        RegisterClassExW(&wc);
+        registered = true;
+    }
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+    RECT size{0, 0, S(kNamesW), S(kNamesH)};
+    AdjustWindowRect(&size, style, FALSE);
+    RECT owner;
+    GetWindowRect(g_main, &owner);
+    const int w = size.right - size.left, h = size.bottom - size.top;
+    g_names_window = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LegoDimensionsPcNames", ui::T(L"Apelidos", L"Nicknames"), style,
+                                     owner.left + ((owner.right - owner.left) - w) / 2, owner.top + ((owner.bottom - owner.top) - h) / 2, w, h, g_main,
+                                     nullptr, GetModuleHandleW(nullptr), nullptr);
+    ui::DarkTitle(g_names_window);
+    const std::vector<std::wstring> names = ReadPlayerNames();
+    for (int i = 0; i < kPlayers; ++i) {
+        g_name_edits[i] = ui::Edit(g_names_window, S(38), S(132.0f + i * 64), S(kNamesW - 76), S(24), kNamesEdit + i, g_font);
+        SendMessageW(g_name_edits[i], EM_LIMITTEXT, kNamesLimit, 0);
+        SetWindowTextW(g_name_edits[i], names[i].c_str());
+        SendMessageW(g_name_edits[i], EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>((L"Player" + std::to_wstring(i + 1)).c_str()));
+    }
+    ui::Button(g_names_window, ui::T(L"Cancelar", L"Cancel"), ui::Style::kSecondary, S(kNamesW - 316), S(kNamesH - 62), S(130), S(44), kNamesCancel, g_button);
+    ui::Button(g_names_window, ui::T(L"Salvar", L"Save"), ui::Style::kPrimary, S(kNamesW - 176), S(kNamesH - 62), S(148), S(44), kNamesSave, g_button);
+    EnableWindow(g_main, FALSE);
+    ShowWindow(g_names_window, SW_SHOW);
+    SetFocus(g_name_edits[0]);
+}
+
 // ---- jogar ----
 void RunGame() {
     SaveSettings();
@@ -681,6 +1025,7 @@ void RunGame() {
         g_step.clear();
         UpdateStatus();
     }
+    PrepareMods(); // Fase 64
     std::wstring command = Quote((g_root / L"build" / L"lego_dimensions.exe").wstring()) + L" --app0 " + Quote(GetText(g_game));
     const std::wstring dlc = GetText(g_dlc);
     command += dlc.empty() ? L" --no-dlc" : L" --addcont " + Quote(dlc);
@@ -701,7 +1046,20 @@ void RunGame() {
     if (ui::Checked(g_skip)) {
         command += L" --skip-cutscenes"; // Fase 61: qualquer cutscene pode ser pulada, mesmo sem 100%
     }
+    if (ui::Checked(g_overlay)) {
+        command += L" --stats-overlay"; // Fase 65: contador de FPS / info
+    }
+    const std::vector<std::wstring> names = ReadPlayerNames(); // Fase 65: apelidos (vazio = PlayerN)
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (!names[i].empty()) {
+            command += L" --player-name " + std::to_wstring(i + 1) + L" " + Quote(names[i]);
+        }
+    }
     command += L" --hitch-log";
+    if (GetEnvironmentVariableW(L"LD_LAUNCHER_SEM_JOGO", nullptr, 0)) { // teste do launcher: faz tudo menos abrir o jogo
+        AppendLog(L"[teste] " + command);
+        return;
+    }
     const bool console = ui::Checked(g_console);
     STARTUPINFOW si{sizeof(si)};
     HANDLE log = INVALID_HANDLE_VALUE;
@@ -755,6 +1113,11 @@ void CreateControls() {
                           S(202), S(32), kUpdate, g_font, ui::kPanel);
     g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(704), S(kHero + 234), S(250), S(40),
                         kSkipCutscenes, g_small, ui::kPanel);
+    // Fase 65: contador de FPS / info no jogo e apelidos dos jogadores
+    g_overlay = ui::Button(g_main, ui::T(L"Contador de FPS e info  (F10 no jogo)", L"FPS and info counter  (F10 in game)"), ui::Style::kToggle, S(48),
+                           S(kHero + 284), S(380), S(40), kOverlay, g_small, ui::kPanel);
+    g_names_button = ui::Button(g_main, ui::T(L"Apelidos dos jogadores...", L"Player nicknames..."), ui::Style::kSecondary, S(506), S(kHero + 284),
+                                S(250), S(40), kNames, g_small, ui::kPanel);
     g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
     g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
     g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
@@ -763,6 +1126,9 @@ void CreateControls() {
     // Fase 63: LD PC Transfer (conversor de saves) no canto da arte; a regiao arredondada deixa a arte aparecer nas pontas
     HWND transfer = ui::Button(g_main, L"LD PC Transfer", ui::Style::kSecondary, S(kW - 236), S(30), S(196), S(40), kTransfer, g_button);
     SetWindowRgn(transfer, CreateRoundRectRgn(0, 0, S(196) + 1, S(40) + 1, S(18), S(18)), TRUE);
+    // Fase 64: mods (menu com os instalados, instalar de um .zip, abrir a pasta)
+    g_mods = ui::Button(g_main, L"Mods  ▾", ui::Style::kSecondary, S(kW - 362), S(30), S(116), S(40), kMods, g_button);
+    SetWindowRgn(g_mods, CreateRoundRectRgn(0, 0, S(116) + 1, S(40) + 1, S(18), S(18)), TRUE);
 }
 
 // Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
@@ -805,6 +1171,7 @@ void LoadSettings() {
     ui::SetChecked(g_console, ReadIni(L"console", L"0") == L"1");
     ui::SetChecked(g_fullscreen, ReadIni(L"telacheia", L"0") == L"1");
     ui::SetChecked(g_skip, ReadIni(L"pularcenas", L"0") == L"1");
+    ui::SetChecked(g_overlay, ReadIni(L"contador", L"0") == L"1"); // Fase 65
     g_icons_value = ReadIni(L"icones", L"auto"); // Fase 62
     g_icons_value = CurrentIcons().code;
     g_res_value = ReadIni(L"resolucao", L"1280x720");
@@ -914,10 +1281,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kTransfer:
             OpenTransfer();
             break;
+        case kMods:
+            ModsMenu(reinterpret_cast<HWND>(lp));
+            break;
+        case kNames:
+            OpenNamesDialog();
+            break;
         case kFps:
         case kConsole:
         case kFullscreen:
         case kSkipCutscenes:
+        case kOverlay:
             ui::Toggle(reinterpret_cast<HWND>(lp));
             SaveSettings();
             break;

@@ -45,6 +45,9 @@ The languages other than Portuguese and English need the game's original text fi
 - Local co-op: up to 4 controllers, player 2 joins in split screen by pressing Options.
 - Button icons follow your controller (Xbox 360, Xbox One/Series, PS3, PS4/PS5, Wii U for Nintendo controllers), built from the game's own files; the launcher can also lock one set.
 - **LD PC Transfer** (button in the launcher): converts the progress between the port, PS4 / shadPS4, Xbox 360 (Xenia), Wii U (Cemu) and PS3 (RPCS3, experimental). The original save is not changed and whatever the destination had goes to the `saves_backup` folder. Xbox One is not possible: its saves live in the cloud, encrypted.
+- **FPS and info counter** (launcher option, F10 in game): FPS, frame-time graph, graphics card temperature / load / clock / power / video memory (AMD via ADL, NVIDIA via NVML), CPU load and RAM in the top-left corner.
+- **Player nicknames** (launcher): the names the game shows instead of Player1, Player2...
+- **Mods** (button in the launcher): PS4 / shadPS4 LEGO Dimensions mods work - `.HDR` + `.DAT` packs (e.g. made with BrickVault) and loose files laid out like the game folder. Install from a `.zip`, turn each one on / off; mods already in the shadPS4 `CUSA01176-mods` folder or in `CUSA01176\Mods` are picked up too. The game files are never changed.
 - The LegoToypad app (1.6 or newer) mirrors the portal lights the way the game drives them: colour, flashes and fades.
 - Fullscreen ("Fullscreen" option in the launcher, or F11 in game) and a window size selector ("Resolution"; the game still renders at 1920x1080 and is scaled to the window).
 - "Skip all cutscenes" option: any cutscene can be skipped, even the ones the game only lets you skip after watching them or at 100%.

@@ -35,6 +35,7 @@
 #include "hle/overrides/hle_filesystem.h"
 #include "hle/overrides/hle_override.h"
 #include "runtime/crash_handler.h"
+#include "runtime/hwmon.h"
 
 namespace hle::gnm {
 void WarmupStatus(char* text, size_t size); // hle_gnm.cpp
@@ -106,6 +107,7 @@ std::atomic<bool> g_start_fullscreen{false};
 // imagem e escalada para a janela, como no tamanho padrao.
 std::atomic<u32> g_window_width{1280}, g_window_height{720};
 bool g_fullscreen = false;
+std::atomic<bool> g_stats_overlay{false}; // Fase 65: contador de FPS / info (--stats-overlay, F10)
 WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};
 
 void SetFullscreen(HWND hwnd, bool enabled) {
@@ -166,6 +168,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_KEYDOWN:
         if (wparam == VK_F11 && !(lparam & (1 << 30))) { // Fase 60: F11 alterna a tela cheia (sem repeticao)
             SetFullscreen(hwnd, !g_fullscreen);
+            return 0;
+        }
+        if (wparam == VK_F10 && !(lparam & (1 << 30))) { // Fase 65: F10 liga / desliga o contador de FPS / info
+            SetStatsOverlay(!g_stats_overlay);
             return 0;
         }
         return DefWindowProcA(hwnd, msg, wparam, lparam);
@@ -448,7 +454,8 @@ const u8* Glyph(char c) {
         {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}};
     static const u8 kSlash[7] = {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10}, kPercent[7] = {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03},
                     kColon[7] = {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00}, kDot[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C},
-                    kDash[7] = {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}, kSpace[7] = {};
+                    kDash[7] = {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}, kSpace[7] = {},
+                    kDegree[7] = {0x0C, 0x12, 0x12, 0x0C, 0x00, 0x00, 0x00}; // Fase 65: '^' = grau
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     if (c >= 'A' && c <= 'Z') return kLetters[c - 'A'];
     if (c >= '0' && c <= '9') return kDigits[c - '0'];
@@ -458,6 +465,7 @@ const u8* Glyph(char c) {
     case ':': return kColon;
     case '.': return kDot;
     case '-': return kDash;
+    case '^': return kDegree;
     default: return kSpace;
     }
 }
@@ -517,7 +525,168 @@ void DrawLoading(const std::vector<LoadingVertex>& vertices) {
     }
     renderer.DrawFrame(0);
 }
+
+// ---------------- Fase 65: contador de FPS / info (canto de cima, a esquerda) ----------------
+
+struct OverlayCanvas {
+    std::vector<LoadingVertex>& out;
+    float w, h; // tamanho da janela em pixels
+
+    void Rect(float x0, float y0, float x1, float y1, u32 rgba) {
+        auto v = [&](float x, float y) { out.push_back({x / (w * 0.5f) - 1.0f, 1.0f - y / (h * 0.5f), 0.0f, rgba}); };
+        v(x0, y0), v(x1, y0), v(x1, y1);
+        v(x0, y0), v(x1, y1), v(x0, y1);
+    }
+    // pixels acesos seguidos na mesma linha viram um retangulo so
+    void Glyphs(const std::string& text, float x, float y, float pixel, u32 rgba) {
+        for (const char c : text) {
+            const u8* rows = Glyph(c);
+            for (int r = 0; r < 7; ++r) {
+                for (int col = 0; col < 5;) {
+                    if (!(rows[r] & (0x10 >> col))) {
+                        ++col;
+                        continue;
+                    }
+                    int end = col;
+                    while (end < 5 && (rows[r] & (0x10 >> end))) {
+                        ++end;
+                    }
+                    Rect(x + col * pixel, y + r * pixel, x + end * pixel, y + (r + 1) * pixel, rgba);
+                    col = end;
+                }
+            }
+            x += 6.0f * pixel;
+        }
+    }
+    // texto com sombra escura (le em cima de qualquer cena); devolve onde termina
+    float Write(const std::string& text, float x, float y, float pixel, u32 rgba) {
+        const float shadow = std::max(1.0f, pixel * 0.5f);
+        Glyphs(text, x + shadow, y + shadow, pixel, 0xFF000000);
+        Glyphs(text, x, y, pixel, rgba);
+        return x + TextWidth(text, pixel);
+    }
+    // valor alinhado a direita em `right` + unidade menor logo depois
+    void Value(const std::string& value, const char* unit, float right, float y, float pixel) {
+        constexpr u32 kOrange = 0xFF008CFF, kWhite = 0xFFFFFFFF;
+        Write(value, right - TextWidth(value, pixel), y, pixel, kOrange);
+        if (unit && *unit) {
+            Write(unit, right + pixel * 1.5f, y, pixel * 0.75f, kWhite);
+        }
+    }
+};
 } // namespace
+
+void SetStatsOverlay(bool enabled) {
+    g_stats_overlay = enabled;
+    if (enabled) {
+        runtime::hwmon::Start();
+    }
+}
+
+void QueueStatsOverlay() {
+    constexpr int kFrames = 150;
+    static float frame_ms[kFrames] = {};
+    static int head = 0;
+    static auto last = std::chrono::steady_clock::now();
+    static auto window_start = last;
+    static int window_frames = 0;
+    static float fps = 0.0f;
+    const auto now = std::chrono::steady_clock::now();
+    const float ms = std::chrono::duration<float, std::milli>(now - last).count();
+    last = now;
+    frame_ms[head] = ms;
+    head = (head + 1) % kFrames;
+    ++window_frames;
+    if (const double elapsed = std::chrono::duration<double>(now - window_start).count(); elapsed >= 0.5) {
+        fps = static_cast<float>(window_frames / elapsed);
+        window_frames = 0;
+        window_start = now;
+    }
+    HWND hwnd = static_cast<HWND>(WindowHandle());
+    RECT client{};
+    if (!g_stats_overlay || !hwnd || !GetClientRect(hwnd, &client) || client.right < 64 || client.bottom < 64) {
+        return;
+    }
+    const runtime::hwmon::Snapshot s = runtime::hwmon::Get();
+    static std::vector<LoadingVertex> vertices;
+    vertices.clear();
+    OverlayCanvas c{vertices, static_cast<float>(client.right), static_cast<float>(client.bottom)};
+    const float p = client.bottom >= 1400 ? 3.0f : 2.0f; // tamanho do pixel da fonte
+    constexpr u32 kGreen = 0xFF00C800, kBlue = 0xFFFF9638, kPink = 0xFFAA96FF, kGray = 0xFFD0D0D0;
+    const float x = 3 * p, c1 = 52 * p, c2 = 84 * p, c3 = 126 * p, c4 = 174 * p;
+    float y = 3 * p;
+    const float row = 10 * p;
+    char v[32];
+    auto num = [&](int value) {
+        std::snprintf(v, sizeof(v), "%d", value);
+        return std::string(v);
+    };
+    if (!s.gpu_name.empty()) {
+        c.Write("GPU", x, y, p, kGreen);
+        if (s.gpu_temp >= 0) c.Value(num(s.gpu_temp), "^C", c1, y, p);
+        if (s.gpu_load >= 0) c.Value(num(s.gpu_load), "%", c2, y, p);
+        if (s.gpu_clock >= 0) c.Value(num(s.gpu_clock), "MHZ", c3, y, p);
+        if (s.gpu_power >= 0) {
+            std::snprintf(v, sizeof(v), "%.1f", s.gpu_power);
+            c.Value(v, "W", c4, y, p);
+        }
+        y += row;
+        if (s.vrm_temp >= 0 || s.hotspot >= 0) {
+            c.Write(s.vrm_temp >= 0 ? "VRM" : "HOT", x, y, p, kGreen);
+            c.Value(num(s.vrm_temp >= 0 ? s.vrm_temp : s.hotspot), "^C", c1, y, p);
+            y += row;
+        }
+        if (s.vram_mb >= 0 || s.mem_clock >= 0) {
+            c.Write("MEM", x, y, p, kGreen);
+            if (s.vram_mb >= 0) c.Value(num(s.vram_mb), "MB", c1, y, p);
+            if (s.mem_clock >= 0) c.Value(num(s.mem_clock), "MHZ", c3, y, p);
+            y += row;
+        }
+    }
+    if (s.cpu_load >= 0) {
+        c.Write("CPU", x, y, p, kBlue);
+        c.Value(num(s.cpu_load), "%", c2, y, p);
+        y += row;
+    }
+    if (s.ram_mb >= 0) {
+        c.Write("RAM", x, y, p, kBlue);
+        c.Value(num(s.ram_mb), "MB", c1, y, p);
+        y += row;
+    }
+    c.Write("VULKAN", x, y, p, kPink);
+    c.Value(num(static_cast<int>(fps + 0.5f)), "FPS", c1 + 10 * p, y, p);
+    std::snprintf(v, sizeof(v), "%.1f", ms);
+    c.Value(v, "MS", c3 - 8 * p, y, p);
+    y += row;
+    // grafico do tempo de cada quadro (escala 0..50 ms), como o do Afterburner
+    c.Write("FRAMETIME", x, y, p * 0.75f, kPink);
+    c.Write(v, c4 - TextWidth(v, p * 0.75f), y, p * 0.75f, kPink);
+    const float gx0 = x, gx1 = c4 + 10 * p, gy0 = y + 7 * p, gy1 = y + 22 * p;
+    c.Rect(gx0, gy1, gx1, gy1 + std::max(1.0f, p * 0.5f), 0xFF505050); // linha de base
+    for (int i = 0; i < kFrames; ++i) {
+        const float t = std::clamp(frame_ms[(head + i) % kFrames], 0.0f, 50.0f) / 50.0f;
+        const float px = gx0 + (gx1 - gx0) * i / kFrames;
+        const float py = gy1 - (gy1 - gy0) * t;
+        c.Rect(px, py - p * 0.5f, px + (gx1 - gx0) / kFrames + 0.5f, py + p * 0.5f, kGray);
+    }
+    render::DrawCall draw;
+    draw.vertex_data = vertices.data();
+    draw.vertex_count = static_cast<u32>(vertices.size());
+    draw.stride = sizeof(LoadingVertex);
+    draw.position_offset = 0;
+    draw.position_format = render::DrawCall::kFloat3;
+    draw.has_color = true;
+    draw.color_offset = 12;
+    draw.primitive = render::DrawCall::kTriangleList;
+    draw.blend = false;
+    draw.uv_format = render::DrawCall::kUvNone;
+    static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    std::memcpy(draw.mvp, kIdentity, sizeof(kIdentity));
+    draw.viewport[0] = draw.viewport[1] = 0.0f;
+    draw.viewport[2] = draw.target_size[0] = c.w;
+    draw.viewport[3] = draw.target_size[1] = c.h;
+    render::VulkanRenderer::Instance().QueueDraw(draw);
+}
 
 bool OpenWindowEarly(u32 timeout_ms) {
     if (!g_window_enabled) {

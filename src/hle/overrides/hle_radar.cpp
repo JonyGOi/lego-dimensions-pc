@@ -31,6 +31,7 @@ struct Pack {
 const auto g_epoch = std::chrono::steady_clock::now();
 std::mutex g_mutex;
 std::filesystem::path g_index_dir;
+std::filesystem::path g_local_index_dir; // Fase 64
 std::FILE* g_log = nullptr;
 std::map<std::string, Pack> g_packs; // "GAME", "STREAM3"... (vazio = pacote sem indice)
 u64 g_files_seen = 0;
@@ -67,7 +68,9 @@ std::string PackName(const std::string& guest_path) {
 // nome <TAB> tamanho <TAB> empacotado <TAB> offset <TAB> metodo
 Pack LoadPack(const std::string& name) {
     Pack pack;
-    std::ifstream in(g_index_dir / (name + ".tsv"));
+    std::error_code ec;
+    const std::filesystem::path local = g_local_index_dir / (name + ".tsv");
+    std::ifstream in(!g_local_index_dir.empty() && std::filesystem::is_regular_file(local, ec) ? local : g_index_dir / (name + ".tsv"));
     std::string line;
     while (std::getline(in, line)) {
         const size_t t1 = line.find('\t');
@@ -115,6 +118,12 @@ void Configure(const std::filesystem::path& index_dir, const std::filesystem::pa
     if (!log_file.empty()) {
         g_log = _wfopen(log_file.c_str(), L"w");
     }
+}
+
+void SetLocalIndexDir(const std::filesystem::path& dir) {
+    std::lock_guard lock(g_mutex);
+    g_local_index_dir = dir;
+    g_packs.clear();
 }
 
 void OnRead(const std::string& guest_path, s64 offset, u64 size) {

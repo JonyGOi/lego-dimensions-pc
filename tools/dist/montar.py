@@ -82,6 +82,8 @@ def stage():
     copy(R('tools', 'setup', 'atualizar.py'), S('tools', 'setup', 'atualizar.py'))  # Fase 61: botao Atualizar do launcher
     copy(R('tools', 'setup', 'botoes.py'), S('tools', 'setup', 'botoes.py'))  # Fase 62: icones dos botoes de outras plataformas
     copy(R('tools', 'setup', 'ld_transfer.py'), S('tools', 'setup', 'ld_transfer.py'))  # Fase 63: LD PC Transfer
+    copy(R('tools', 'setup', 'mods.py'), S('tools', 'setup', 'mods.py'))  # Fase 64: carregador de mods
+    keep(S('mods'))
     keep(S('assets', 'buttons'))
     copy(R('tools', 'dist', 'VERSION'), S('version.txt'))  # Fase 61: versao instalada (comparada com a release do GitHub)
     copy_tree(R('tools', 'data', 'dat_index'), S('tools', 'data', 'dat_index'), suffixes=('.tsv',))

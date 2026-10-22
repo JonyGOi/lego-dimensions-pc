@@ -17,6 +17,8 @@
 namespace hle::radar {
 
 void Configure(const std::filesystem::path& index_dir, const std::filesystem::path& log_file);
+// Fase 64: pasta lida primeiro (assets\dat_index: indices dos pacotes do proprio jogador e dos mods).
+void SetLocalIndexDir(const std::filesystem::path& dir);
 
 // Chamado pelo VFS a cada leitura bem-sucedida. Ignora o que nao for pacote com indice.
 void OnRead(const std::string& guest_path, s64 offset, u64 size);

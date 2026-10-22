@@ -71,10 +71,24 @@ DICAS
   - Se notar travadas, mande o log da sessao (build\logs\): as linhas [ENGASGO], [QUADRO-LENTO] e
     [TRAVADA-PILHAS] dizem onde o tempo foi gasto.
   - Saves ficam em assets\savedata0.
+  - "Contador de FPS e info" mostra no canto de cima, a esquerda, FPS, tempo de cada quadro (com grafico),
+    temperatura / uso / clock / consumo da placa de video, memoria de video, uso da CPU e RAM. F10 liga e
+    desliga durante o jogo. As leituras da placa vem do driver (AMD e NVIDIA); temperatura e consumo da CPU
+    precisam de um driver a parte (como o do Afterburner) e por isso nao aparecem.
+  - "Apelidos dos jogadores..." troca o nome que o jogo mostra no lugar de Player1, Player2... (ate 16
+    letras; ficam no jogadores.txt da pasta do port).
   - LD PC Transfer (botao no launcher, ou LD_PC_Transfer.exe): converte o progresso entre este port,
     PS4 / shadPS4, Xbox 360 (Xenia), Wii U (Cemu, jogo atualizado) e PS3 (RPCS3, experimental). Escolha
     a pasta do save de origem (ou uma acima dela) e o destino; o original nao e alterado e o que o
     destino ja tinha vai para a pasta saves_backup. So o progresso vem; as opcoes voltam ao padrao.
     Num console de verdade o save ainda precisa ser reassinado (Apollo / Save Wizard / Horizon).
     Xbox One nao da: os saves dele ficam na nuvem, criptografados.
+  - Mods (botao "Mods" no launcher): aceita os mods de PS4 / shadPS4 do LEGO Dimensions. "Instalar mod de
+    um .zip" poe o mod na pasta mods\ do port (ou extraia voce mesmo la, uma pasta por mod); clicar no nome
+    liga / desliga. Tambem valem os que ja estiverem na pasta de mods do shadPS4 (CUSA01176-mods, ao lado
+    do jogo) ou em CUSA01176\Mods. Tipos aceitos: pacote .HDR + .DAT (ex. feitos com o BrickVault) e
+    arquivos soltos no formato da pasta do jogo (data\, sce_sys\). O jogo e os pacotes originais nao sao
+    alterados: o port so mostra ao jogo os arquivos do mod no lugar dos originais. O launcher prepara os
+    mods ao clicar em JOGAR (a primeira vez com um mod novo leva alguns segundos). Um mod so pode trocar
+    arquivos que o jogo ja tem; arquivos novos ficam de fora (o launcher avisa no log).
   - Use pastas com nomes sem acento (o port recebe os caminhos em ANSI).

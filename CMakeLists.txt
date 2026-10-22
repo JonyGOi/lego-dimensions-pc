@@ -45,6 +45,7 @@ add_executable(lego_dimensions
     src/patcher/fs_tls_patcher.cpp
     src/runtime/orbis_tls.cpp
     src/runtime/crash_handler.cpp
+    src/runtime/hwmon.cpp
     src/hle/hle_log.cpp
     src/hle/hle_perf.cpp
     src/hle/overrides/hle_override.cpp
@@ -68,6 +69,7 @@ add_executable(lego_dimensions
     src/hle/overrides/hle_pad.cpp
     src/hle/overrides/hle_pad_sdl.cpp
     src/hle/overrides/hle_radar.cpp
+    src/hle/overrides/hle_mods.cpp
     src/hle/overrides/hle_savedata.cpp
     src/hle/overrides/hle_offline.cpp
     src/render/vulkan_backend.cpp

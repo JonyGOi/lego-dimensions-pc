@@ -31,6 +31,39 @@ std::filesystem::path g_app0;
 std::filesystem::path g_app0_patch; // Fase 58: atualizacao em pasta separada (CUSA01176-patch), por cima do /app0
 std::filesystem::path g_writable_root;
 std::atomic<u64> g_dat_opened{0};
+// Fase 64: mods
+std::vector<std::filesystem::path> g_overlays;      // pastas no formato do /app0, a primeira vence
+std::map<std::string, PackRedirect> g_redirect_hdr;  // "data/chunk1/patch.hdr" -> pacote com arquivos de mod
+std::map<std::string, PackRedirect> g_redirect_dat;  // "data/chunk1/patch.dat" -> idem
+
+std::string LowerKey(const std::filesystem::path& rel) {
+    const std::u8string generic = rel.generic_u8string();
+    std::string key(generic.begin(), generic.end());
+    for (char& c : key) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    while (!key.empty() && key.back() == '/') {
+        key.pop_back();
+    }
+    return key;
+}
+
+// Arquivo do /app0 sem os pacotes renomeados: mods de arquivos soltos, depois a atualizacao, depois o jogo.
+std::filesystem::path FindApp0File(const std::filesystem::path& rel) {
+    std::error_code ec;
+    for (const auto& dir : g_overlays) {
+        if (const auto p = (dir / rel).lexically_normal(); std::filesystem::exists(p, ec)) {
+            return p;
+        }
+    }
+    if (!g_app0_patch.empty()) {
+        if (const auto p = (g_app0_patch / rel).lexically_normal(); std::filesystem::exists(p, ec)) {
+            return p;
+        }
+    }
+    const auto p = (g_app0 / rel).lexically_normal();
+    return std::filesystem::exists(p, ec) ? p : std::filesystem::path{};
+}
 
 s64 FileTimeToUnix(const FILETIME& ft) {
     const u64 ticks = (static_cast<u64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
@@ -81,9 +114,18 @@ File::File(void* handle, std::string guest_path, bool writable)
 
 File::~File() {
     CloseHandle(handle_);
+    if (tail_) {
+        CloseHandle(tail_);
+    }
 }
 
-s64 File::Pread(void* buffer, u64 size, s64 offset) {
+void File::SetTail(void* tail, u64 base, std::string pack) {
+    tail_ = tail;
+    tail_base_ = base;
+    tail_radar_ = "/" + pack + "_MODS.DAT";
+}
+
+s64 File::PreadHost(void* handle, void* buffer, u64 size, s64 offset) {
     u8* out = static_cast<u8*>(buffer);
     u64 total = 0;
     while (total < size) {
@@ -93,7 +135,7 @@ s64 File::Pread(void* buffer, u64 size, s64 offset) {
         ov.OffsetHigh = static_cast<DWORD>(at >> 32);
         const DWORD chunk = static_cast<DWORD>(std::min<u64>(size - total, 0x40000000));
         DWORD got = 0;
-        if (!ReadFile(handle_, out + total, chunk, &got, &ov)) {
+        if (!ReadFile(handle, out + total, chunk, &got, &ov)) {
             if (GetLastError() == ERROR_HANDLE_EOF) {
                 break;
             }
@@ -104,10 +146,35 @@ s64 File::Pread(void* buffer, u64 size, s64 offset) {
         }
         total += got;
     }
-    if (total) {
-        radar::OnRead(guest_path_, offset, total); // radar de telas: qual arquivo do pacote e este
-    }
     return static_cast<s64>(total);
+}
+
+s64 File::Pread(void* buffer, u64 size, s64 offset) {
+    if (tail_ && offset >= 0 && static_cast<u64>(offset) + size > tail_base_) {
+        // Fase 64: .DAT com os arquivos de mod depois do fim: a parte de antes vem do .DAT, o resto da cauda
+        u8* out = static_cast<u8*>(buffer);
+        u64 head = static_cast<u64>(offset) < tail_base_ ? tail_base_ - static_cast<u64>(offset) : 0;
+        s64 total = 0;
+        if (head) {
+            total = PreadHost(handle_, out, head, offset);
+            if (total < static_cast<s64>(head)) {
+                return total;
+            }
+            radar::OnRead(guest_path_, offset, head);
+        }
+        const u64 tail_at = static_cast<u64>(offset) + head - tail_base_;
+        const s64 got = PreadHost(tail_, out + head, size - head, static_cast<s64>(tail_at));
+        if (got > 0) {
+            radar::OnRead(tail_radar_, static_cast<s64>(tail_at), static_cast<u64>(got));
+            total += got;
+        }
+        return total ? total : got;
+    }
+    const s64 total = PreadHost(handle_, buffer, size, offset);
+    if (total > 0) {
+        radar::OnRead(guest_path_, offset, static_cast<u64>(total)); // radar de telas: qual arquivo do pacote e este
+    }
+    return total;
 }
 
 s64 File::Pwrite(const void* buffer, u64 size, s64 offset) {
@@ -168,6 +235,9 @@ s64 File::Seek(s64 offset, int whence) {
 
 s64 File::Size() {
     LARGE_INTEGER size;
+    if (tail_) { // Fase 64: o .DAT ate o comeco da cauda + a cauda
+        return GetFileSizeEx(tail_, &size) ? static_cast<s64>(tail_base_) + size.QuadPart : -1;
+    }
     return GetFileSizeEx(handle_, &size) ? size.QuadPart : -1;
 }
 
@@ -204,6 +274,35 @@ void SetApp0Patch(const std::filesystem::path& patch_dir) {
     std::lock_guard lock(g_mounts_mutex);
     g_app0_patch = patch_dir;
 }
+
+void SetModOverlays(std::vector<std::filesystem::path> dirs) {
+    std::lock_guard lock(g_mounts_mutex);
+    g_overlays = std::move(dirs);
+}
+
+void SetPackRedirects(std::vector<PackRedirect> redirects) {
+    std::lock_guard lock(g_mounts_mutex);
+    g_redirect_hdr.clear();
+    g_redirect_dat.clear();
+    for (PackRedirect& r : redirects) {
+        g_redirect_hdr[LowerKey(r.real_hdr.lexically_normal())] = r;
+        g_redirect_dat[LowerKey(r.real_dat.lexically_normal())] = std::move(r);
+    }
+}
+
+namespace {
+// Fase 64: o arquivo resolvido e um pacote com arquivos de mod? (tabela do cache / .DAT com cauda)
+void ApplyPackRedirect(Resolved& r) {
+    const std::string key = LowerKey(r.host);
+    if (const auto it = g_redirect_hdr.find(key); it != g_redirect_hdr.end()) {
+        r.host = it->second.cache_hdr;
+    } else if (const auto dat = g_redirect_dat.find(key); dat != g_redirect_dat.end()) {
+        r.tail = dat->second.tail;
+        r.tail_base = dat->second.real_size;
+        r.pack = dat->second.pack;
+    }
+}
+} // namespace
 
 const std::filesystem::path& App0Patch() {
     return g_app0_patch;
@@ -260,13 +359,16 @@ Resolved Resolve(const char* guest_path) {
         r.host = full;
         r.mounted = true;
         r.read_only = m.read_only;
-        // Fase 58: no /app0, o arquivo da atualizacao (se existir) vence o do jogo base
-        if (m.prefix == "/app0" && !g_app0_patch.empty()) {
-            const std::filesystem::path patched = (g_app0_patch / rel).lexically_normal();
-            std::error_code ec;
-            if (std::filesystem::exists(patched, ec)) {
-                r.host = patched;
+        if (m.prefix == "/app0") {
+            // Fase 64 (mods de arquivos soltos) e Fase 58 (atualizacao separada): o primeiro que tiver o arquivo vence
+            if (!g_overlays.empty() || !g_app0_patch.empty()) {
+                if (const auto found = FindApp0File(rel); !found.empty()) {
+                    r.host = found;
+                }
             }
+        }
+        if (m.read_only && !g_redirect_hdr.empty()) {
+            ApplyPackRedirect(r); // Fase 64: pacote do jogo ou de DLC com arquivos de mod
         }
         return r;
     }
@@ -305,6 +407,12 @@ std::shared_ptr<File> Open(const char* api, const char* guest_path, OpenMode mod
             g_dat_opened.fetch_add(1);
         }
         file = std::make_shared<File>(h, guest_path, wants_write);
+        if (!r.tail.empty()) {
+            HANDLE tail = CreateFileW(r.tail.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
+            if (tail != INVALID_HANDLE_VALUE) {
+                file->SetTail(tail, r.tail_base, r.pack);
+            }
+        }
         if (mode.append) {
             file->Seek(0, 2);
         }
@@ -327,6 +435,10 @@ int Stat(const char* api, const char* guest_path, StatInfo* out) {
         if (out) {
             out->is_directory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
             out->size = (static_cast<s64>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+            if (!r.tail.empty()) { // Fase 64: .DAT com a cauda dos mods
+                std::error_code ec;
+                out->size = static_cast<s64>(r.tail_base + std::filesystem::file_size(r.tail, ec));
+            }
             out->mtime = FileTimeToUnix(data.ftLastWriteTime);
         }
     }
@@ -343,9 +455,11 @@ int ListDirectory(const char* api, const char* guest_path, std::vector<DirEntry>
             err = kENOTDIR;
         } else {
             err = 0;
-            // Fase 58: pasta do /app0 com atualizacao separada: junta as duas (a da atualizacao vence)
+            // Fase 58/64: pasta do /app0 com mods de arquivos soltos ou atualizacao separada: junta todas (a
+            // primeira que tiver o nome vence)
             std::vector<std::filesystem::path> dirs{r.host};
-            if (!g_app0_patch.empty()) {
+            bool app0 = false;
+            {
                 std::string p = guest_path ? guest_path : "";
                 for (char& c : p) {
                     if (c == '\\') {
@@ -355,21 +469,40 @@ int ListDirectory(const char* api, const char* guest_path, std::vector<DirEntry>
                 if (!p.empty() && p[0] != '/') {
                     p = "/app0/" + p;
                 }
-                if (p.compare(0, 5, "/app0") == 0) {
+                app0 = p.compare(0, 5, "/app0") == 0 && (p.size() == 5 || p[5] == '/');
+                if (app0) {
                     const auto rel = std::filesystem::path(p.substr(5)).relative_path();
-                    const auto base = (g_app0 / rel).lexically_normal(), over = (g_app0_patch / rel).lexically_normal();
-                    dirs = {over, base};
+                    if (!g_overlays.empty() || !g_app0_patch.empty()) {
+                        dirs.clear();
+                        for (const auto& over : g_overlays) {
+                            dirs.push_back((over / rel).lexically_normal());
+                        }
+                        if (!g_app0_patch.empty()) {
+                            dirs.push_back((g_app0_patch / rel).lexically_normal());
+                        }
+                        dirs.push_back((g_app0 / rel).lexically_normal());
+                    }
                 }
             }
             std::set<std::string> names;
             for (const auto& dir_path : dirs) {
                 for (const auto& entry : std::filesystem::directory_iterator(dir_path, ec)) {
                     const std::string name = PathText(entry.path().filename());
-                    if (!names.insert(name).second) {
+                    std::string upper = name; // o Windows nao diferencia maiusculas: a mesma pasta em dois lugares conta uma vez
+                    for (char& c : upper) {
+                        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    }
+                    if (!names.insert(upper).second) {
                         continue;
                     }
                     const bool dir = entry.is_directory(ec);
-                    out->push_back({name, dir, dir ? 0 : static_cast<s64>(entry.file_size(ec))});
+                    s64 size = dir ? 0 : static_cast<s64>(entry.file_size(ec));
+                    if (!dir && !g_redirect_dat.empty()) { // Fase 64: .DAT com a cauda dos mods
+                        if (const auto it = g_redirect_dat.find(LowerKey(entry.path().lexically_normal())); it != g_redirect_dat.end()) {
+                            size = static_cast<s64>(it->second.real_size + std::filesystem::file_size(it->second.tail, ec));
+                        }
+                    }
+                    out->push_back({name, dir, size});
                 }
                 ec.clear();
             }

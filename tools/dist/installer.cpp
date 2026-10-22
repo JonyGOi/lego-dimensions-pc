@@ -238,7 +238,7 @@ int Uninstall() {
     RegDeleteTreeW(HKEY_CURRENT_USER, kUninstallKey);
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path p = it->path();
-        if (p.filename() == L"Desinstalar.exe" || (keep_saves && p.filename() == L"saves_backup")) { // Fase 63: backups do LD PC Transfer
+        if (p.filename() == L"Desinstalar.exe" || (keep_saves && (p.filename() == L"saves_backup" || p.filename() == L"mods" || p.filename() == L"jogadores.txt"))) { // Fase 63/64/65: backups do LD PC Transfer, mods, apelidos
             continue;
         }
         if (keep_saves && p.filename() == L"assets") {
