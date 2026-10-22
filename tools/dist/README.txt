@@ -29,8 +29,8 @@ WHAT YOU NEED
          under "Update". Without the update (version 01.00) the port does not run.
   - (Optional) the DLCs: a folder with one subfolder per DLC, each with sce_sys\param.sfo and the
     DLCnn.DAT2 / DLCnn.HDR2 files - the same layout as the shadPS4 addcont folder.
-  - (Optional) a DS4/Xbox controller and the LegoToypad app for the portal (without it, the port uses
-    assets\portal.json).
+  - (Optional) DS4/Xbox controllers (up to 4 for local co-op) and, for the portal, the real Toy Pad on
+    USB, or the LegoToypad app, or assets\portal.json.
 
 HOW TO USE
   1. Open LegoDimensionsLauncher.exe.
@@ -59,6 +59,11 @@ TIPS
     app (or any other window) the character stops. A button that was already held when you come back
     only counts after it is released.
   - Without "Show console", each session's log goes to build\logs\ (helps to track down problems).
+  - Local co-op: plug in a second controller and press Options on it; player 2 joins in split screen
+    (up to 4 controllers, one per player).
+  - Real Toy Pad: plugged into USB before the game starts, it is used on its own, with no extra driver
+    (portal.json and the app are left out). If you installed the WinUSB driver with Zadig (Cemu /
+    RPCS3), switch the portal back to the default Windows driver. --no-real-toypad uses the virtual one.
   - With the LegoToypad app 1.6 or newer ("Toypad LEDs" setting on), the portal lights show in the app
     the way the game lights them: colour, flashes and fades.
   - The first time you visit each area the graphics driver still compiles new pipelines (it may hitch

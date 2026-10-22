@@ -29,7 +29,8 @@ O QUE VOCE PRECISA
          outro nome, escolha-a em "Atualizacao". Sem a atualizacao (versao 01.00) o port nao roda.
   - (Opcional) as DLCs: uma pasta com uma subpasta por DLC, cada uma com sce_sys\param.sfo e o
     DLCnn.DAT2 / DLCnn.HDR2 - o mesmo formato da pasta addcont do shadPS4.
-  - (Opcional) controle DS4/Xbox e o app LegoToypad para o portal (sem ele, usa o assets\portal.json).
+  - (Opcional) controle DS4/Xbox (ate 4 para o co-op local) e, para o portal, o Toy Pad de verdade ligado
+    no USB, ou o app LegoToypad, ou o assets\portal.json.
 
 COMO USAR
   1. Abra o LegoDimensionsLauncher.exe.
@@ -55,6 +56,11 @@ DICAS
   - O controle so mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad (ou em outra
     janela) o personagem para. Um botao que ja estava apertado ao voltar so conta depois de solto.
   - Sem "Mostrar console", o log de cada sessao fica em build\logs\ (ajuda a achar problemas).
+  - Co-op local: ligue um segundo controle e aperte Options nele; o jogador 2 entra em tela dividida
+    (ate 4 controles, um por jogador).
+  - Toy Pad real: ligado no USB antes de abrir o jogo, ele e usado sozinho, sem driver extra (o
+    portal.json e o app ficam de fora). Se voce instalou o driver WinUSB pelo Zadig (Cemu / RPCS3),
+    volte o driver do portal para o padrao do Windows. --no-real-toypad usa o portal virtual.
   - Com o app LegoToypad 1.6 ou mais novo (opcao "Toypad LEDs" ligada), as luzes do portal aparecem no
     app como o jogo as acende: cor, piscadas e fades.
   - Na primeira visita a cada area o driver de video ainda compila pipelines novos (pode engasgar um

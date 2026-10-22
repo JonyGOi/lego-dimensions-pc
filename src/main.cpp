@@ -34,6 +34,7 @@
 namespace hle {
 void ResetUserServiceEvents();
 void SetVirtualToypadConnected(bool connected);
+bool UseRealToypad(); // Fase 61: Toy Pad fisico pelo HID do Windows
 void SetRand15Bits(bool enabled);
 void StartPortalWatcher(const std::filesystem::path& portal_file);
 void StartToypadListener(int port); // app LegoToypad (cliente TCP em 127.0.0.1)
@@ -953,8 +954,13 @@ int SelfTest() {
     // Sem janela em foco e sem roteiro ativo: so um controle XInput poderia mexer nisto.
     std::printf("         (botoes lidos agora: 0x%x, sticks %u %u %u %u)\n", pad_buttons, pad_data[4], pad_data[5],
                 pad_data[6], pad_data[7]);
-    check("Pad: ReadState devolve conectado, timestamp e (sem controle) sticks em 0x80",
-          pad_read == 0 && pad_data[0x4C] == 1 && Guest<PadReadFn>("scePadReadState")(2, pad_data) < 0);
+    {
+        u8 other[0x78];
+        // Fase 61: handles 1 a 4 (co-op local) valem; o 5 nao
+        const bool coop_handles = Guest<PadReadFn>("scePadReadState")(2, other) == 0 && Guest<PadReadFn>("scePadReadState")(5, other) < 0;
+        check("Pad: ReadState devolve conectado, timestamp e (sem controle) sticks em 0x80; handles 1-4 validos (co-op), 5 nao",
+              pad_read == 0 && pad_data[0x4C] == 1 && coop_handles);
+    }
     // ---- roteiro com eixos analogicos: "LS_UP:ms" segura LeftY em 0, o resto fica em 128
     {
         const bool parsed = hle::SetPadInputScript("LS_UP:600000");
@@ -1171,6 +1177,7 @@ int main(int argc, char** argv) {
     bool selftest = false;
     bool toypad = true; // Fase 27: o Toy Pad virtual passa a ser o padrao (--no-toypad desliga)
     int toypad_port = 9191;
+    bool real_toypad = true; // Fase 61: --no-real-toypad ignora o portal fisico
     std::filesystem::path portal_file = root / "assets" / "portal.json";
     std::filesystem::path radar_log = root / "build" / "radar_arquivos.log";
     // Fase 28: o dump de frame (ferramenta de depuracao da Fase 10) passa a ser opt-in. Ligado, ele
@@ -1370,6 +1377,8 @@ int main(int argc, char** argv) {
             toypad = true; // enumera um Toy Pad virtual (0e6f:0241) no libSceUsbd (ja e o padrao)
         } else if (!std::strcmp(argv[i], "--no-toypad")) {
             toypad = false;
+        } else if (!std::strcmp(argv[i], "--no-real-toypad")) {
+            real_toypad = false; // Fase 61: mesmo com o portal fisico ligado, usa o virtual (portal.json / app)
         } else if (!std::strcmp(argv[i], "--toypad-port") && i + 1 < argc) {
             toypad_port = std::atoi(argv[++i]); // porta do listener do app LegoToypad (0 = desligado)
         } else if (!std::strcmp(argv[i], "--selftest")) {
@@ -1429,7 +1438,10 @@ int main(int argc, char** argv) {
                     hle::fs::PathText(radar_log).c_str());
     }
     hle::SetVirtualToypadConnected(toypad);
-    if (toypad && !selftest) {
+    // Fase 61: com o Toy Pad fisico ligado, e ele que atende o jogo (o virtual, o portal.json e o app ficam de fora)
+    if (toypad && !selftest && real_toypad && hle::UseRealToypad()) {
+        std::printf("portal     : Toy Pad real (USB); --no-real-toypad usa o virtual\n");
+    } else if (toypad && !selftest) {
         hle::StartPortalWatcher(portal_file);
         std::printf("portal     : %s  (relido a cada 500 ms)\n", hle::fs::PathText(portal_file).c_str());
         hle::StartToypadListener(toypad_port);

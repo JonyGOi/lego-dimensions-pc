@@ -1,6 +1,6 @@
 // Controle pelo SDL3 (Fase 24.5): DualShock 4 / DualSense / qualquer gamepad que o SDL reconheca,
-// com touchpad. Uma thread propria inicia o SDL, abre o primeiro controle que aparecer e guarda
-// o estado mais recente; scePadReadState so copia esse estado.
+// com touchpad. Uma thread propria inicia o SDL, abre os controles que aparecerem (Fase 61: ate 4, um por
+// jogador) e guarda o estado mais recente de cada um; scePadReadState so copia esse estado.
 #pragma once
 
 #include "common/types.h"
@@ -19,10 +19,15 @@ struct State {
     } touch[2]{};
 };
 
-void SetEnabled(bool enabled); // --no-sdl-pad
-void Start();                  // idempotente; chamado em scePadInit
-bool Read(State* out);         // false se nao ha controle aberto pelo SDL
-void Rumble(u8 large_motor, u8 small_motor);
-const char* Name();            // nome do controle aberto ("" se nenhum)
+// Fase 61 (co-op local): ate kSlots controles, cada um numa vaga (0 = jogador 1). Um controle novo ocupa a
+// primeira vaga livre; desconectado, a vaga fica livre de novo.
+constexpr int kSlots = 4;
+
+void SetEnabled(bool enabled);              // --no-sdl-pad
+void Start();                               // idempotente; chamado em scePadInit
+bool Read(State* out, int slot = 0);        // false se a vaga nao tem controle aberto pelo SDL
+int Count();                                // quantos controles o SDL tem abertos
+void Rumble(u8 large_motor, u8 small_motor, int slot = 0);
+const char* Name(int slot = 0);             // nome do controle da vaga ("" se nenhum)
 
 } // namespace hle::padsdl

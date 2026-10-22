@@ -27,9 +27,15 @@ constexpr u32 kTriangle = 0x1000, kCircle = 0x2000, kCross = 0x4000, kSquare = 0
 std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_started{false};
 std::mutex g_mutex;
-State g_state;
-char g_name[96] = "";
-std::atomic<u32> g_rumble{0xFFFFFFFF}; // pedido pendente: (grande << 8) | pequeno
+// Fase 61: uma vaga por jogador (co-op local)
+struct Slot {
+    SDL_Gamepad* pad = nullptr; // so a thread do SDL mexe
+    SDL_JoystickID id = 0;
+    State state;      // com g_mutex
+    char name[96] = ""; // com g_mutex
+    std::atomic<u32> rumble{0xFFFFFFFF}; // pedido pendente: (grande << 8) | pequeno
+};
+Slot g_slots[kSlots];
 
 // Eixo do SDL (-32768..32767, +Y para baixo) -> eixo do Orbis (0..255, 128 = centro), com zona morta.
 u8 Axis(Sint16 value) {
@@ -44,7 +50,8 @@ u8 Trigger(Sint16 value) { // 0..32767 -> 0..255
     return static_cast<u8>(value <= 0 ? 0 : (value >> 7));
 }
 
-void Poll(SDL_Gamepad* pad) {
+void Poll(Slot& slot) {
+    SDL_Gamepad* const pad = slot.pad;
     State s;
     s.connected = true;
     const struct {
@@ -92,7 +99,7 @@ void Poll(SDL_Gamepad* pad) {
         }
     }
     std::lock_guard lock(g_mutex);
-    g_state = s;
+    slot.state = s;
 }
 
 void Thread() {
@@ -104,38 +111,59 @@ void Thread() {
         std::printf("[PAD-SDL] SDL_Init falhou: %s (fica so o XInput)\n", SDL_GetError());
         return;
     }
-    std::printf("[PAD-SDL] SDL %d.%d.%d iniciado; esperando um controle\n", SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
-    SDL_Gamepad* pad = nullptr;
-    SDL_JoystickID pad_id = 0;
+    std::printf("[PAD-SDL] SDL %d.%d.%d iniciado; esperando controles (ate %d, um por jogador)\n", SDL_MAJOR_VERSION, SDL_MINOR_VERSION,
+                SDL_MICRO_VERSION, kSlots);
     for (;;) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_GAMEPAD_ADDED && !pad) {
-                pad = SDL_OpenGamepad(event.gdevice.which);
-                if (pad) {
-                    pad_id = event.gdevice.which;
-                    const char* name = SDL_GetGamepadName(pad);
+            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+                int free_slot = -1;
+                bool known = false;
+                for (int i = 0; i < kSlots; ++i) {
+                    known = known || (g_slots[i].pad && g_slots[i].id == event.gdevice.which);
+                    if (!g_slots[i].pad && free_slot < 0) {
+                        free_slot = i;
+                    }
+                }
+                if (known || free_slot < 0) {
+                    continue;
+                }
+                Slot& slot = g_slots[free_slot];
+                slot.pad = SDL_OpenGamepad(event.gdevice.which);
+                if (slot.pad) {
+                    slot.id = event.gdevice.which;
+                    const char* name = SDL_GetGamepadName(slot.pad);
                     {
                         std::lock_guard lock(g_mutex);
-                        std::snprintf(g_name, sizeof(g_name), "%s", name ? name : "controle");
+                        std::snprintf(slot.name, sizeof(slot.name), "%s", name ? name : "controle");
                     }
-                    std::printf("[PAD-SDL] controle aberto: %s (tipo %s, %d touchpad(s))\n", name ? name : "?",
-                                SDL_GetGamepadStringForType(SDL_GetGamepadType(pad)), SDL_GetNumGamepadTouchpads(pad));
+                    SDL_SetGamepadPlayerIndex(slot.pad, free_slot); // LED / luz do controle com o numero do jogador
+                    std::printf("[PAD-SDL] controle aberto como jogador %d: %s (tipo %s, %d touchpad(s))\n", free_slot + 1,
+                                name ? name : "?", SDL_GetGamepadStringForType(SDL_GetGamepadType(slot.pad)),
+                                SDL_GetNumGamepadTouchpads(slot.pad));
                 }
-            } else if (event.type == SDL_EVENT_GAMEPAD_REMOVED && pad && event.gdevice.which == pad_id) {
-                std::printf("[PAD-SDL] controle desconectado\n");
-                SDL_CloseGamepad(pad);
-                pad = nullptr;
-                std::lock_guard lock(g_mutex);
-                g_state = State{};
-                g_name[0] = 0;
+            } else if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                for (int i = 0; i < kSlots; ++i) {
+                    Slot& slot = g_slots[i];
+                    if (slot.pad && slot.id == event.gdevice.which) {
+                        std::printf("[PAD-SDL] controle do jogador %d desconectado\n", i + 1);
+                        SDL_CloseGamepad(slot.pad);
+                        slot.pad = nullptr;
+                        std::lock_guard lock(g_mutex);
+                        slot.state = State{};
+                        slot.name[0] = 0;
+                    }
+                }
             }
         }
-        if (pad) {
-            Poll(pad);
-            const u32 rumble = g_rumble.exchange(0xFFFFFFFF);
+        for (Slot& slot : g_slots) {
+            if (!slot.pad) {
+                continue;
+            }
+            Poll(slot);
+            const u32 rumble = slot.rumble.exchange(0xFFFFFFFF);
             if (rumble != 0xFFFFFFFF) {
-                SDL_RumbleGamepad(pad, static_cast<Uint16>(((rumble >> 8) & 0xFF) * 257), static_cast<Uint16>((rumble & 0xFF) * 257), 500);
+                SDL_RumbleGamepad(slot.pad, static_cast<Uint16>(((rumble >> 8) & 0xFF) * 257), static_cast<Uint16>((rumble & 0xFF) * 257), 500);
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(4));
@@ -155,18 +183,33 @@ void Start() {
     std::thread(Thread).detach();
 }
 
-bool Read(State* out) {
+bool Read(State* out, int slot) {
+    if (slot < 0 || slot >= kSlots) {
+        *out = State{};
+        return false;
+    }
     std::lock_guard lock(g_mutex);
-    *out = g_state;
-    return g_state.connected;
+    *out = g_slots[slot].state;
+    return out->connected;
 }
 
-void Rumble(u8 large_motor, u8 small_motor) {
-    g_rumble = (static_cast<u32>(large_motor) << 8) | small_motor;
+int Count() {
+    std::lock_guard lock(g_mutex);
+    int count = 0;
+    for (const Slot& slot : g_slots) {
+        count += slot.state.connected;
+    }
+    return count;
 }
 
-const char* Name() {
-    return g_name;
+void Rumble(u8 large_motor, u8 small_motor, int slot) {
+    if (slot >= 0 && slot < kSlots) {
+        g_slots[slot].rumble = (static_cast<u32>(large_motor) << 8) | small_motor;
+    }
+}
+
+const char* Name(int slot) {
+    return slot >= 0 && slot < kSlots ? g_slots[slot].name : "";
 }
 
 } // namespace hle::padsdl

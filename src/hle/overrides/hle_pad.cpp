@@ -105,6 +105,7 @@ struct ScriptStep {
     // menu principal, recem-carregado, ha intervalos de 0,6 s), e um toque curto por tempo
     // pode cair inteiro entre duas leituras.
     int reads_left = 0;
+    int player = 0; // Fase 61: 0 = jogador 1; 1 = jogador 2 (LD_PAD_LIVE2, testes do co-op)
 };
 
 const auto g_epoch = std::chrono::steady_clock::now();
@@ -250,9 +251,9 @@ u8 Axis(SHORT value, bool invert) {
     return static_cast<u8>((v + 32768) >> 8);
 }
 
-void ReadXInput(Input& in) {
+void ReadXInput(Input& in, DWORD index = 0) {
     XINPUT_STATE state{};
-    if (XInputGetState(0, &state) != ERROR_SUCCESS) {
+    if (XInputGetState(index, &state) != ERROR_SUCCESS) {
         return;
     }
     const WORD b = state.Gamepad.wButtons;
@@ -391,11 +392,15 @@ u32 PadHeldSinceFocus(u32 buttons) {
 
 // Testes (LD_PAD_LIVE=<arquivo>): linhas "botao:ms", "ls_up:ms" ou "wait:ms" acrescentadas ao arquivo entram
 // na hora, em sequencia. Serve para navegar num teste olhando a tela, sem teclado nem controle.
-void ReadLiveFile(double now) {
-    static const char* path = std::getenv("LD_PAD_LIVE");
-    static double next_check = 0.0;
-    static long long consumed = 0;
-    static double cursor = 0.0;
+// Fase 61: LD_PAD_LIVE2 faz o mesmo para um controle virtual do jogador 2 (teste do co-op sem segundo controle).
+void ReadLiveFile(double now, int player) {
+    static const char* const paths[2] = {std::getenv("LD_PAD_LIVE"), std::getenv("LD_PAD_LIVE2")};
+    static double next_checks[2] = {}, cursors[2] = {};
+    static long long consumed_bytes[2] = {};
+    const char* const path = paths[player];
+    double& next_check = next_checks[player];
+    long long& consumed = consumed_bytes[player];
+    double& cursor = cursors[player];
     if (!path || now < next_check) {
         return;
     }
@@ -454,6 +459,7 @@ void ReadLiveFile(double now) {
         ScriptStep step{};
         step.start_s = cursor;
         step.end_s = cursor + hold_ms / 1000.0;
+        step.player = player;
         for (const auto& b : kButtonNames) {
             if (name == b.name) {
                 step.button = b.bit;
@@ -470,15 +476,18 @@ void ReadLiveFile(double now) {
         }
         cursor = step.end_s + 0.15; // folga entre dois toques do mesmo botao
         g_script.push_back(step);
-        log::Tagged("PAD", "t=%.1fs ao vivo: %s por %.0f ms", now, name.c_str(), hold_ms);
+        log::Tagged("PAD", "t=%.1fs ao vivo (jogador %d): %s por %.0f ms", now, player + 1, name.c_str(), hold_ms);
     }
 }
 
-void ReadScript(Input& in) {
+void ReadScript(Input& in, int player = 0) {
     const double now = Seconds();
-    ReadLiveFile(now);
+    ReadLiveFile(now, player);
     std::lock_guard lock(g_script_mutex);
     for (ScriptStep& step : g_script) {
+        if (step.player != player) {
+            continue;
+        }
         const bool by_reads = step.reads_left > 0 && now >= step.start_s;
         if (by_reads) {
             --step.reads_left;
@@ -497,10 +506,66 @@ void ReadScript(Input& in) {
     // Uma linha de log quando o roteiro mexe (ou solta) um analogico.
     static std::atomic<u32> last_sticks{0x80808080};
     const u32 sticks = in.lx | (in.ly << 8) | (in.rx << 16) | (static_cast<u32>(in.ry) << 24);
-    if (!g_script.empty() && last_sticks.exchange(sticks) != sticks) {
+    if (player == 0 && !g_script.empty() && last_sticks.exchange(sticks) != sticks) {
         log::Tagged("PAD", "t=%.1fs analogicos: esquerdo (%u, %u) direito (%u, %u)  [128 = centro, 0 = cima/esquerda, 255 = baixo/direita]",
                     now, in.lx, in.ly, in.rx, in.ry);
     }
+}
+
+// Fase 61 (co-op local): ha controle para a vaga (0 = jogador 1)? SDL primeiro; sem nenhum controle no SDL (ou com
+// --no-sdl-pad), o XInput do mesmo indice. XInputGetState num indice vazio e lento (o driver procura o aparelho):
+// vaga vazia e conferida de novo so a cada 2 s.
+bool SlotPresent(int slot) {
+    if (slot < 0 || slot >= padsdl::kSlots) {
+        return false;
+    }
+    if (slot == 1 && std::getenv("LD_PAD_LIVE2")) {
+        return true; // controle virtual do jogador 2 (testes)
+    }
+    padsdl::State sdl;
+    if (padsdl::Read(&sdl, slot)) {
+        return true;
+    }
+    if (padsdl::Count() > 0) {
+        return false;
+    }
+    static std::mutex mutex;
+    static bool present[padsdl::kSlots] = {};
+    static double next_check[padsdl::kSlots] = {};
+    std::lock_guard lock(mutex);
+    const double now = Seconds();
+    if (present[slot] || now >= next_check[slot]) {
+        XINPUT_STATE state{};
+        present[slot] = XInputGetState(static_cast<DWORD>(slot), &state) == ERROR_SUCCESS;
+        next_check[slot] = now + 2.0;
+    }
+    return present[slot];
+}
+
+// Jogadores 2 a 4: so o controle da propria vaga (o teclado, os roteiros e o portal sao do jogador 1).
+bool ReadOtherPlayer(int slot, Input& in) {
+    if (!SlotPresent(slot)) {
+        return false;
+    }
+    if (!PadFocusGate()) {
+        return true; // conectado, mas a janela do jogo nao esta na frente: parado
+    }
+    padsdl::State sdl;
+    if (padsdl::Read(&sdl, slot)) {
+        in.buttons |= sdl.buttons;
+        in.lx = sdl.lx;
+        in.ly = sdl.ly;
+        in.rx = sdl.rx;
+        in.ry = sdl.ry;
+        in.l2 = sdl.l2;
+        in.r2 = sdl.r2;
+    } else if (padsdl::Count() == 0) {
+        ReadXInput(in, static_cast<DWORD>(slot));
+    }
+    if (slot == 1) {
+        ReadScript(in, 1);
+    }
+    return true;
 }
 
 HLE_IMPL(int, scePadInit) {
@@ -511,7 +576,8 @@ HLE_IMPL(int, scePadInit) {
 HLE_OVERRIDE(scePadInit);
 
 HLE_IMPL(int, scePadOpen, int user_id, int type, int index, const void* param) {
-    const int result = (user_id == kUserId && index == 0) ? kPadHandle : kPadErrorInvalidArg;
+    // Fase 61: usuarios 1 a 4 (co-op local), um controle cada; o handle e o proprio id do usuario
+    const int result = (user_id >= kUserId && user_id < kUserId + padsdl::kSlots && index == 0) ? user_id : kPadErrorInvalidArg;
     XINPUT_STATE state{};
     HLE_TRACE("user=%d tipo=%d indice=%d -> %d (controle XInput %s; teclado com a janela em foco)", user_id, type,
               index, result, XInputGetState(0, &state) == ERROR_SUCCESS ? "detectado" : "nao detectado");
@@ -519,19 +585,47 @@ HLE_IMPL(int, scePadOpen, int user_id, int type, int index, const void* param) {
 }
 HLE_OVERRIDE(scePadOpen);
 
+bool ValidHandle(int handle) { // Fase 61
+    return handle >= kPadHandle && handle < kPadHandle + padsdl::kSlots;
+}
+
 HLE_IMPL(int, scePadClose, int handle) {
     HLE_TRACE("%d", handle);
-    return handle == kPadHandle ? err::OK : kPadErrorInvalidHandle;
+    return ValidHandle(handle) ? err::OK : kPadErrorInvalidHandle;
 }
 HLE_OVERRIDE(scePadClose);
 
 HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
     HLE_QUIET("%d", handle);
-    if (handle != kPadHandle) {
+    if (!ValidHandle(handle)) {
         return kPadErrorInvalidHandle;
     }
     if (!data) {
         return kPadErrorInvalidArg;
+    }
+    if (handle != kPadHandle) { // Fase 61: jogadores 2 a 4
+        const int slot = handle - kPadHandle;
+        Input other;
+        const bool present = ReadOtherPlayer(slot, other);
+        std::memset(data, 0, sizeof(*data));
+        data->buttons = other.buttons;
+        data->left_x = other.lx;
+        data->left_y = other.ly;
+        data->right_x = other.rx;
+        data->right_y = other.ry;
+        data->l2 = other.l2;
+        data->r2 = other.r2;
+        data->orientation[3] = 1.0f;
+        data->acceleration[1] = 1.0f;
+        data->connected = present;
+        data->connected_count = present ? 1 : 0;
+        g_last_timestamp = std::max<u64>(static_cast<u64>(Seconds() * 1e6), g_last_timestamp + 1);
+        data->timestamp = g_last_timestamp;
+        static std::atomic<u32> last_buttons[padsdl::kSlots];
+        if (last_buttons[slot].exchange(other.buttons) != other.buttons) {
+            log::Tagged("PAD", "t=%.1fs jogador %d: botoes 0x%05x %s", Seconds(), slot + 1, other.buttons, ButtonList(other.buttons).c_str());
+        }
+        return err::OK;
     }
     ProbeGame(HLE_RETURN_ADDRESS(), guest_rbp, data);
     Input in;
@@ -558,7 +652,7 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
                 std::printf("[PAD] analogico esquerdo (SDL): LeftX %u LeftY %u botoes 0x%05x\n", in.lx, in.ly, in.buttons);
             }
         }
-    } else if (pad_allowed) {
+    } else if (pad_allowed && padsdl::Count() == 0) { // Fase 61: com outros controles no SDL, o XInput 0 seria um deles
         ReadXInput(in);
     }
     in.buttons &= ~PadHeldSinceFocus(in.buttons);
@@ -608,26 +702,29 @@ static ::hle::OverrideRegistrar hle_override_scePadReadState{"scePadReadState", 
 
 HLE_IMPL(int, scePadSetLightBar, int handle, const void* color) {
     HLE_QUIET("%d", handle);
-    return handle == kPadHandle ? err::OK : kPadErrorInvalidHandle;
+    return ValidHandle(handle) ? err::OK : kPadErrorInvalidHandle;
 }
 HLE_OVERRIDE(scePadSetLightBar);
 
 HLE_IMPL(int, scePadResetLightBar, int handle) {
     HLE_QUIET("%d", handle);
-    return handle == kPadHandle ? err::OK : kPadErrorInvalidHandle;
+    return ValidHandle(handle) ? err::OK : kPadErrorInvalidHandle;
 }
 HLE_OVERRIDE(scePadResetLightBar);
 
 // Vibracao: {u8 motor grande, u8 motor pequeno} -> motores do controle XInput.
 HLE_IMPL(int, scePadSetVibration, int handle, const u8* params) {
     HLE_QUIET("%d", handle);
-    if (handle != kPadHandle) {
+    if (!ValidHandle(handle)) {
         return kPadErrorInvalidHandle;
     }
     if (params) {
+        const int slot = handle - kPadHandle; // Fase 61: o controle do proprio jogador
         XINPUT_VIBRATION vibration{static_cast<WORD>(params[0] * 257), static_cast<WORD>(params[1] * 257)};
-        XInputSetState(0, &vibration);
-        padsdl::Rumble(params[0], params[1]);
+        if (padsdl::Count() == 0) {
+            XInputSetState(static_cast<DWORD>(slot), &vibration);
+        }
+        padsdl::Rumble(params[0], params[1], slot);
     }
     return err::OK;
 }
@@ -637,6 +734,10 @@ HLE_OVERRIDE(scePadSetVibration);
 
 void SetPadStickLog(bool enabled) {
     g_stick_log = enabled;
+}
+
+bool PadControllerPresent(int slot) { // Fase 61: usado pelo UserService (login / logout dos jogadores 2 a 4)
+    return SlotPresent(slot);
 }
 
 void SetPadBackgroundInput(bool enabled) {

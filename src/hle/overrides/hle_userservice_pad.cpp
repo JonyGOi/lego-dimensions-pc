@@ -1,4 +1,5 @@
-// libSceUserService, libSceSystemService e libSceAppContent: um unico usuario logado (id 1).
+// libSceUserService, libSceSystemService e libSceAppContent. O usuario 1 fica sempre logado; os usuarios 2 a 4
+// (Fase 61, co-op local) entram quando ha um controle na vaga deles e saem quando ele e desconectado.
 // O controle fica em hle_pad.cpp.
 #include <algorithm>
 #include <atomic>
@@ -16,12 +17,17 @@
 #include "hle/overrides/hle_override.h"
 #include "runtime/lang.h"
 
+namespace hle {
+bool PadControllerPresent(int slot); // hle_pad.cpp (Fase 61)
+}
+
 namespace {
 
 using namespace hle;
 
 constexpr int kUserId = 1;
 constexpr int kUserIdInvalid = -1;
+constexpr int kMaxUsers = 4; // Fase 61: um por controle (vagas do hle_pad_sdl)
 constexpr char kUserName[] = "Player1";
 
 constexpr int kUserServiceErrorInvalidArgument = static_cast<int>(0x80960005);
@@ -45,6 +51,11 @@ struct LoginUserIdList {
 };
 
 std::atomic<bool> g_login_event_pending{true};
+std::atomic<u32> g_logged_users{1}; // Fase 61: bit por usuario logado (bit 0 = usuario 1, sempre)
+
+bool UserLoggedIn(int user_id) {
+    return user_id >= kUserId && user_id < kUserId + kMaxUsers && ((g_logged_users.load() >> (user_id - kUserId)) & 1);
+}
 
 HLE_IMPL(int, sceUserServiceInitialize, const void* params) {
     HLE_TRACE("%p", params);
@@ -73,36 +84,47 @@ HLE_IMPL(int, sceUserServiceGetLoginUserIdList, LoginUserIdList* list) {
     if (!list) {
         return kUserServiceErrorInvalidArgument;
     }
-    list->user_id[0] = kUserId;
-    list->user_id[1] = list->user_id[2] = list->user_id[3] = kUserIdInvalid;
+    int count = 0;
+    for (int user = kUserId; user < kUserId + kMaxUsers; ++user) { // Fase 61
+        if (UserLoggedIn(user)) {
+            list->user_id[count++] = user;
+        }
+    }
+    while (count < 4) {
+        list->user_id[count++] = kUserIdInvalid;
+    }
     return err::OK;
 }
 HLE_OVERRIDE(sceUserServiceGetLoginUserIdList);
 
 HLE_IMPL(int, sceUserServiceGetUserName, int user_id, char* name, u64 size) {
-    HLE_TRACE("user=%d -> \"%s\"", user_id, kUserName);
-    if (!name || user_id != kUserId) {
+    char text[sizeof(kUserName)];
+    std::memcpy(text, kUserName, sizeof(kUserName));
+    text[sizeof(kUserName) - 2] = static_cast<char>('0' + (user_id - kUserId + 1)); // Fase 61: Player1..Player4
+    HLE_TRACE("user=%d -> \"%s\"", user_id, text);
+    if (!name || user_id < kUserId || user_id >= kUserId + kMaxUsers) {
         return kUserServiceErrorInvalidArgument;
     }
-    if (size < sizeof(kUserName)) {
+    if (size < sizeof(text)) {
         return kUserServiceErrorBufferTooShort;
     }
-    std::memcpy(name, kUserName, sizeof(kUserName));
+    std::memcpy(name, text, sizeof(text));
     return err::OK;
 }
 HLE_OVERRIDE(sceUserServiceGetUserName);
 
 HLE_IMPL(int, sceUserServiceGetUserColor, int user_id, int* color) {
-    HLE_TRACE("user=%d -> azul", user_id);
-    if (!color || user_id != kUserId) {
+    HLE_TRACE("user=%d -> cor %d", user_id, user_id - kUserId);
+    if (!color || user_id < kUserId || user_id >= kUserId + kMaxUsers) {
         return kUserServiceErrorInvalidArgument;
     }
-    *color = 0; // azul, o primeiro jogador
+    *color = user_id - kUserId; // azul, vermelho, verde, rosa (como no PS4)
     return err::OK;
 }
 HLE_OVERRIDE(sceUserServiceGetUserColor);
 
-// Um unico evento de login logo apos o boot; depois, fila vazia para sempre.
+// O login do usuario 1 logo apos o boot; depois (Fase 61), um evento por vez quando um controle aparece ou some na
+// vaga dos jogadores 2 a 4 (o jogo chama isto todo quadro e abre o controle do usuario no login).
 HLE_IMPL(int, sceUserServiceGetEvent, UserServiceEvent* event) {
     if (!event) {
         return kUserServiceErrorInvalidArgument;
@@ -112,6 +134,21 @@ HLE_IMPL(int, sceUserServiceGetEvent, UserServiceEvent* event) {
         event->user_id = kUserId;
         HLE_TRACE("-> LOGIN do usuario %d", kUserId);
         return err::OK;
+    }
+    for (int slot = 1; slot < kMaxUsers; ++slot) {
+        const int user = kUserId + slot;
+        const bool present = PadControllerPresent(slot);
+        if (present != UserLoggedIn(user)) {
+            if (present) {
+                g_logged_users.fetch_or(1u << slot);
+            } else {
+                g_logged_users.fetch_and(~(1u << slot));
+            }
+            event->event_type = present ? 0 : 1; // 0 = login, 1 = logout
+            event->user_id = user;
+            HLE_TRACE("-> %s do usuario %d (controle %s)", present ? "LOGIN" : "LOGOUT", user, present ? "conectado" : "desconectado");
+            return err::OK;
+        }
     }
     HLE_QUIET("-> sem evento");
     return kUserServiceErrorNoEvent;

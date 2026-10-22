@@ -9,6 +9,7 @@
 // virtual (0e6f:0241). Cada pacote de saida (endpoint 0x01) e entregue ao emulador do portal
 // (hle_toypad.cpp) e a resposta completa uma das leituras pendentes do endpoint 0x81, cujo
 // callback roda em sceUsbdHandleEvents.
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstddef>
@@ -26,6 +27,7 @@
 
 #include "hle/overrides/hle_override.h"
 #include "hle/overrides/hle_toypad.h"
+#include "hle/overrides/hle_toypad_hid.h"
 #include "runtime/crash_handler.h"
 
 namespace hle {
@@ -125,6 +127,7 @@ const DeviceDescriptor g_device_descriptor = {18, 1, 0x0200, 0, 0, 0, 32, kToypa
                                               0x0200, 1, 2, 0, 1};
 
 bool g_toypad_connected = false;
+bool g_real_toypad = false; // Fase 61: o portal fisico atende o jogo (sem emulador, portal.json nem app)
 
 std::mutex g_mutex;
 std::condition_variable g_cv;
@@ -310,6 +313,17 @@ HLE_IMPL(int, sceUsbdSubmitTransfer, Transfer* transfer) {
         } else {
             g_pending_reads.push_back(transfer);
         }
+        return err::OK;
+    }
+    if (g_real_toypad) { // Fase 61: o comando vai para o portal fisico; a resposta chega pela leitura do HID
+        const bool sent = toypadhid::Write(transfer->buffer, static_cast<u32>(transfer->length));
+        {
+            std::lock_guard lock(g_mutex);
+            transfer->status = sent ? 0 : 4; // 4 = LIBUSB_TRANSFER_NO_DEVICE
+            transfer->actual_length = sent ? transfer->length : 0;
+            g_completed.push_back(transfer);
+        }
+        g_cv.notify_all();
         return err::OK;
     }
     // Escrita: o comando vai para o portal (fora do lock: ele registra no log).
@@ -526,6 +540,25 @@ void TakeToypadExternalControl() {
 
 void SetVirtualToypadConnected(bool connected) {
     g_toypad_connected = connected;
+}
+
+// Fase 61: tudo o que o portal fisico manda (respostas e avisos de figura) vai para as leituras do jogo, na ordem.
+void RealToypadPacket(const u8* packet, u32 length) {
+    toypad::Packet copy{};
+    std::memcpy(copy.data(), packet, std::min<u32>(length, 32));
+    InjectPacket(copy);
+}
+
+bool UseRealToypad() {
+    std::string description;
+    const bool opened = toypadhid::Open(&description);
+    std::printf("[TOYPAD-USB] %s\n", description.c_str());
+    if (opened) {
+        g_real_toypad = true;
+        g_toypad_connected = true;
+        toypadhid::Start(&RealToypadPacket);
+    }
+    return opened;
 }
 
 // Le uma zona ("pad1".."pad3") de um texto no formato do portal.json. Devolve false se a zona

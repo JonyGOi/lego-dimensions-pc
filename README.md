@@ -41,7 +41,8 @@ The languages other than Portuguese and English need the game's original text fi
 ## Status
 
 - The story, Vorton and the DLC levels are playable at 60 fps (the "60 FPS" option in the launcher).
-- Audio, saves, controller and the portal (virtual Toy Pad or the LegoToypad app) work.
+- Audio, saves, controller and the portal (the real Toy Pad on USB, the LegoToypad app or a virtual Toy Pad) work.
+- Local co-op: up to 4 controllers, player 2 joins in split screen by pressing Options.
 - The LegoToypad app (1.6 or newer) mirrors the portal lights the way the game drives them: colour, flashes and fades.
 - Fullscreen ("Fullscreen" option in the launcher, or F11 in game) and a window size selector ("Resolution"; the game still renders at 1920x1080 and is scaled to the window).
 - "Skip all cutscenes" option: any cutscene can be skipped, even the ones the game only lets you skip after watching them or at 100%.
