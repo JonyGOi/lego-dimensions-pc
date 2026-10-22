@@ -33,6 +33,7 @@ struct Slot {
     SDL_JoystickID id = 0;
     State state;      // com g_mutex
     char name[96] = ""; // com g_mutex
+    const char* icons = ""; // Fase 62: com g_mutex
     std::atomic<u32> rumble{0xFFFFFFFF}; // pedido pendente: (grande << 8) | pequeno
 };
 Slot g_slots[kSlots];
@@ -136,6 +137,19 @@ void Thread() {
                     {
                         std::lock_guard lock(g_mutex);
                         std::snprintf(slot.name, sizeof(slot.name), "%s", name ? name : "controle");
+                        // Fase 62: icones dos botoes pelo tipo de controle (os genericos seguem o layout do Xbox)
+                        switch (SDL_GetGamepadType(slot.pad)) {
+                        case SDL_GAMEPAD_TYPE_PS4:
+                        case SDL_GAMEPAD_TYPE_PS5: slot.icons = "ps4"; break;
+                        case SDL_GAMEPAD_TYPE_PS3: slot.icons = "ps3"; break;
+                        case SDL_GAMEPAD_TYPE_XBOX360: slot.icons = "360"; break;
+                        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+                        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+                        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+                        case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+                        case SDL_GAMEPAD_TYPE_GAMECUBE: slot.icons = "wiiu"; break;
+                        default: slot.icons = "xboxone"; break;
+                        }
                     }
                     SDL_SetGamepadPlayerIndex(slot.pad, free_slot); // LED / luz do controle com o numero do jogador
                     std::printf("[PAD-SDL] controle aberto como jogador %d: %s (tipo %s, %d touchpad(s))\n", free_slot + 1,
@@ -152,6 +166,7 @@ void Thread() {
                         std::lock_guard lock(g_mutex);
                         slot.state = State{};
                         slot.name[0] = 0;
+                        slot.icons = "";
                     }
                 }
             }
@@ -210,6 +225,14 @@ void Rumble(u8 large_motor, u8 small_motor, int slot) {
 
 const char* Name(int slot) {
     return slot >= 0 && slot < kSlots ? g_slots[slot].name : "";
+}
+
+const char* IconPlatform(int slot) {
+    if (slot < 0 || slot >= kSlots) {
+        return "";
+    }
+    std::lock_guard lock(g_mutex);
+    return g_slots[slot].icons;
 }
 
 } // namespace hle::padsdl

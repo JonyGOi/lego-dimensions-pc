@@ -81,7 +81,9 @@ std::atomic<bool> g_profile_request{false};
 namespace hle {
 void PrintNgs2VoiceReport(); // hle_audio.cpp
 void PadMacroTick(u64 draws, u64 stable_frames); // hle_pad.cpp
+bool PadControllerPresent(int slot); // hle_pad.cpp (Fase 61)
 }
+#include "hle/overrides/hle_pad_sdl.h"
 namespace hle::gnm {
 namespace {
 
@@ -1592,6 +1594,105 @@ struct NoInitAllocator : std::allocator<T> {
 };
 using PixelVector = std::vector<u8, NoInitAllocator<u8>>;
 
+// ---- Fase 62: icones dos botoes de outras plataformas ----
+// O jogo so desenha a folha de icones do PS4 (608x608 DXT5, com cross / circle / square / triangle ...). O Preparar
+// (tools/setup/botoes.py) monta, a partir do dump do jogador, folhas no MESMO layout com os desenhos do PS3, Xbox 360,
+// Xbox One e Wii U (assets/buttons/<plataforma>.rgba) e o hash dos blocos da folha do PS4. Quando o jogo envia essa
+// textura, ela vai para a GPU como a folha da plataforma escolhida; se o controle mudar, a textura e reescrita.
+const char* const kIconPlatforms[] = {"ps4", "ps3", "360", "xboxone", "wiiu"};
+constexpr int kIconPlatformCount = 5;
+std::atomic<int> g_icons_forced{-1}; // --button-icons: -1 = pelo controle
+struct IconSheets {
+    std::once_flag once;
+    bool ok = false;
+    u64 hash = 0, bytes = 0;
+    u32 width = 0, height = 0;
+    std::vector<u8> rgba[kIconPlatformCount];
+} g_icons;
+std::atomic<u64> g_icon_address{0}; // textura do jogo reconhecida como a folha de icones
+std::atomic<int> g_icon_applied{-1}; // plataforma que esta na GPU agora
+u64 g_icon_next_check = 0;           // so a thread de render
+
+int IconIndex(const char* name) {
+    for (int i = 0; i < kIconPlatformCount; ++i) {
+        if (!std::strcmp(name, kIconPlatforms[i])) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool LoadIconSheets() {
+    std::call_once(g_icons.once, [] {
+        const std::filesystem::path dir = std::filesystem::path(render::GameSpirvDirectory()).parent_path() / "buttons";
+        if (std::FILE* f = _wfopen((dir / "ps4_dxt5.hash").c_str(), L"r")) {
+            unsigned long long hash = 0, bytes = 0;
+            unsigned width = 0, height = 0;
+            g_icons.ok = std::fscanf(f, "%llx %u %u %llu", &hash, &width, &height, &bytes) == 4;
+            std::fclose(f);
+            g_icons.hash = hash;
+            g_icons.bytes = bytes;
+            g_icons.width = width;
+            g_icons.height = height;
+        }
+        for (int i = 0; g_icons.ok && i < kIconPlatformCount; ++i) {
+            std::ifstream in(dir / (std::string(kIconPlatforms[i]) + ".rgba"), std::ios::binary);
+            g_icons.rgba[i].assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            if (g_icons.rgba[i].size() != static_cast<size_t>(g_icons.width) * g_icons.height * 4) {
+                g_icons.rgba[i].clear();
+            }
+        }
+        g_icons.ok = g_icons.ok && !g_icons.rgba[0].empty();
+        log::Tagged("ICONES", g_icons.ok ? "folhas de icones carregadas (%s)" : "sem folhas de icones em %s (rode o Preparar)",
+                    dir.string().c_str());
+    });
+    return g_icons.ok;
+}
+
+// Plataforma pedida agora: a opcao do launcher, ou a do controle do jogador 1 (so XInput: Xbox; sem controle: PS4).
+int WantedIconPlatform() {
+    const int forced = g_icons_forced.load();
+    if (forced >= 0) {
+        return forced;
+    }
+    const int from_pad = IconIndex(padsdl::IconPlatform(0));
+    if (from_pad >= 0) {
+        return from_pad;
+    }
+    return hle::PadControllerPresent(0) ? IconIndex("xboxone") : 0;
+}
+
+// Fim da leitura de uma textura: a folha do PS4 vira a da plataforma pedida (RGBA8, mesmo tamanho).
+void ReplaceIconSheet(const GuestTexture& t, PixelVector* out, render::TextureData* data) {
+    if (data->format != render::TextureData::kBc3 || t.depth != 1 || t.cube || !LoadIconSheets() || t.width != g_icons.width ||
+        t.height != g_icons.height || data->levels < 1 || out->size() < g_icons.bytes) {
+        return;
+    }
+    u64 hash = 0xcbf29ce484222325ull;
+    for (u64 i = 0; i < g_icons.bytes; ++i) {
+        hash = (hash ^ (*out)[i]) * 0x100000001b3ull;
+    }
+    if (hash != g_icons.hash) {
+        return;
+    }
+    int wanted = WantedIconPlatform();
+    if (g_icons.rgba[wanted].empty()) {
+        wanted = 0;
+    }
+    const std::vector<u8>& rgba = g_icons.rgba[wanted];
+    out->assign(rgba.begin(), rgba.end());
+    data->format = render::TextureData::kRgba8;
+    data->levels = 1;
+    data->level_offsets[0] = 0;
+    g_icon_address = t.address;
+    g_icon_applied = wanted;
+    static std::atomic<u32> logged{0};
+    if (logged.fetch_add(1) < 4) {
+        log::Tagged("ICONES", "folha de icones do jogo em 0x%llx: enviada com os icones \"%s\"", static_cast<unsigned long long>(t.address),
+                    kIconPlatforms[wanted]);
+    }
+}
+
 bool ReadGuestTexture(const GuestTexture& t, PixelVector* out, render::TextureData* data) {
     const render::HitchClock hitch(render::HitchClock::kDetile);
     const bool linear = t.tiling == 8;
@@ -1701,6 +1802,7 @@ bool ReadGuestTexture(const GuestTexture& t, PixelVector* out, render::TextureDa
     data->depth = t.depth;
     data->cube = t.cube;
     data->srgb = t.srgb;
+    ReplaceIconSheet(t, out, data); // Fase 62
     data->data = out->data();
     data->bytes = out->size();
     data->swizzle = t.swizzle;
@@ -1944,6 +2046,25 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         }
         return hash;
     };
+    if (texture.address == g_icon_address.load(std::memory_order_relaxed) && g_texture_frame >= g_icon_next_check) {
+        // Fase 62: o controle (ou a opcao) mudou: a folha de icones que esta na GPU e reescrita com a outra plataforma
+        g_icon_next_check = g_texture_frame + 30;
+        const int wanted = WantedIconPlatform();
+        if (wanted != g_icon_applied.load() && !g_icons.rgba[wanted].empty() && renderer.HasTexture(key)) {
+            render::TextureData data;
+            data.format = render::TextureData::kRgba8;
+            data.width = texture.width;
+            data.height = texture.height;
+            data.srgb = texture.srgb;
+            data.swizzle = texture.swizzle;
+            data.data = g_icons.rgba[wanted].data();
+            data.bytes = g_icons.rgba[wanted].size();
+            if (renderer.UpdateTexture(key, data)) {
+                g_icon_applied = wanted;
+                log::Tagged("ICONES", "controle mudou: icones \"%s\"", kIconPlatforms[wanted]);
+            }
+        }
+    }
     const bool small_linear = texture.tiling == 8 && (static_cast<u64>(texture.width) * texture.height * texture.depth <= (128u << 10) ||
                                                       texture.format == 0x01); // Fase 60: planos de video mudam todo quadro
     static thread_local PixelVector pixels;
@@ -6722,6 +6843,10 @@ void SetSyncTextures(bool enabled, double budget_ms, double spike_budget_ms, u32
 
 void SetPreloadAllAot(bool enabled) {
     g_preload_all = enabled;
+}
+
+void SetButtonIcons(const char* name) { // Fase 62: "auto" ou uma das plataformas
+    g_icons_forced = IconIndex(name);
 }
 
 void SetPairBudget(double budget_ms) {

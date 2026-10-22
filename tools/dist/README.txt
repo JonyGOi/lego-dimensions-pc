@@ -59,6 +59,10 @@ TIPS
     app (or any other window) the character stops. A button that was already held when you come back
     only counts after it is released.
   - Without "Show console", each session's log goes to build\logs\ (helps to track down problems).
+  - "Icons" changes the button icons the game shows: Automatic uses the ones of the connected controller
+    (Xbox 360, Xbox One/Series, PS3, PS4/PS5, or Wii U for Nintendo controllers); or pick one platform. The
+    icons come from your own game files (Prepare builds them; PLAY builds them if missing). There are no
+    keyboard icons.
   - Local co-op: plug in a second controller and press Options on it; player 2 joins in split screen
     (up to 4 controllers, one per player).
   - Real Toy Pad: plugged into USB before the game starts, it is used on its own, with no extra driver

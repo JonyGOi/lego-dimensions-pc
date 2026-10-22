@@ -56,6 +56,9 @@ DICAS
   - O controle so mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad (ou em outra
     janela) o personagem para. Um botao que ja estava apertado ao voltar so conta depois de solto.
   - Sem "Mostrar console", o log de cada sessao fica em build\logs\ (ajuda a achar problemas).
+  - "Icones" troca os icones dos botoes que o jogo mostra: Automatico usa os do controle ligado (Xbox 360,
+    Xbox One/Series, PS3, PS4/PS5 ou Wii U para controles da Nintendo); ou fixe uma plataforma. Os icones
+    saem do seu proprio jogo (o Preparar monta; o JOGAR monta na hora se faltar). Nao ha icones de teclado.
   - Co-op local: ligue um segundo controle e aperte Options nele; o jogador 2 entra em tela dividida
     (ate 4 controles, um por jogador).
   - Toy Pad real: ligado no USB antes de abrir o jogo, ele e usado sozinho, sem driver extra (o

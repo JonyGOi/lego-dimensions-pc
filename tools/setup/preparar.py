@@ -195,6 +195,14 @@ def main():
     check_dlcs(args.addcont)
     progress(3, T('convertendo o eboot.bin', 'converting eboot.bin'))
     convert_eboot(args.app0, args.patch)
+    progress(4, T('montando os icones dos botoes de cada controle', 'building the button icons for each controller'))  # Fase 62
+    icons = subprocess.run([sys.executable, '-u', os.path.join(ROOT, 'tools', 'setup', 'botoes.py'), '--app0', args.app0] +
+                           (['--patch', args.patch] if args.patch else []), cwd=ROOT, capture_output=True, text=True, encoding='utf-8',
+                           errors='replace')
+    if icons.returncode != 0:
+        lines = (icons.stdout + icons.stderr).strip().splitlines()
+        print(T('AVISO os icones de Xbox / Wii U nao foram montados (fica so o do PS4): ',
+                'WARNING the Xbox / Wii U icons were not built (only the PS4 ones stay): ') + (lines[-1] if lines else ''), flush=True)
     for d in ('shaders_spv', 'shaders_aot', 'dumped_shaders', 'savedata0', 'temp0', 'download0'):
         os.makedirs(os.path.join(ROOT, 'assets', d), exist_ok=True)
     if not args.sem_aot:

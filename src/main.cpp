@@ -77,6 +77,7 @@ void SetSyncShaders(bool enabled, double pipeline_budget_ms);
 void SetLiveSyncBudget(double ms); // Fase 56
 void SetPairBudget(double budget_ms);
 void SetGeometryBudget(double budget_ms); // Fase 61
+void SetButtonIcons(const char* name);    // Fase 62
 void SetPreloadAllAot(bool enabled);
 void SetSyncTextures(bool enabled, double budget_ms, double spike_budget_ms, u32 spike_count);
 void SetTextureWait(bool enabled); // Fase 45
@@ -1257,6 +1258,8 @@ int main(int argc, char** argv) {
             render::VulkanRenderer::Instance().SetAsyncPipelines(false); // pipelines criados na thread de render
         } else if (!std::strcmp(argv[i], "--check-modules")) {
             hle::videoout::SetCheckModules(true); // confere todos os .spv soltos na abertura (diagnostico lento)
+        } else if (!std::strcmp(argv[i], "--button-icons") && i + 1 < argc) {
+            hle::gnm::SetButtonIcons(argv[++i]); // Fase 62: auto (pelo controle) | ps4 | ps3 | 360 | xboxone | wiiu
         } else if (!std::strcmp(argv[i], "--geometry-budget") && i + 1 < argc) {
             hle::gnm::SetGeometryBudget(std::atof(argv[++i])); // Fase 61: ms por frame para promover / conferir geometria (0 = sem limite)
         } else if (!std::strcmp(argv[i], "--pair-budget") && i + 1 < argc) {

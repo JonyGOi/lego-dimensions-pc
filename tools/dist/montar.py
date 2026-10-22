@@ -79,6 +79,8 @@ def stage():
     copy(R('tools', 'check_binaries.py'), S('tools', 'check_binaries.py'))
     copy(R('tools', 'setup', 'preparar.py'), S('tools', 'setup', 'preparar.py'))
     copy(R('tools', 'setup', 'atualizar.py'), S('tools', 'setup', 'atualizar.py'))  # Fase 61: botao Atualizar do launcher
+    copy(R('tools', 'setup', 'botoes.py'), S('tools', 'setup', 'botoes.py'))  # Fase 62: icones dos botoes de outras plataformas
+    keep(S('assets', 'buttons'))
     copy(R('tools', 'dist', 'VERSION'), S('version.txt'))  # Fase 61: versao instalada (comparada com a release do GitHub)
     copy_tree(R('tools', 'data', 'dat_index'), S('tools', 'data', 'dat_index'), suffixes=('.tsv',))
     copy(R('tools', 'data', 'layout_dictionary.json'), S('tools', 'data', 'layout_dictionary.json'))

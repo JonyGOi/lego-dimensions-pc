@@ -29,5 +29,7 @@ bool Read(State* out, int slot = 0);        // false se a vaga nao tem controle 
 int Count();                                // quantos controles o SDL tem abertos
 void Rumble(u8 large_motor, u8 small_motor, int slot = 0);
 const char* Name(int slot = 0);             // nome do controle da vaga ("" se nenhum)
+// Fase 62: icones que combinam com o controle da vaga: "ps4", "ps3", "360", "xboxone", "wiiu" ("" se nenhum)
+const char* IconPlatform(int slot = 0);
 
 } // namespace hle::padsdl

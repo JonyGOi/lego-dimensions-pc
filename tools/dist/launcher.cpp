@@ -37,10 +37,11 @@ namespace {
 constexpr int kW = 980, kH = 840, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
+HWND g_icons; // Fase 62
 
 // Fase 61: o que o Python em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar)
 enum class Task { kPrepare, kCheck, kUpdate } g_task = Task::kPrepare;
@@ -64,6 +65,24 @@ const Language kLanguages[] = {
     {L"da", L"Dansk", L"Dansk"},
 };
 std::wstring g_res_value = L"1280x720", g_lang_value = L"auto";
+// Fase 62: icones dos botoes (--button-icons): pelo controle ligado ou fixos numa plataforma
+struct IconChoice {
+    const wchar_t *code, *pt, *en;
+};
+const IconChoice kIconChoices[] = {
+    {L"auto", L"Autom\u00e1tico", L"Automatic"}, {L"ps4", L"PS4", L"PS4"}, {L"ps3", L"PS3", L"PS3"},
+    {L"360", L"Xbox 360", L"Xbox 360"},             {L"xboxone", L"Xbox One", L"Xbox One"}, {L"wiiu", L"Wii U", L"Wii U"},
+};
+std::wstring g_icons_value = L"auto";
+
+const IconChoice& CurrentIcons() {
+    for (const IconChoice& choice : kIconChoices) {
+        if (g_icons_value == choice.code) {
+            return choice;
+        }
+    }
+    return kIconChoices[0];
+}
 std::unique_ptr<Gdiplus::Bitmap> g_art;
 HICON g_icon;
 HFONT g_font, g_small, g_label, g_title, g_subtitle, g_button, g_play_font;
@@ -331,6 +350,7 @@ void SaveSettings() {
     WriteIni(L"console", ui::Checked(g_console) ? L"1" : L"0");
     WriteIni(L"telacheia", ui::Checked(g_fullscreen) ? L"1" : L"0");
     WriteIni(L"resolucao", g_res_value);
+    WriteIni(L"icones", g_icons_value);
     WriteIni(L"idioma", g_lang_value);
     WriteIni(L"pularcenas", ui::Checked(g_skip) ? L"1" : L"0");
 }
@@ -347,8 +367,10 @@ const Language& CurrentLanguage() {
 void UpdateChoiceLabels() {
     SetWindowTextW(g_resolution, (ui::T(L"Resolu\u00e7\u00e3o:  ", L"Resolution:  ") + g_res_value + L"  \u25be").c_str());
     SetWindowTextW(g_language, (ui::T(L"Idioma:  ", L"Language:  ") + std::wstring(ui::T(CurrentLanguage().pt, CurrentLanguage().en)) + L"  \u25be").c_str());
+    SetWindowTextW(g_icons, (ui::T(L"\u00cdcones:  ", L"Icons:  ") + std::wstring(ui::T(CurrentIcons().pt, CurrentIcons().en)) + L"  \u25be").c_str());
     InvalidateRect(g_resolution, nullptr, FALSE);
     InvalidateRect(g_language, nullptr, FALSE);
+    InvalidateRect(g_icons, nullptr, FALSE);
 }
 
 // Menu suspenso logo abaixo do botao; devolve o indice escolhido ou -1.
@@ -376,6 +398,24 @@ void PickResolution() {
     const int picked = PopupChoice(g_resolution, items, current);
     if (picked >= 0) {
         g_res_value = kResolutions[picked];
+        UpdateChoiceLabels();
+        SaveSettings();
+    }
+}
+
+void PickIcons() { // Fase 62
+    std::vector<std::wstring> items;
+    int current = 0;
+    for (const IconChoice& choice : kIconChoices) {
+        if (g_icons_value == choice.code) {
+            current = static_cast<int>(items.size());
+        }
+        items.push_back(std::wstring(ui::T(choice.pt, choice.en)) +
+                        (std::wstring(choice.code) == L"auto" ? ui::T(L"   (pelo controle ligado)", L"   (from the controller)") : L""));
+    }
+    const int picked = PopupChoice(g_icons, items, current);
+    if (picked >= 0) {
+        g_icons_value = kIconChoices[picked].code;
         UpdateChoiceLabels();
         SaveSettings();
     }
@@ -619,6 +659,28 @@ void RunGame() {
                                    L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
     }
+    std::error_code icons_ec;
+    if (!fs::is_regular_file(g_root / L"assets" / L"buttons" / L"ps4_dxt5.hash", icons_ec)) {
+        // Fase 62: folhas de icones dos botoes (feitas do dump; o Preparar ja faz, mas quem atualizou pelo launcher nao)
+        fs::path python = g_root / L"tools" / L"python" / L"python.exe";
+        std::wstring make = (fs::is_regular_file(python, icons_ec) ? Quote(python.wstring()) : L"python") + L" -I " +
+                            Quote((g_root / L"tools" / L"setup" / L"botoes.py").wstring()) + L" --app0 " + Quote(GetText(g_game));
+        if (const std::wstring patch = GetText(g_patch); !patch.empty()) {
+            make += L" --patch " + Quote(patch);
+        }
+        STARTUPINFOW make_si{sizeof(make_si)};
+        PROCESS_INFORMATION make_pi{};
+        g_step = ui::T(L"Montando os \u00edcones dos bot\u00f5es...", L"Building the button icons...");
+        InvalidateCard();
+        UpdateWindow(g_main);
+        if (CreateProcessW(nullptr, make.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, g_root.c_str(), &make_si, &make_pi)) {
+            WaitForSingleObject(make_pi.hProcess, 120000);
+            CloseHandle(make_pi.hThread);
+            CloseHandle(make_pi.hProcess);
+        }
+        g_step.clear();
+        UpdateStatus();
+    }
     std::wstring command = Quote((g_root / L"build" / L"lego_dimensions.exe").wstring()) + L" --app0 " + Quote(GetText(g_game));
     const std::wstring dlc = GetText(g_dlc);
     command += dlc.empty() ? L" --no-dlc" : L" --addcont " + Quote(dlc);
@@ -632,6 +694,7 @@ void RunGame() {
         command += L" --fullscreen"; // Fase 60: tela cheia sem bordas (F11 alterna dentro do jogo)
     }
     command += L" --resolution " + g_res_value; // Fase 61: tamanho da janela
+    command += L" --button-icons " + g_icons_value; // Fase 62
     if (g_lang_value != L"auto") {
         command += L" --lang " + g_lang_value; // Fase 61: idioma do jogo (e do port)
     }
@@ -684,13 +747,14 @@ void CreateControls() {
     g_log = ui::Edit(g_main, S(58), S(kH - 170), S(kW - 116), S(60), kLog, g_small, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL);
     SetWindowTheme(g_log, L"DarkMode_Explorer", nullptr); // barra de rolagem escura (Windows 10 1809+)
     // Fase 61: resolucao, idioma e o mod de pular cutscenes, entre as etiquetas de estado e o progresso
-    g_resolution = ui::Button(g_main, L"", ui::Style::kSecondary, S(48), S(kHero + 234), S(250), S(40), kResolution, g_font, ui::kPanel);
-    g_language = ui::Button(g_main, L"", ui::Style::kSecondary, S(310), S(kHero + 234), S(300), S(40), kLanguage, g_font, ui::kPanel);
+    g_resolution = ui::Button(g_main, L"", ui::Style::kSecondary, S(48), S(kHero + 234), S(206), S(40), kResolution, g_small, ui::kPanel);
+    g_language = ui::Button(g_main, L"", ui::Style::kSecondary, S(262), S(kHero + 234), S(236), S(40), kLanguage, g_small, ui::kPanel);
+    g_icons = ui::Button(g_main, L"", ui::Style::kSecondary, S(506), S(kHero + 234), S(186), S(40), kIcons, g_small, ui::kPanel); // Fase 62
     g_version = ReadVersion();
     g_update = ui::Button(g_main, (ui::T(L"Atualizar   \u2022   v", L"Check updates  \u2022  v") + g_version).c_str(), ui::Style::kSecondary, S(kW - 250), S(kHero + 195),
                           S(202), S(32), kUpdate, g_font, ui::kPanel);
-    g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(632), S(kHero + 234), S(300), S(40),
-                        kSkipCutscenes, g_font, ui::kPanel);
+    g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(704), S(kHero + 234), S(250), S(40),
+                        kSkipCutscenes, g_small, ui::kPanel);
     g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
     g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
     g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
@@ -723,6 +787,8 @@ void LoadSettings() {
     ui::SetChecked(g_console, ReadIni(L"console", L"0") == L"1");
     ui::SetChecked(g_fullscreen, ReadIni(L"telacheia", L"0") == L"1");
     ui::SetChecked(g_skip, ReadIni(L"pularcenas", L"0") == L"1");
+    g_icons_value = ReadIni(L"icones", L"auto"); // Fase 62
+    g_icons_value = CurrentIcons().code;
     g_res_value = ReadIni(L"resolucao", L"1280x720");
     if (std::find(std::begin(kResolutions), std::end(kResolutions), g_res_value) == std::end(kResolutions)) {
         g_res_value = L"1280x720";
@@ -817,6 +883,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case kResolution:
             PickResolution();
+            break;
+        case kIcons:
+            PickIcons();
             break;
         case kUpdate:
             CheckUpdate();
