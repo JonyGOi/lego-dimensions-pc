@@ -25,6 +25,8 @@
 
 namespace render {
 
+std::atomic<u64> g_temp_staging_count{0}; // Fase 59: texturas que foram por um buffer temporario (Fase 61: definido aqui, usado tambem no staging do frame)
+
 namespace {
 
 std::atomic<bool> g_enabled{true};
@@ -415,6 +417,7 @@ constexpr u64 kZeroBytes = 4096; // inicio do anel de storage: zeros, para bindi
 void DestroyPipelines();
 bool CreateTexture(u64 key, const TextureData& data);
 bool CreateFallbackViews();
+void PrewarmTargetPool(); // Fase 61
 
 bool Fail(const char* what, VkResult result = VK_SUCCESS) {
     char text[256];
@@ -1193,6 +1196,7 @@ bool CreateGeometryObjects() {
     if (!CreateFallbackViews()) {
         return false;
     }
+    PrewarmTargetPool(); // Fase 61
     // Textura 0: branco 1x1, usada pelos draws sem textura reconhecida.
     const u32 white = 0xFFFFFFFFu;
     TextureData data;
@@ -1218,15 +1222,69 @@ VkComponentSwizzle SwizzleComponent(u32 selector, VkComponentSwizzle identity) {
 // Fase 39: copia os pixels para a metade do staging deste frame e anota a copia; o DrawFrame grava
 // todas no comeco do command buffer do frame, antes dos draws. Sem espera nenhuma. Devolve false
 // se nao coube (o chamador faz a copia antiga, com submissao propria e vkQueueWaitIdle). Com g.mutex.
-bool StageFrameUpload(VkImage image, VkImageLayout old_layout, const TextureData& data, u32 levels, u32 layers, const VkBufferImageCopy* regions) {
-    const u64 offset = (g.frame_head + 15) & ~15ull;
-    if (!g.frame_staging.mapped || offset + data.bytes > kFrameStagingHalf) {
+// Fase 61: buffer de envio proprio (visivel pela CPU), liberado quando o frame em que foi gravado terminar.
+bool CreateTempStaging(u64 bytes, State::TempStaging* temp, void** mapped) {
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    info.size = bytes;
+    info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vk.vkCreateBuffer(g.device, &info, nullptr, &temp->buffer) != VK_SUCCESS) {
+        temp->buffer = VK_NULL_HANDLE;
         return false;
     }
-    const u64 base = g.frame_half * kFrameStagingHalf + offset;
-    std::memcpy(g.frame_staging.mapped + base, data.data, data.bytes);
-    g.frame_head = offset + data.bytes;
+    VkMemoryRequirements requirements;
+    vk.vkGetBufferMemoryRequirements(g.device, temp->buffer, &requirements);
+    VkPhysicalDeviceMemoryProperties memory;
+    vk.vkGetPhysicalDeviceMemoryProperties(g.physical, &memory);
+    const VkMemoryPropertyFlags wanted = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    u32 type = ~0u;
+    for (u32 i = 0; i < memory.memoryTypeCount && type == ~0u; ++i) {
+        if ((requirements.memoryTypeBits & (1u << i)) && (memory.memoryTypes[i].propertyFlags & wanted) == wanted) {
+            type = i;
+        }
+    }
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocate.allocationSize = requirements.size;
+    allocate.memoryTypeIndex = type;
+    if (type == ~0u || vk.vkAllocateMemory(g.device, &allocate, nullptr, &temp->memory) != VK_SUCCESS ||
+        vk.vkBindBufferMemory(g.device, temp->buffer, temp->memory, 0) != VK_SUCCESS ||
+        vk.vkMapMemory(g.device, temp->memory, 0, bytes, 0, mapped) != VK_SUCCESS) {
+        if (temp->memory) vk.vkFreeMemory(g.device, temp->memory, nullptr);
+        vk.vkDestroyBuffer(g.device, temp->buffer, nullptr);
+        temp->buffer = VK_NULL_HANDLE;
+        temp->memory = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+bool StageFrameUpload(VkImage image, VkImageLayout old_layout, const TextureData& data, u32 levels, u32 layers, const VkBufferImageCopy* regions) {
+    const u64 offset = (g.frame_head + 15) & ~15ull;
+    if (!g.frame_staging.mapped) {
+        return false;
+    }
+    u64 base = 0;
+    VkBuffer source = VK_NULL_HANDLE;
+    if (offset + data.bytes > kFrameStagingHalf) {
+        // Fase 61: o staging do frame encheu (entrada de area: centenas de texturas juntas). Antes a thread de render
+        // caia no envio imediato, que espera a GPU ficar ociosa (~6 ms por textura); agora vai por um buffer proprio,
+        // como as threads de textura ja faziam (UploadThroughTempStaging).
+        State::TempStaging temp;
+        void* mapped = nullptr;
+        if (!CreateTempStaging(data.bytes, &temp, &mapped)) {
+            return false;
+        }
+        std::memcpy(mapped, data.data, data.bytes);
+        g.temp_staging.push_back(temp);
+        ++g_temp_staging_count;
+        source = temp.buffer;
+    } else {
+        base = g.frame_half * kFrameStagingHalf + offset;
+        std::memcpy(g.frame_staging.mapped + base, data.data, data.bytes);
+        g.frame_head = offset + data.bytes;
+    }
     State::PendingUpload pending;
+    pending.source = source;
     pending.image = image;
     pending.old_layout = old_layout;
     pending.levels = levels;
@@ -1335,6 +1393,44 @@ bool PoolTake(TexturePool::Chunk& chunk, const VkMemoryRequirements& requirement
     return false;
 }
 
+// Fase 61: o proximo bloco do pool e reservado ANTES de faltar, numa thread propria. Alocar 128 MiB no driver leva
+// 10-15 ms, e era pago por quem pedisse a primeira reserva que nao coubesse - na entrada de uma area (225 texturas),
+// com o pool travado para todos: uma textura de 4 KB na thread de render levou 13 ms. Livre < 48 MiB de um tipo de
+// memoria -> um bloco a mais desse tipo em segundo plano (um por vez por tipo).
+constexpr u64 kTexturePoolLowWater = 48ull << 20;
+std::atomic<u32> g_pool_growing_types{0}; // bit por tipo de memoria com reserva em andamento
+std::atomic<u64> g_pool_grown_ahead{0};
+
+void GrowPoolAhead(u32 type) { // com g_texture_pool.mutex
+    u64 free_bytes = 0;
+    for (const TexturePool::Chunk& chunk : g_texture_pool.chunks) {
+        if (chunk.type == type) {
+            for (const auto& [offset, size] : chunk.free) {
+                free_bytes += size;
+            }
+        }
+    }
+    if (free_bytes >= kTexturePoolLowWater || type >= 32 || (g_pool_growing_types.fetch_or(1u << type) & (1u << type))) {
+        return;
+    }
+    std::thread([type] {
+        VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocate.allocationSize = kTexturePoolChunk;
+        allocate.memoryTypeIndex = type;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (g.device && vk.vkAllocateMemory(g.device, &allocate, nullptr, &memory) == VK_SUCCESS) {
+            std::lock_guard lock(g_texture_pool.mutex);
+            TexturePool::Chunk chunk;
+            chunk.type = type;
+            chunk.memory = memory;
+            chunk.free[0] = kTexturePoolChunk;
+            g_texture_pool.chunks.push_back(std::move(chunk));
+            ++g_pool_grown_ahead;
+        }
+        g_pool_growing_types.fetch_and(~(1u << type));
+    }).detach();
+}
+
 bool PoolAllocate(const VkMemoryRequirements& requirements, u32 type, u32* chunk_out, u64* offset_out, VkDeviceMemory* memory_out) {
     if (requirements.size > kTexturePoolChunk / 2 || std::getenv("LD_NO_TEXTURE_POOL")) {
         return false;
@@ -1346,6 +1442,7 @@ bool PoolAllocate(const VkMemoryRequirements& requirements, u32 type, u32* chunk
             *chunk_out = c;
             *memory_out = chunk.memory;
             g_texture_pool.used += requirements.size;
+            GrowPoolAhead(type); // Fase 61
             return true;
         }
     }
@@ -1366,6 +1463,7 @@ bool PoolAllocate(const VkMemoryRequirements& requirements, u32 type, u32* chunk
     *chunk_out = static_cast<u32>(g_texture_pool.chunks.size() - 1);
     *memory_out = fresh.memory;
     g_texture_pool.used += requirements.size;
+    GrowPoolAhead(type); // Fase 61
     return true;
 }
 
@@ -1797,6 +1895,92 @@ void TransitionTarget(State::RenderTarget* target, VkImageLayout to) {
     target->layout = to;
 }
 
+// Fase 61: memoria de um alvo de render (ou da copia dele) dentro dos blocos do pool das texturas. A alocacao
+// propria de cada alvo (8 a 16 MiB, zerada pelo driver) levava ~1 ms cada e ate 16 ms para dois alvos grandes
+// no mesmo frame. Os alvos so sao liberados no fim do jogo (os blocos inteiros saem juntos). *memory fica
+// nulo quando veio do pool; maior que meio bloco, alocacao propria como antes.
+bool BindTargetMemory(VkImage image, VkDeviceMemory* memory) {
+    VkMemoryRequirements requirements;
+    vk.vkGetImageMemoryRequirements(g.device, image, &requirements);
+    const u32 type = FindMemoryType(requirements);
+    if (type == ~0u) {
+        return false;
+    }
+    u32 chunk = ~0u;
+    u64 offset = 0;
+    VkDeviceMemory pooled = VK_NULL_HANDLE;
+    if (PoolAllocate(requirements, type, &chunk, &offset, &pooled)) {
+        *memory = VK_NULL_HANDLE;
+        if (vk.vkBindImageMemory(g.device, image, pooled, offset) == VK_SUCCESS) {
+            return true;
+        }
+        PoolFree(chunk, offset, requirements.size);
+    }
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocate.allocationSize = requirements.size;
+    allocate.memoryTypeIndex = type;
+    if (vk.vkAllocateMemory(g.device, &allocate, nullptr, memory) != VK_SUCCESS) {
+        *memory = VK_NULL_HANDLE;
+        return false;
+    }
+    return vk.vkBindImageMemory(g.device, image, *memory, 0) == VK_SUCCESS;
+}
+
+// Fase 61: os blocos do pool (texturas e alvos de render) sao reservados na abertura, e nao no meio do jogo. Uma
+// imagem de teste so diz o tipo de memoria.
+void PrewarmTargetPool() {
+    VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    image.extent = {64, 64, 1};
+    image.mipLevels = 1;
+    image.arrayLayers = 1;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImage probe = VK_NULL_HANDLE;
+    if (vk.vkCreateImage(g.device, &image, nullptr, &probe) != VK_SUCCESS) {
+        return;
+    }
+    VkMemoryRequirements requirements;
+    vk.vkGetImageMemoryRequirements(g.device, probe, &requirements);
+    vk.vkDestroyImage(g.device, probe, nullptr);
+    const u32 type = FindMemoryType(requirements);
+    if (type == ~0u || std::getenv("LD_NO_TEXTURE_POOL")) {
+        return;
+    }
+    // O driver da AMD trava por dentro durante uma alocacao grande: um bloco de 128 MiB alocado no meio do jogo (em
+    // qualquer thread) segurava ate a criacao de uma textura de 4 KB na thread de render por 13-15 ms. Por isso o pool
+    // ja nasce com 1/8 da memoria de video (1 GiB numa placa de 8 GiB; Vorton usa ~350 MiB, 33 min de jogo ~1,1 GiB).
+    VkPhysicalDeviceMemoryProperties properties;
+    vk.vkGetPhysicalDeviceMemoryProperties(g.physical, &properties);
+    const u64 heap = properties.memoryHeaps[properties.memoryTypes[type].heapIndex].size;
+    const u32 chunks = static_cast<u32>(std::clamp<u64>(heap / 8 / kTexturePoolChunk, 2, 8));
+    const auto start = std::chrono::steady_clock::now();
+    u32 made = 0;
+    for (u32 i = 0; i < chunks; ++i) {
+        VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocate.allocationSize = kTexturePoolChunk;
+        allocate.memoryTypeIndex = type;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (vk.vkAllocateMemory(g.device, &allocate, nullptr, &memory) != VK_SUCCESS) {
+            break;
+        }
+        std::lock_guard lock(g_texture_pool.mutex);
+        TexturePool::Chunk chunk;
+        chunk.type = type;
+        chunk.memory = memory;
+        chunk.free[0] = kTexturePoolChunk;
+        g_texture_pool.chunks.push_back(std::move(chunk));
+        ++made;
+    }
+    std::printf("[VULKAN] pool de texturas e alvos: %u blocos de %llu MiB reservados na abertura em %.0f ms\n", made,
+                static_cast<unsigned long long>(kTexturePoolChunk >> 20),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+}
+
 // Alvo de render do jogo: VkImage + VkImageView, criado na primeira vez que o jogo desenha nele e
 // guardado por (endereco, tamanho, formato). Cor: anexo + amostragem; os sRGB sao mutaveis para
 // terem tambem uma view UNORM (os bytes como estao), usada ao copiar para a janela.
@@ -1840,16 +2024,10 @@ State::RenderTarget* GetTarget(const GameDraw::Target& wanted, bool depth) {
     if (vk.vkCreateImage(g.device, &image, nullptr, &target.image) != VK_SUCCESS) {
         return nullptr;
     }
-    VkMemoryRequirements requirements;
-    vk.vkGetImageMemoryRequirements(g.device, target.image, &requirements);
-    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocate.allocationSize = requirements.size;
-    allocate.memoryTypeIndex = FindMemoryType(requirements);
-    if (allocate.memoryTypeIndex == ~0u || vk.vkAllocateMemory(g.device, &allocate, nullptr, &target.memory) != VK_SUCCESS) {
+    if (!BindTargetMemory(target.image, &target.memory)) {
         vk.vkDestroyImage(g.device, target.image, nullptr);
         return nullptr;
     }
-    vk.vkBindImageMemory(g.device, target.image, target.memory, 0);
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view.image = target.image;
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -1885,7 +2063,7 @@ State::RenderTarget* GetTarget(const GameDraw::Target& wanted, bool depth) {
         if (target.raw_view) vk.vkDestroyImageView(g.device, target.raw_view, nullptr);
         if (target.view) vk.vkDestroyImageView(g.device, target.view, nullptr);
         vk.vkDestroyImage(g.device, target.image, nullptr);
-        vk.vkFreeMemory(g.device, target.memory, nullptr);
+        if (target.memory) vk.vkFreeMemory(g.device, target.memory, nullptr); // (nulo: veio do pool, fica para outro alvo)
         return nullptr;
     }
     State::RenderTarget* stored = &(g.targets[key] = target);
@@ -1928,18 +2106,12 @@ bool EnsureTargetCopy(State::RenderTarget* target) {
         target->copy_image = VK_NULL_HANDLE;
         return false;
     }
-    VkMemoryRequirements requirements;
-    vk.vkGetImageMemoryRequirements(g.device, target->copy_image, &requirements);
-    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocate.allocationSize = requirements.size;
-    allocate.memoryTypeIndex = FindMemoryType(requirements);
     VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
     view.format = target->format;
     view.subresourceRange = {static_cast<VkImageAspectFlags>(target->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1, 0, 1};
-    bool ok = allocate.memoryTypeIndex != ~0u && vk.vkAllocateMemory(g.device, &allocate, nullptr, &target->copy_memory) == VK_SUCCESS;
+    bool ok = BindTargetMemory(target->copy_image, &target->copy_memory);
     if (ok) {
-        vk.vkBindImageMemory(g.device, target->copy_image, target->copy_memory, 0);
         view.image = target->copy_image;
         ok = vk.vkCreateImageView(g.device, &view, nullptr, &target->copy_view) == VK_SUCCESS;
     }
@@ -2863,7 +3035,7 @@ void DestroyAll() {
             if (target.raw_view) vk.vkDestroyImageView(g.device, target.raw_view, nullptr);
             vk.vkDestroyImageView(g.device, target.view, nullptr);
             vk.vkDestroyImage(g.device, target.image, nullptr);
-            vk.vkFreeMemory(g.device, target.memory, nullptr);
+            if (target.memory) vk.vkFreeMemory(g.device, target.memory, nullptr); // Fase 61: nulo = bloco do pool
         }
         g.targets.clear();
         g.target_by_address.clear();
@@ -4659,7 +4831,6 @@ bool VulkanRenderer::UploadTexture(u64 key, const TextureData& texture, u64 prep
     return CreateTexture(key, texture);
 }
 
-std::atomic<u64> g_temp_staging_count{0}; // Fase 59: texturas que foram por um buffer temporario
 
 // Fase 59: textura de uma rajada que nao coube no staging do frame (128 MiB por frame). Antes ela ia
 // pelo envio imediato (copia propria + vkQueueWaitIdle COM o g.mutex): a thread de render parava 20-40 ms

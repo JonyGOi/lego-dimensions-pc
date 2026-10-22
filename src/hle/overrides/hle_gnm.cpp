@@ -1772,6 +1772,15 @@ struct TexTracked {
     u64 sample = 0, next_frame = 0;
 };
 std::unordered_map<u64, TexTracked> g_tex_tracked;
+// Fase 61 (medicao): texturas lidas na hora pela thread de render neste frame (lineares pequenas novas, conferencia
+// por frame das lineares pequenas, reescritas no modo sem threads). Vai na linha [ENGASGO] e zera a cada frame.
+u32 g_tex_inline_count = 0, g_tex_inline_checks = 0;
+double g_tex_inline_ms = 0, g_tex_inline_check_ms = 0;
+struct InlineTexClock {
+    double* total;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~InlineTexClock() { *total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+};
 // Fase 59: textura nova vai SEMPRE para o pool (nada de destile em serie na thread de render, que
 // prendia o frame em ate 33 ms antes de o pool comecar) e a espera no fim do frame vai ate 200 ms, com
 // a thread de render destilando junto. --no-parallel-textures volta ao esquema da Fase 39/45.
@@ -1785,12 +1794,16 @@ struct TextureJob {
     bool ok = false;
     u64 prepared = 0; // Fase 45: imagem + memoria + views ja criadas nesta thread
     bool worker_upload = false; // Fase 59: a propria thread enviou (ok = deu certo)
+    bool replace = false;       // Fase 61: textura que ja existe e o jogo reescreveu (so le e destila; a de render reenvia)
 };
 std::mutex g_tex_mutex;
 std::condition_variable g_tex_cv, g_tex_done_cv;
 std::deque<TextureJob> g_tex_jobs;
 std::deque<TextureJob> g_tex_done;
 std::unordered_set<u64> g_tex_requested, g_tex_failed; // so a thread de render mexe
+// Fase 61: texturas reescritas pelo jogo sendo lidas de novo pelas threads (a espera do fim do frame espera por elas)
+std::unordered_set<u64> g_tex_replacing;
+u64 g_tex_replaced = 0;
 std::atomic<bool> g_async_textures{true};               // --no-async-textures
 std::atomic<u64> g_tex_async_uploaded{0};
 
@@ -1799,9 +1812,15 @@ void RunTextureJob(TextureJob& job) {
     // Fase 59: os pixels ficam num buffer da thread (sem alocar e soltar megabytes por textura) e a
     // propria thread envia a textura; so sem os objetos preparados o envio volta para a thread de render.
     static thread_local PixelVector pixels;
+    // Fase 61: a amostra vem ANTES da leitura. Depois dela, uma escrita do jogo no meio da leitura (o jogo
+    // ainda carregando a cena) deixava a amostra com o conteudo novo e a GPU com o velho: a conferencia a
+    // cada 30 quadros nunca via diferenca (cabecas transparentes ao carregar um save direto numa cutscene).
+    TextureSample(job.texture.address, job.level0_bytes, &job.sample);
     job.ok = ReadGuestTexture(job.texture, &pixels, &job.data);
-    if (job.ok) {
-        TextureSample(job.texture.address, job.level0_bytes, &job.sample);
+    if (job.ok && job.replace) { // Fase 61: a imagem ja existe; a thread de render copia os pixels para ela
+        job.pixels.assign(pixels.begin(), pixels.end());
+        job.data.data = job.pixels.data();
+    } else if (job.ok) {
         auto& renderer = render::VulkanRenderer::Instance();
         const u64 prepared = renderer.PrepareTexture(job.data);
         if (prepared && g_tex_parallel) {
@@ -1955,10 +1974,12 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         if (g_sync_textures && !to_pool && g_tex_frame_ms < budget && !g_tex_requested.count(key)) {
             const auto start = std::chrono::steady_clock::now();
             render::TextureData data;
+            u64 sample = 0;
+            TextureSample(texture.address, level0_bytes, &sample); // Fase 61: antes da leitura (ver RunTextureJob)
             const bool ok = ReadGuestTexture(texture, &pixels, &data) && renderer.UploadTexture(key, data);
             if (ok) {
                 Tracked& state = tracked[key];
-                TextureSample(texture.address, level0_bytes, &state.sample);
+                state.sample = sample;
                 state.next_frame = g_texture_frame + 20 + (key >> 12) % 20;
                 ++g_vk_stats.textures_uploaded;
             } else {
@@ -1982,11 +2003,28 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         return kTexturePending;
     }
     if (!renderer.HasTexture(key)) {
+        const InlineTexClock clock{&g_tex_inline_ms}; // Fase 61 (medicao)
+        ++g_tex_inline_count;
         render::TextureData data;
-        if (ReadGuestTexture(texture, &pixels, &data) && renderer.UploadTexture(key, data)) {
+        u64 sample = 0;
+        TextureSample(texture.address, level0_bytes, &sample); // Fase 61: antes da leitura (ver RunTextureJob)
+        const auto t0 = std::chrono::steady_clock::now(); // Fase 61 (medicao)
+        const bool read = ReadGuestTexture(texture, &pixels, &data);
+        const auto t1 = std::chrono::steady_clock::now();
+        const bool sent = read && renderer.UploadTexture(key, data);
+        const auto t2 = std::chrono::steady_clock::now();
+        const double read_ms = std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                     send_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        if (read_ms + send_ms > 3.0) {
+            std::printf("[TEXTURA-NA-HORA] 0x%llx %ux%ux%u formato 0x%x tiling %u (%s): leitura %.1f ms, envio %.1f ms, %llu bytes\n",
+                        static_cast<unsigned long long>(texture.address), texture.width, texture.height, texture.depth, texture.format,
+                        texture.tiling, small_linear ? "linear pequena" : "sem threads", read_ms, send_ms,
+                        static_cast<unsigned long long>(data.bytes));
+        }
+        if (sent) {
             ++g_vk_stats.textures_uploaded;
             Tracked& state = tracked[key];
-            TextureSample(texture.address, level0_bytes, &state.sample);
+            state.sample = sample;
             state.next_frame = g_texture_frame + 20 + (key >> 12) % 20;
             if (small_linear) {
                 dynamic[key] = {hash_of(pixels), g_texture_frame};
@@ -1997,6 +2035,8 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
     } else if (small_linear) {
         Dynamic& state = dynamic[key];
         if (state.frame != g_texture_frame) {
+            const InlineTexClock clock{&g_tex_inline_check_ms}; // Fase 61 (medicao)
+            ++g_tex_inline_checks;
             state.frame = g_texture_frame;
             render::TextureData data;
             if (ReadGuestTexture(texture, &pixels, &data)) {
@@ -2008,9 +2048,41 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
             }
         }
     }
-    else if (g_texture_refresh.load(std::memory_order_relaxed)) {
+    else if (g_tex_replacing.count(key)) { // Fase 61: a versao nova ainda esta sendo lida: este draw tambem espera por ela
+        g_tex_pending_key = key;
+        return kTexturePending;
+    } else if (g_texture_refresh.load(std::memory_order_relaxed)) {
         Tracked& state = tracked[key];
-        if (g_texture_frame >= state.next_frame) {
+        if (g_texture_frame >= state.next_frame && g_tex_parallel && g_tex_wait_frame && g_async_textures.load(std::memory_order_relaxed)) {
+            // Fase 61: reescrita detectada vai para as threads de textura (em paralelo, a de render ajudando na espera do
+            // fim do frame) em vez de ser relida e destilada aqui, uma por vez: na troca do menu para a tela de carga o
+            // jogo reescreve ~25 texturas (duas de 4096x4096) no mesmo frame e eram 30-45 ms so nisso. O draw espera a
+            // versao nova no fim do frame, como uma textura nova: nunca sai com a velha (sem pop-in).
+            state.next_frame = g_texture_frame + 30;
+            u64 sample = 0;
+            if (TextureSample(texture.address, level0_bytes, &sample) && sample != state.sample) {
+                state.sample = sample;
+                TextureJob job;
+                job.key = key;
+                job.level0_bytes = level0_bytes;
+                job.texture = texture;
+                job.replace = true;
+                g_tex_replacing.insert(key);
+                {
+                    std::lock_guard lock(g_tex_mutex);
+                    g_tex_jobs.push_back(std::move(job));
+                }
+                g_tex_cv.notify_one();
+                static u32 logged = 0;
+                if (logged < 30) {
+                    ++logged;
+                    std::printf("[TEXTURA] 0x%llx %ux%u formato 0x%x: o jogo reescreveu o conteudo depois do primeiro envio; relida pelas threads\n",
+                                static_cast<unsigned long long>(texture.address), texture.width, texture.height, texture.format);
+                }
+                g_tex_pending_key = key;
+                return kTexturePending;
+            }
+        } else if (g_texture_frame >= state.next_frame) {
             state.next_frame = g_texture_frame + 30;
             u64 sample = 0;
             if (TextureSample(texture.address, level0_bytes, &sample) && sample != state.sample) {
@@ -2047,7 +2119,8 @@ double WaitFrameTextures() {
     for (;;) {
         DrainTextureResults(1e9);
         for (auto it = g_tex_frame_waiting.begin(); it != g_tex_frame_waiting.end();) {
-            it = renderer.HasTexture(*it) || g_tex_failed.count(*it) ? g_tex_frame_waiting.erase(it) : std::next(it);
+            it = (renderer.HasTexture(*it) && !g_tex_replacing.count(*it)) || g_tex_failed.count(*it) ? g_tex_frame_waiting.erase(it)
+                                                                                                     : std::next(it);
         }
         if (g_tex_frame_waiting.empty() || std::chrono::steady_clock::now() >= deadline) {
             break;
@@ -2095,6 +2168,15 @@ void DrainTextureResults(double budget_ms) {
             g_tex_done.pop_front();
         }
         job.data.data = job.pixels.data(); // o vetor mudou de dono: o ponteiro tambem
+        if (job.replace) { // Fase 61
+            g_tex_replacing.erase(job.key);
+            if (job.ok && renderer.UpdateTexture(job.key, job.data)) {
+                ++g_vk_stats.textures_rewritten;
+                ++g_tex_replaced;
+            }
+            g_tex_tracked[job.key] = {job.sample, g_texture_frame + 30};
+            continue;
+        }
         if (job.worker_upload ? job.ok : job.ok && renderer.UploadTexture(job.key, job.data, job.prepared)) {
             ++g_vk_stats.textures_uploaded;
             ++g_tex_async_uploaded;
@@ -2936,6 +3018,12 @@ bool TakeReadyAot(GamePairInfo& fresh) {
     ready.vformats = fresh.vformats;
     ready.vformat_count = fresh.vformat_count;
     fresh = std::move(ready);
+    if (g_ready_used < 200) { // Fase 61: quais pares usaram o pronto da abertura (diagnostico das cabecas transparentes)
+        std::printf("[AOT-PRONTO] par pair_%016llx_%016llx_%016llx (canon %016llx), entradas do PS %08x\n",
+                    static_cast<unsigned long long>(fresh.vs_hash), static_cast<unsigned long long>(fresh.ps_hash),
+                    static_cast<unsigned long long>(fresh.signature), static_cast<unsigned long long>(fresh.canon_signature),
+                    fresh.ps_input_mask);
+    }
     ++g_ready_used;
     return true;
 }
@@ -3288,8 +3376,19 @@ __declspec(noinline) u64 RawSample(const u8* p, u64 bytes) {
 }
 
 u64 FullHash(const u8* p, u64 bytes) {
-    u64 hash = 0xC2B2AE3D27D4EB4Full ^ bytes;
+    // Fase 61: 4 faixas independentes (a CPU faz as 4 multiplicacoes em paralelo; com uma faixa so, cada
+    // passo esperava o anterior). So e comparado com outro FullHash da mesma execucao.
+    u64 lane[4] = {0xC2B2AE3D27D4EB4Full ^ bytes, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull, 0x9E3779B97F4A7C15ull};
     u64 i = 0;
+    for (; i + 32 <= bytes; i += 32) {
+        u64 words[4];
+        std::memcpy(words, p + i, 32);
+        for (u32 k = 0; k < 4; ++k) {
+            lane[k] = (lane[k] ^ words[k]) * 0x9E3779B97F4A7C15ull;
+            lane[k] ^= lane[k] >> 32;
+        }
+    }
+    u64 hash = lane[0] ^ (lane[1] * 0xC2B2AE3D27D4EB4Full) ^ (lane[2] * 0x165667B19E3779F9ull) ^ (lane[3] * 0x27D4EB2F165667C5ull);
     for (; i + 8 <= bytes; i += 8) {
         u64 word;
         std::memcpy(&word, p + i, 8);
@@ -3301,6 +3400,31 @@ u64 FullHash(const u8* p, u64 bytes) {
     }
     return hash;
 }
+
+// Fase 61: orcamento de geometria por frame. Uma area nova traz centenas de buffers que completam os 3
+// frames de espera JUNTOS (e depois fazem a conferencia completa juntos, a cada 240 frames): 500 copias +
+// hashes no mesmo frame = 10 a 30 ms. Passou do orcamento, o que pode esperar espera: a promocao ao buffer
+// estatico (o draw vai pelo anel, como nos 3 primeiros frames) e a conferencia completa de um buffer cuja
+// amostra nao mudou. Nada deixa de ser desenhado.
+double g_geometry_budget_ms = 2.0; // --geometry-budget MS (0 = sem limite, como antes)
+u64 g_geometry_budget_frame = ~0ull;
+double g_geometry_spent_ms = 0;
+u64 g_geometry_deferred = 0, g_geometry_rechecks_deferred = 0;
+
+bool GeometryBudgetLeft() {
+    if (g_geometry_budget_frame != g_cache_frame) {
+        g_geometry_budget_frame = g_cache_frame;
+        g_geometry_spent_ms = 0;
+    }
+    return g_geometry_budget_ms <= 0 || g_geometry_spent_ms < g_geometry_budget_ms;
+}
+
+struct GeometrySpend {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~GeometrySpend() {
+        g_geometry_spent_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
+};
 
 bool SampleInner(u64 address, u64 bytes, u64* out) {
     __try {
@@ -3401,7 +3525,11 @@ bool ResolveGeometry(u64 address, u64 whole, u64 needed, u64 skip, u8* scratch, 
             entry.sampled_frame = g_cache_frame;
             entry.sampled = sample;
         }
-        if (entry.sample == sample && g_cache_frame - entry.checked_frame < 240) {
+        // Fase 61: a conferencia completa vem a cada 240 a 479 frames (espalhada pelo endereco: os buffers de uma
+        // area, promovidos no mesmo frame, nao conferem mais todos juntos) e, sem orcamento no frame, fica para depois
+        const u64 recheck_after = 240 + ((address >> 8) * 0x9E3779B1u >> 7) % 240;
+        if (entry.sample == sample && (g_cache_frame - entry.checked_frame < recheck_after || !GeometryBudgetLeft())) {
+            g_geometry_rechecks_deferred += g_cache_frame - entry.checked_frame >= recheck_after;
             *static_offset = entry.offset;
             stats.cache_hit_bytes += needed;
             ++stats.cache_hits;
@@ -3409,6 +3537,7 @@ bool ResolveGeometry(u64 address, u64 whole, u64 needed, u64 skip, u8* scratch, 
         }
         // amostra diferente, ou hora da conferencia completa
         const render::HitchClock hitch(render::HitchClock::kGeometry); // Fase 59
+        const GeometrySpend spend; // Fase 61
         u8* const work = room_for(entry.bytes);
         if (!SafeCopy(work, address, entry.bytes)) {
             return copy_to_ring();
@@ -3470,7 +3599,12 @@ bool ResolveGeometry(u64 address, u64 whole, u64 needed, u64 skip, u8* scratch, 
     }
     // Envia (ou reenvia maior): o trecho deste draw com folga de 50% sobre o que ja havia, sem
     // passar do que o descritor declara.
+    if (!GeometryBudgetLeft()) { // Fase 61: sem orcamento neste frame: este draw vai pelo anel, a promocao fica para depois
+        ++g_geometry_deferred;
+        return copy_to_ring();
+    }
     const render::HitchClock hitch(render::HitchClock::kGeometry); // Fase 59
+    const GeometrySpend spend; // Fase 61
     u64 extent = std::max(needed, entry.bytes); // sem folga: memoria alem do que os draws usam pode ser de outro buffer
     u8* const work = room_for(extent);
     if (!SafeCopy(work, address, extent)) {
@@ -5589,12 +5723,16 @@ void NoteFrameHitch(std::chrono::steady_clock::time_point submit_start) {
         std::printf("[ENGASGO] t=%.1fs frame %" PRIu64 ": intervalo %.1f ms, Submit %.1f ms | pipelines %u/%.1f ms, texturas %u/%.1f ms "
                     "(destile %u/%.1f ms), pares %u/%.1f ms, extrator %u/%.1f ms, DMA %u/%.1f ms | etapas do draw: estado %.1f, par %.1f, recursos %.1f, fila %.1f ms"
                     " | geometria nova %u/%.1f ms, alvos novos %u/%.1f ms, pares do pacote %u/%.1f ms"
-                    " | par: busca %.1f, retrato %.1f; recursos: geometria %.1f, constantes %.1f, texturas %.1f ms\n",
+                    " | par: busca %.1f, retrato %.1f; recursos: geometria %.1f, constantes %.1f, texturas %.1f ms"
+                    " | na hora: %u texturas novas %.1f ms, %u lineares conferidas %.1f ms\n",
                     std::chrono::duration<double>(now - hitch_epoch).count(), g_hitch.frames, interval_ms, submit_ms, kind_count[0],
                     kind_ms[0], kind_count[1], kind_ms[1], kind_count[3], kind_ms[3], kind_count[2], kind_ms[2], kind_count[4], kind_ms[4], kind_count[5], kind_ms[5],
                     lap_ms[0], lap_ms[1], lap_ms[2], lap_ms[3], kind_count[6], kind_ms[6], kind_count[7], kind_ms[7], kind_count[8], kind_ms[8],
-                    sub_ms[0], sub_ms[1], sub_ms[2], sub_ms[3], sub_ms[4]);
+                    sub_ms[0], sub_ms[1], sub_ms[2], sub_ms[3], sub_ms[4], g_tex_inline_count, g_tex_inline_ms, g_tex_inline_checks,
+                    g_tex_inline_check_ms);
     }
+    g_tex_inline_count = g_tex_inline_checks = 0;
+    g_tex_inline_ms = g_tex_inline_check_ms = 0;
 }
 
 // Fase 59: pegador de travadas. Passou de 100 ms sem o jogo comecar um quadro novo (depois dos primeiros
@@ -5608,6 +5746,8 @@ std::atomic<bool> g_stall_stacks{true};
 void StallWatchThread() {
     s64 reported_for = -1;
     u32 reports = 0;
+    const char* limit_env = std::getenv("LD_STALL_MS"); // Fase 61 (medicao): limite menor que 100 ms
+    const s64 limit_ms = limit_env ? std::max<s64>(30, std::atoll(limit_env)) : 100;
     for (;;) {
         Sleep(15);
         const s64 last = g_last_flip_submit_ms.load();
@@ -5615,7 +5755,7 @@ void StallWatchThread() {
             continue;
         }
         const s64 now = NowMs();
-        if (now - last >= 100) {
+        if (now - last >= limit_ms) {
             reported_for = last;
             ++reports;
             char reason[200];
@@ -6177,6 +6317,9 @@ void PrintStats() {
             std::printf("    Fase 59: %zu pares do pacote AOT registrados sem modulos; %" PRIu64 " ganharam os modulos no primeiro pipeline, "
                         "%" PRIu64 " falharam | %" PRIu64 " texturas descartadas por falta de uso\n",
                         g_lazy_sources.size(), lazy_loaded, lazy_failed, renderer.TexturesEvicted());
+            std::printf("    Fase 61 (orcamento de geometria %.1f ms/frame): %" PRIu64 " promocoes ao buffer estatico e %" PRIu64
+                        " conferencias completas adiadas para outro frame\n",
+                        g_geometry_budget_ms, g_geometry_deferred, g_geometry_rechecks_deferred);
         }
         {
             const auto gpl = renderer.GetGplStats();
@@ -6583,6 +6726,10 @@ void SetPreloadAllAot(bool enabled) {
 
 void SetPairBudget(double budget_ms) {
     g_pair_budget_ms = budget_ms;
+}
+
+void SetGeometryBudget(double budget_ms) { // Fase 61
+    g_geometry_budget_ms = budget_ms;
 }
 
 void SetLiveSyncBudget(double ms) {
