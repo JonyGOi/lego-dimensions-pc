@@ -8,6 +8,7 @@
 | [SDL 3](https://github.com/libsdl-org/SDL) | `externals/sdl3` (static library) | zlib |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | `externals/vulkan-headers` | Apache-2.0 / MIT |
 | Python (portable runtime, only in the distribution package) | `tools/python` in the installer | PSF License |
+| [7-Zip](https://www.7-zip.org) 26.03 (`7z.exe` + `7z.dll`, only in the distribution package: installs .rar / .7z mods) | `tools/7zip` in the installer | GNU LGPL, with the unRAR restriction on part of `7z.dll`, and BSD |
 | Microsoft Visual C++ Redistributable (DLLs in the package) | `build/` in the installer | Microsoft redistribution license |
 
 Each license text ships with the component in its folder. This project's license (GPL-2.0) is in [LICENSE](LICENSE).

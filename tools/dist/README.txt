@@ -91,7 +91,7 @@ TIPS
     (.zip, .rar, .7z)" puts the mod in the port's mods\ folder (or extract it there yourself, one folder per
     mod); clicking its name turns it on / off. Mods already in the shadPS4 mods folder (CUSA01176-mods,
     next to the game) or in CUSA01176\Mods work too. Accepted kinds: a .HDR + .DAT pack (e.g. made with
-    BrickVault) and loose files laid out like the game folder (data\, sce_sys\). The game and its
+    BrickVault), an edited game pack (e.g. PATCH.HDR + PATCH.DAT: only the files that changed are used) and loose files laid out like the game folder (data\, sce_sys\). The game and its
     original packs are not changed: the port just shows the game the mod's files instead of the original
     ones. The launcher prepares the mods when you click PLAY (the first time with a new mod takes a few
     seconds). A mod can only replace files the game already has; new files are left out (the launcher
