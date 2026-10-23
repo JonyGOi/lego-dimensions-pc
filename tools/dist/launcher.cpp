@@ -715,6 +715,8 @@ void PrepareMods() {
     if (const std::wstring dlc = GetText(g_dlc); !dlc.empty()) {
         args += L" --addcont " + Quote(dlc);
     }
+    // Fase 67: pacotes de mod com nome proprio pelo Anomaly (connorh315) ou pelo carregador antigo do port
+    args += ReadIni(L"anomaly", L"1") == L"1" ? L" --carregador anomaly" : L" --carregador port";
     g_step = ui::T(L"Preparando os mods...", L"Preparing the mods...");
     InvalidateCard();
     UpdateWindow(g_main);
@@ -809,6 +811,11 @@ void ModsMenu(HWND button) {
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"(também os da pasta do jogo: Mods / -mods)", L"(also the ones in the game folder: Mods / -mods)"));
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Fase 67: o carregador de mods Anomaly, de connorh315 (github.com/connorh315/anomaly), refeito dentro do port
+    const bool anomaly = ReadIni(L"anomaly", L"1") == L"1";
+    AppendMenuW(menu, MF_STRING | (anomaly ? MF_CHECKED : 0), 3,
+                ui::T(L"Anomaly mod loader (por connorh315)", L"Anomaly mod loader (by connorh315)"));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod (.zip, .rar, .7z)...", L"Install a mod (.zip, .rar, .7z)..."));
     AppendMenuW(menu, MF_STRING, 2, ui::T(L"Abrir a pasta de mods", L"Open the mods folder"));
     RECT r;
@@ -832,6 +839,12 @@ void ModsMenu(HWND button) {
     } else if (picked == 2) {
         fs::create_directories(ModsDir(), ec);
         ShellExecuteW(g_main, L"open", ModsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (picked == 3) {
+        WriteIni(L"anomaly", anomaly ? L"0" : L"1");
+        AppendLog(anomaly ? ui::T(L"Anomaly desligado: os pacotes de mod usam o carregador do port",
+                                  L"Anomaly off: mod packs use the port's own loader")
+                          : ui::T(L"Anomaly ligado (connorh315): os pacotes de mod entram na frente dos do jogo",
+                                  L"Anomaly on (connorh315): mod packs load ahead of the game's"));
     }
 }
 

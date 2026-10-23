@@ -99,4 +99,10 @@ TIPS
     PC mods (e.g. mods\my_mod\chars\collection.txt). If two mods clash, an ignorar.txt in one mod's
     folder, with one internal path per line (e.g. collectables\cheats.txt), makes the port skip those
     files from it. Figures (Toy Pad .bin files) are not mods: open them in the portal app.
+  - Anomaly mod loader, by connorh315 (github.com/connorh315/anomaly): built into the port and on by
+    default in the "Mods" menu ("Anomaly mod loader (by connorh315)"). Mod packs with their own name
+    (e.g. AllWorld.DAT) are opened by the game itself ahead of its own packs, as in shadPS4 with Anomaly,
+    and the text.csv / collection.txt of every mod add up. The game's main menu shows
+    "Anomaly (N loaded)". Turning it off brings back the port's older loader. Mod sound events made with
+    blank hashes or lines without the language (e.g. the Bart voice mod by connorh315) are fixed in the cache.
   - Use folder names without accents (the port receives paths in ANSI).

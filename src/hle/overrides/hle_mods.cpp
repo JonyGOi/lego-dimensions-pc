@@ -3,9 +3,11 @@
 
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
+#include "hle/overrides/hle_anomaly.h"
 #include "hle/overrides/hle_filesystem.h"
 
 namespace hle::mods {
@@ -35,6 +37,8 @@ int Setup(const stdfs::path& manifest) {
     }
     std::vector<stdfs::path> overlays;
     std::vector<fs::PackRedirect> redirects;
+    std::vector<std::string> anomaly_names;
+    std::map<std::string, stdfs::path> anomaly_files;
     std::string line;
     std::error_code ec;
     while (std::getline(in, line)) {
@@ -66,11 +70,29 @@ int Setup(const stdfs::path& manifest) {
             std::printf("[MODS] %s: %llu bytes de arquivos de mod\n", r.pack.c_str(),
                         static_cast<unsigned long long>(stdfs::file_size(r.tail, ec)));
             redirects.push_back(std::move(r));
+        } else if (f.size() == 4 && f[0] == "anomaly") {
+            // Fase 67: anomaly <TAB> nome <TAB> .HDR do mod <TAB> .DAT do mod (o Anomaly abre /app0/mods/<nome>)
+            const stdfs::path hdr = Utf8Path(f[2]);
+            const stdfs::path dat = Utf8Path(f[3]);
+            if (!stdfs::is_regular_file(hdr, ec) || !stdfs::is_regular_file(dat, ec)) {
+                std::printf("[MODS] Anomaly: %s sumiu da pasta de mods, fica de fora\n", f[1].c_str());
+                continue;
+            }
+            std::string key = f[1];
+            for (char& c : key) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            anomaly_files["mods/" + key + ".hdr"] = hdr;
+            anomaly_files["mods/" + key + ".dat"] = dat;
+            anomaly_names.push_back(f[1]);
+            std::printf("[MODS] Anomaly: pacote %s (%s)\n", f[1].c_str(), f[3].c_str());
         }
     }
-    const int active = static_cast<int>(overlays.size() + redirects.size());
+    const int active = static_cast<int>(overlays.size() + redirects.size() + anomaly_names.size());
     fs::SetModOverlays(std::move(overlays));
     fs::SetPackRedirects(std::move(redirects));
+    fs::SetAnomalyFiles(std::move(anomaly_files));
+    anomaly::SetMods(std::move(anomaly_names));
     return active;
 }
 

@@ -95,4 +95,10 @@ DICAS
     mods\meu_mod\chars\collection.txt). Se dois mods brigarem, um ignorar.txt na pasta de um deles, com um
     caminho interno por linha (ex. collectables\cheats.txt), faz o port nao usar aqueles arquivos dele.
     Figuras (.bin do Toy Pad) nao sao mods: abra no app do portal.
+  - Anomaly mod loader, de connorh315 (github.com/connorh315/anomaly): vem embutido no port e fica ligado
+    no menu "Mods" ("Anomaly mod loader (por connorh315)"). Os pacotes de mod com nome proprio (ex.
+    AllWorld.DAT) sao abertos pelo proprio jogo na frente dos pacotes dele, como no shadPS4 com o Anomaly,
+    e os text.csv / collection.txt de todos os mods se somam. No menu principal do jogo aparece
+    "Anomaly (N loaded)". Desligando, volta o carregador antigo do port. Eventos de som de mod feitos com
+    hashes em branco ou falas sem o idioma (ex. o mod de voz do Bart, de connorh315) sao consertados no cache.
   - Use pastas com nomes sem acento (o port recebe os caminhos em ANSI).

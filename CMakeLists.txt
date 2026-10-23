@@ -70,6 +70,7 @@ add_executable(lego_dimensions
     src/hle/overrides/hle_pad_sdl.cpp
     src/hle/overrides/hle_radar.cpp
     src/hle/overrides/hle_mods.cpp
+    src/hle/overrides/hle_anomaly.cpp
     src/hle/overrides/hle_savedata.cpp
     src/hle/overrides/hle_offline.cpp
     src/render/vulkan_backend.cpp

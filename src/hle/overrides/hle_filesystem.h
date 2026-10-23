@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -120,6 +121,9 @@ struct PackRedirect {
     std::filesystem::path tail;      // bytes dos mods
 };
 void SetPackRedirects(std::vector<PackRedirect> redirects);
+// Fase 67: pasta /app0/mods virtual do Anomaly: "mods/<nome>.hdr" / "mods/<nome>.dat" (minusculas) -> arquivo do
+// mod na pasta de mods do port.
+void SetAnomalyFiles(std::map<std::string, std::filesystem::path> files);
 
 // Mounts criados em tempo de execucao (saves). SetMount substitui um prefixo ja existente.
 void SetMount(const std::string& prefix, const std::filesystem::path& host, bool read_only);

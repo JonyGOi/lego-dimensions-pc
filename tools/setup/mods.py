@@ -282,6 +282,131 @@ def add_files_cc4(block, items):
     return out, added
 
 
+def fnv1_upper(text):
+    """Hash dos blocos TVES dos .sound_event: FNV-1 de 32 bits (multiplica e depois xor) do nome em maiusculas."""
+    h = 0x811C9DC5
+    for ch in text.upper().encode('latin-1', errors='replace'):
+        h = ((h * 16777619) & 0xFFFFFFFF) ^ ch
+    return h
+
+
+def fix_sound_event(data, stem):
+    """Um .sound_event feito por ferramenta de mod (ex. o mod de voz do Bart, de connorh315) vem com os hashes dos
+    blocos TVES em ff ff ff ff; o jogo acha o evento e cada fala por esses hashes, e o evento carrega mas nunca toca.
+    Bloco: 'TVES', u32 1, u32 tipo, u32 hash. Tipo 8 = o evento (hash do nome do arquivo); tipo 0x0a = uma fala (hash
+    do nome dela, que esta no bloco de tipo 6 seguinte); os outros tipos so precisam de um valor unico."""
+    out = bytearray(data)
+    starts = [m.start() for m in re.finditer(b'TVES', data)]
+    changed = False
+    for k, at in enumerate(starts):
+        if at + 16 > len(out) or out[at + 12:at + 16] != b'\xff\xff\xff\xff':
+            continue
+        kind = struct.unpack_from('>I', out, at + 8)[0]
+        if kind == 8:
+            value = fnv1_upper(stem)
+        elif kind == 0x0a:
+            value = None
+            for nxt in starts[k + 1:]:
+                if struct.unpack_from('>I', out, nxt + 8)[0] == 6 and nxt + 31 <= len(out):
+                    size = out[nxt + 30]
+                    value = fnv1_upper(out[nxt + 31:nxt + 31 + size].decode('latin-1'))
+                    break
+            if value is None:
+                value = fnv1_upper('%s#%d' % (stem, at))
+        else:
+            value = fnv1_upper('%s#%d' % (stem, at))
+        struct.pack_into('>I', out, at + 12, value)
+        changed = True
+    # falas (Audio/VO/DX/...) como as do jogo: caminho terminado em _$L (onde o jogo poe o idioma: _eng, _fre...) e a
+    # marca de fala localizada (09 no byte +0x43 do bloco de tipo 6; o mod traz 01 e um caminho sem _$L)
+    starts = [m.start() for m in re.finditer(b'TVES', out)]
+    pieces = [bytes(out[:starts[0]])] + [bytes(out[a:b]) for a, b in zip(starts, starts[1:] + [len(out)])] if starts else []
+    for i in range(1, len(pieces)):
+        blk = bytearray(pieces[i])
+        if len(blk) < 0x45 or struct.unpack_from('>I', blk, 8)[0] != 6:
+            continue
+        at = blk.find(b'Audio/VO/DX/')
+        if at < 1:
+            continue
+        size = blk[at - 1]
+        path = bytes(blk[at:at + size])
+        if path.endswith(b'_$L') or size + 3 > 255:
+            continue
+        blk[at - 1:at + size] = bytes([size + 3]) + path + b'_$L'
+        if blk[0x43] == 0x01 and blk[0x44] == 0x09:
+            blk[0x43] = 0x09
+        pieces[i] = bytes(blk)
+        changed = True
+    if pieces:
+        out = bytearray(b''.join(pieces))
+        struct.pack_into('>I', out, 0, len(out) - 4)
+    return bytes(out) if changed else None
+
+
+def fix_sound_events(label, name, hdr, dat, cache, all_names):
+    """Conserta os .sound_event de um pacote de mod do Anomaly (ver fix_sound_event): os bytes novos vao para uma
+    cauda no cache e uma copia da tabela aponta para eles (o .DAT do mod nao muda). Devolve a linha 'pacote' do
+    manifesto, ou None se nada mudou."""
+    with open(hdr, 'rb') as f:
+        block = bytearray(f.read())
+    if block[4:8] != b'.CC4':
+        return None
+    try:
+        positions, archive_id, version = toc_positions(bytes(block))
+        rows = nu2toc.read_new(bytes(block))
+    except Exception:
+        return None
+    base = os.path.getsize(dat)
+    tail = bytearray()
+    fixed = 0
+    with open(dat, 'rb') as f:
+        for row_name, usize, zsize, offset, packed in rows:
+            if packed or not row_name.lower().endswith('.sound_event') or row_name.upper() not in positions:
+                continue
+            f.seek(offset)
+            new = fix_sound_event(f.read(zsize), os.path.splitext(os.path.basename(row_name))[0])
+            if not new:
+                continue
+            while len(tail) % 16:
+                tail.append(0)
+            write_entry(block, positions[row_name.upper()], archive_id, version, base + len(tail), len(new), len(new), False)
+            tail += new
+            fixed += 1
+    # com o _$L, o jogo pede dx_..._eng.ogg (ou _fre, _ger... conforme o idioma); o mod so traz dx_....ogg: a tabela
+    # do cache ganha os nomes com cada sufixo do jogo, apontando para os mesmos bytes do .DAT do mod
+    suffixes = sorted({n.rsplit('_', 1)[1][:-4] for n in all_names
+                       if n.startswith('\\AUDIO\\VO\\DX\\') and re.search(r'_[A-Z]{3}\.OGG$', n)})
+    have = {r[0].upper() for r in rows}
+    items = []
+    for row_name, usize, zsize, offset, packed in rows if fixed else []:
+        upper = row_name.upper()
+        if upper.startswith('\\AUDIO\\VO\\DX\\') and upper.endswith('.OGG') and not re.search(r'_[A-Z]{3}\.OGG$', upper):
+            for s in suffixes:
+                alias = '%s_%s.ogg' % (row_name[:-4], s.lower())
+                if alias.upper() not in have and alias.upper() not in all_names:
+                    items.append((alias, offset, zsize, usize, bool(packed)))
+    lines_named = 0
+    if items:
+        try:
+            block, added = add_files_cc4(block, items)
+            lines_named = len(added) // max(len(suffixes), 1)
+        except ValueError as e:
+            say('AVISO ' + T('%s: nomes de idioma das falas nao entraram (%s)' % (label, e), '%s: language names for the lines were not added (%s)' % (label, e)))
+    if not fixed:
+        return None
+    cache_hdr = os.path.join(cache, 'anomaly_%s.HDR' % name)
+    cache_tail = os.path.join(cache, 'anomaly_%s.tail' % name)
+    with open(cache_hdr, 'wb') as f:
+        f.write(block)
+    with open(cache_tail, 'wb') as f:
+        f.write(tail)
+    say('SONS ' + T('%s: %d evento(s) de som consertados (hashes e falas com idioma); %d fala(s) com os nomes %s' % (
+                        label, fixed, lines_named, ', '.join('_' + s.lower() for s in suffixes)),
+                    '%s: %d sound event(s) fixed (hashes and localized lines); %d line(s) with the names %s' % (
+                        label, fixed, lines_named, ', '.join('_' + s.lower() for s in suffixes))))
+    return 'pacote\t%s\t%s\t%s\t%s\t%d\t%s' % (name.upper(), hdr, cache_hdr, dat, base, cache_tail)
+
+
 def csv_row(line):
     import csv
     return next(csv.reader([line]), [])
@@ -354,7 +479,7 @@ def loose_files(folder, top_dirs):
 
 
 # ---------------------------------------------------------------- principal
-def prepare(root, app0, patch, mods_dir, cache, addcont):
+def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
     os.makedirs(cache, exist_ok=True)
     manifest = os.path.join(cache, 'mods.txt')
     sources = mod_sources(mods_dir, app0)
@@ -362,6 +487,7 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
     stamp = hashlib.sha1()
     with open(os.path.abspath(__file__), 'rb') as f:  # um mods.py novo (atualizacao do port) refaz o cache
         stamp.update(f.read())
+    stamp.update(loader.encode())
 
     def stamp_file(path):
         st = os.stat(path)
@@ -438,7 +564,20 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
                              '%s: the mod\'s %s was skipped (it describes the mod author\'s game version; replacing it crashes the game)' % (label, name)))
             return
         wanted[(scope, upper)] = (order, label, name, data, usize, packed)
+    anomaly = []  # (rotulo, nome no /app0/mods, .HDR, .DAT)
     for source, label, dat, folder in mod_files:
+        stem = os.path.splitext(os.path.basename(dat))[0]
+        if loader == 'anomaly' and not (GAME_PACK.match(stem) and stem.upper() in packs):
+            # Fase 67: pacote proprio (AllWorld, BARTVOICE...) vai inteiro para o Anomaly, na frente dos do jogo
+            hdr = next((os.path.join(os.path.dirname(dat), f) for f in os.listdir(os.path.dirname(dat))
+                        if f.lower() == (stem + '.hdr').lower()), None)
+            taken = {a[1].lower() for a in anomaly}
+            name, n = stem, 2
+            while name.lower() in taken:
+                name, n = '%s_%d' % (stem, n), n + 1
+            if hdr:
+                anomaly.append((label, name, hdr, dat, fix_sound_events(label, name, hdr, dat, cache, all_names)))
+            continue
         try:
             rows = nu2toc.read_toc(dat)
         except Exception as e:
@@ -495,6 +634,11 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
 
     lines = ['# chave ' + key]
     lines += ['overlay\t%s' % o for o in overlays]
+    for label, name, hdr, dat, fixed in anomaly:
+        lines.append('anomaly\t%s\t%s\t%s' % (name, hdr, dat))
+        if fixed:
+            lines.append(fixed)
+        say('MOD ' + T('%s: pacote inteiro pelo Anomaly (connorh315)' % label, '%s: whole pack through Anomaly (connorh315)' % label))
     found = set()
     new_names = {k for k in wanted if k[0] is None and k[1] not in all_names}
     for pack, (hdr_path, dat_path) in sorted(packs.items()):
@@ -521,13 +665,16 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
             found.add(key_)
         if extra:
             items = []
+            stored = {}  # id dos bytes -> posicao na cauda (as copias de idioma de uma fala usam os mesmos bytes)
             for key_ in extra:
                 _order, label, name, data, usize, packed = wanted[key_]
-                while len(tail) % 16:
-                    tail.append(0)
-                items.append((name, base + len(tail), len(data), usize, packed))
-                index_rows.append((name, usize, len(data), len(tail), 2 if packed else 0))
-                tail += data
+                if id(data) not in stored:
+                    while len(tail) % 16:
+                        tail.append(0)
+                    stored[id(data)] = len(tail)
+                    tail += data
+                items.append((name, base + stored[id(data)], len(data), usize, packed))
+                index_rows.append((name, usize, len(data), stored[id(data)], 2 if packed else 0))
             try:
                 block, added = add_files_cc4(block, items)
                 found.update((None, n.upper()) for n in added)
@@ -546,7 +693,7 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
             pass
         lines.append('pacote\t%s\t%s\t%s\t%s\t%d\t%s' % (pack, hdr_path, cache_hdr, dat_path, base, cache_tail))
     per_mod = {}  # rotulo -> [trocados, novos, de fora]
-    for label in [m[1] for m in mod_files]:
+    for label in [m[1] for m in mod_files if m[1] not in {a[0] for a in anomaly}]:
         per_mod[label] = [0, 0, 0]
     for key_, (_order, label, *_rest) in wanted.items():
         if _order[0] < 0:
@@ -704,6 +851,8 @@ def main():
     parser.add_argument('--mods', help='pasta dos mods (padrao: <root>/mods)')
     parser.add_argument('--cache', help='saida (padrao: <root>/assets/mods_cache)')
     parser.add_argument('--addcont', default='', help='pasta das DLCs (uma subpasta por DLC)')
+    parser.add_argument('--carregador', default='anomaly', choices=('anomaly', 'port'),
+                        help='pacotes de mod com nome proprio: pelo Anomaly (connorh315, padrao) ou pelo carregador do port')
     args = parser.parse_args()
     LANG = 'en' if args.lingua.lower().startswith('en') else 'pt'
     try:
@@ -716,7 +865,7 @@ def main():
         root = os.path.abspath(args.root)
         return prepare(root, os.path.abspath(args.app0), os.path.abspath(args.patch) if args.patch else '',
                        os.path.abspath(args.mods or os.path.join(root, 'mods')), os.path.abspath(args.cache or os.path.join(root, 'assets', 'mods_cache')),
-                       os.path.abspath(args.addcont) if args.addcont else '')
+                       os.path.abspath(args.addcont) if args.addcont else '', args.carregador)
     except OSError as e:
         say('ERRO %s' % e)
         return 1

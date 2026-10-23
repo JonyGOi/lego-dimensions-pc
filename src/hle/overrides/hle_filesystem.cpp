@@ -35,6 +35,7 @@ std::atomic<u64> g_dat_opened{0};
 std::vector<std::filesystem::path> g_overlays;      // pastas no formato do /app0, a primeira vence
 std::map<std::string, PackRedirect> g_redirect_hdr;  // "data/chunk1/patch.hdr" -> pacote com arquivos de mod
 std::map<std::string, PackRedirect> g_redirect_dat;  // "data/chunk1/patch.dat" -> idem
+std::map<std::string, std::filesystem::path> g_anomaly_files; // Fase 67: "mods/allworld.dat" -> arquivo do mod
 
 std::string LowerKey(const std::filesystem::path& rel) {
     const std::u8string generic = rel.generic_u8string();
@@ -290,6 +291,11 @@ void SetPackRedirects(std::vector<PackRedirect> redirects) {
     }
 }
 
+void SetAnomalyFiles(std::map<std::string, std::filesystem::path> files) {
+    std::lock_guard lock(g_mounts_mutex);
+    g_anomaly_files = std::move(files);
+}
+
 namespace {
 // Fase 64: o arquivo resolvido e um pacote com arquivos de mod? (tabela do cache / .DAT com cauda)
 void ApplyPackRedirect(Resolved& r) {
@@ -359,6 +365,16 @@ Resolved Resolve(const char* guest_path) {
         r.host = full;
         r.mounted = true;
         r.read_only = m.read_only;
+        if (m.prefix == "/app0" && !g_anomaly_files.empty()) {
+            // Fase 67: pacote de mod do Anomaly (/app0/mods/<nome>.HDR / .DAT)
+            if (const auto it = g_anomaly_files.find(LowerKey(rel)); it != g_anomaly_files.end()) {
+                r.host = it->second;
+                if (!g_redirect_hdr.empty()) {
+                    ApplyPackRedirect(r); // pacote de mod com arquivos consertados no cache (ex. hashes dos sons)
+                }
+                return r;
+            }
+        }
         if (m.prefix == "/app0") {
             // Fase 64 (mods de arquivos soltos) e Fase 58 (atualizacao separada): o primeiro que tiver o arquivo vence
             if (!g_overlays.empty() || !g_app0_patch.empty()) {
