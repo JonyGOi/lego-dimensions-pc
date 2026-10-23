@@ -691,7 +691,22 @@ def hidden_figure_pack(char, info, tocs, packs, all_names, cache):
     for name in sorted(n for n in all_names if n.startswith(donor) and n not in skip):
         add(target + name[len(donor):].lower(), name)
     base = target + 'chars\\minifig\\%s\\%s' % (char, char)
-    if not (add(base + '.cd', info['cd'] + '.cd') and add(base + '.cd.res', info['cd'] + '.cd.res')):
+    if not add(base + '.cd', info['cd'] + '.cd'):
+        return None
+    # Fase 67: o .cd de inimigo do personagem so cita os conjuntos de animacao das fases dele; um deles vira o
+    # SharedAnims de toda figura (andar, pular, lutar), senao a figura fica em T. O nome novo e completado com
+    # zeros no mesmo espaco, para nenhum tamanho do arquivo mudar.
+    cd = files[-1]
+    if len(cd) != 2:
+        return None  # .cd comprimido: nao da para trocar o nome
+    cd_data = cd[1]
+    for old, new in info.get('animacoes', []):
+        old_b, new_b = old.encode('latin-1'), new.encode('latin-1')
+        if len(new_b) > len(old_b) or cd_data.count(old_b) != 1:
+            return None
+        cd_data = cd_data.replace(old_b, new_b + b'\0' * (len(old_b) - len(new_b)))
+    files[-1] = (cd[0], cd_data)
+    if not add(base + '.cd.res', info['cd'] + '.cd.res'):
         return None
     for extra in info['extras']:
         add(target + extra.lstrip('\\'), extra)
