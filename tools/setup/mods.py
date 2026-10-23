@@ -24,6 +24,7 @@ Linhas: MOD <nome>: <n> arquivos trocados, SOBREPOSICAO <pasta>, INSTALADO <past
 import argparse
 import glob
 import hashlib
+import json
 import os
 import re
 import struct
@@ -318,7 +319,7 @@ def fix_sound_event(data, stem):
         struct.pack_into('>I', out, at + 12, value)
         changed = True
     # falas (Audio/VO/DX/...) como as do jogo: caminho terminado em _$L (onde o jogo poe o idioma: _eng, _fre...) e a
-    # marca de fala localizada (09 no byte +0x43 do bloco de tipo 6; o mod traz 01 e um caminho sem _$L)
+    # marca de fala localizada (09 logo depois do nome da fala no bloco de tipo 6; o mod traz 01 e um caminho sem _$L)
     starts = [m.start() for m in re.finditer(b'TVES', out)]
     pieces = [bytes(out[:starts[0]])] + [bytes(out[a:b]) for a, b in zip(starts, starts[1:] + [len(out)])] if starts else []
     for i in range(1, len(pieces)):
@@ -333,8 +334,10 @@ def fix_sound_event(data, stem):
         if path.endswith(b'_$L') or size + 3 > 255:
             continue
         blk[at - 1:at + size] = bytes([size + 3]) + path + b'_$L'
-        if blk[0x43] == 0x01 and blk[0x44] == 0x09:
-            blk[0x43] = 0x09
+        # depois do nome da fala (tamanho em +30, texto em +31): 01 01 00 00 01 01 <marca> 09; o jogo usa 09
+        flag = 31 + blk[30] + 6
+        if flag + 1 < len(blk) and blk[flag] == 0x01 and blk[flag + 1] == 0x09:
+            blk[flag] = 0x09
         pieces[i] = bytes(blk)
         changed = True
     if pieces:
@@ -343,68 +346,369 @@ def fix_sound_event(data, stem):
     return bytes(out) if changed else None
 
 
-def fix_sound_events(label, name, hdr, dat, cache, all_names):
-    """Conserta os .sound_event de um pacote de mod do Anomaly (ver fix_sound_event): os bytes novos vao para uma
-    cauda no cache e uma copia da tabela aponta para eles (o .DAT do mod nao muda). Devolve a linha 'pacote' do
-    manifesto, ou None se nada mudou."""
-    with open(hdr, 'rb') as f:
-        block = bytearray(f.read())
-    if block[4:8] != b'.CC4':
-        return None
-    try:
-        positions, archive_id, version = toc_positions(bytes(block))
-        rows = nu2toc.read_new(bytes(block))
-    except Exception:
-        return None
-    base = os.path.getsize(dat)
-    tail = bytearray()
-    fixed = 0
+LAYERED = ('\\STUFF\\TEXT\\TEXT.CSV', '\\CHARS\\COLLECTION.TXT')  # sem hash: lidos em camadas (Anomaly) pelo nome
+
+
+def build_pack(files):
+    """Monta um pacote .CC4 (versao 11 do LEGO Dimensions, como os de mod): files = [(caminho '\\a\\b.ext', bytes[, tamanho real, comprimido])].
+    Devolve (bytes do .HDR, bytes do .DAT). Formato (lido no jogo e no BrickVault de connorh315):
+      .HDR: u32 tamanho-4, '.CC40TAD', -11, 2, arquivos, nos, tamanho dos nomes, nomes (minusculas, \\0 e alinhados a
+            2), nos de 12 bytes (ultimo filho, irmao anterior, nome, pai, indice do arquivo), -11, arquivos, entradas de
+            16 bytes (offset u64, guardado, real), hashes FNV-1a (ordem crescente; 0 = nome por extenso, lido em
+            camadas), lista dos nomes por extenso e o rodape ROTV;
+      .DAT: u32 posicao codificada da tabela, u32 tamanho dela, dados a partir de 0x108 (cada um com 24 bytes antes) e
+            a copia da tabela alinhada a 256."""
+    seen, unique = set(), []
+    for item in files:
+        path, data = item[0], item[1]
+        usize, packed = (item[2], item[3]) if len(item) > 2 else (len(data), False)
+        if path.upper() not in seen:
+            seen.add(path.upper())
+            unique.append((path, data, usize, packed))
+    dat = bytearray(0x108)
+    stored = {}  # id dos bytes -> offset (nomes diferentes com os mesmos bytes ficam com uma copia so)
+    entries = []
+    for path, data, usize, packed in unique:
+        if id(data) not in stored:
+            # 24 bytes antes de cada arquivo: guardado, 0, real, 0, metodo (3 = DFLT, o dos comprimidos dos pacotes
+            # do jogo), 0; o jogo le o metodo daqui
+            dat += struct.pack('<IIIIII', len(data), 0, usize, 0, 3 if packed else 0, 0)
+            stored[id(data)] = len(dat)
+            dat += data
+        crc = 0 if path.upper() in LAYERED else nu2toc.fnv(path.lstrip('\\'), 32, 1677619)
+        entries.append((crc, path, stored[id(data)], len(data), usize, packed))
+    entries.sort(key=lambda e: (e[0], e[1].upper()))
+
+    # arvore de nomes: pre-ordem, filhos na ordem em que aparecem (a dos hashes)
+    root = {'name': None, 'children': [], 'index': 0, 'file': 0}
+    for file_index, (crc, path, offset, size, usize, packed) in enumerate(entries):
+        node = root
+        for part in path.lstrip('\\').split('\\'):
+            child = next((c for c in node['children'] if c['name'] == part.lower()), None)
+            if not child:
+                child = {'name': part.lower(), 'children': [], 'file': 0, 'parent': node}
+                node['children'].append(child)
+            node = child
+        node['file'] = file_index
+    flat = [root]
+
+    def walk(node):
+        for child in node['children']:
+            child['index'] = len(flat)
+            flat.append(child)
+            walk(child)
+    walk(root)
+    names = bytearray()
+    records = bytearray()
+    for node in flat:
+        final_child = node['children'][-1]['index'] if node['children'] else 0
+        if node is root:
+            records += struct.pack('>HHiHH', final_child, 0, -1, 0, 0)
+            continue
+        siblings = node['parent']['children']
+        position = siblings.index(node)
+        previous = siblings[position - 1]['index'] if position else 0
+        records += struct.pack('>HHiHH', final_child, previous, len(names), node['parent']['index'], node['file'])
+        names += node['name'].encode('latin-1') + b'\0\0'  # como no PATCH do jogo e no BrickVault
+    names += b'\0\0'
+    hdr = bytearray(b'\0\0\0\0.CC40TAD')
+    hdr += struct.pack('>iiIII', -11, 2, len(entries), len(flat), len(names))
+    hdr += names + records + bytes(4)  # 4 bytes fixos depois dos nos
+    hdr += struct.pack('>iI', -11, len(entries))
+    for crc, path, offset, size, usize, packed in entries:
+        hdr += struct.pack('>QII', offset, size, usize | (0x80000000 if packed else 0))
+    for e in entries:
+        hdr += struct.pack('>I', e[0])
+    clashes = [e for e in entries if e[0] == 0]
+    clash_block = bytearray()
+    for k, (crc, path, offset, size, usize, packed) in enumerate(clashes):
+        text = path.lstrip('\\').lower().encode('latin-1')
+        clash_block += text + b'\0' + (b'\0' if len(text) % 2 == 0 else b'')
+        clash_block += struct.pack('>H', k)
+    hdr += struct.pack('>II', len(clashes), len(clash_block)) + clash_block
+    hdr += b'additionalcontent/opus_beetlejuice\0' + bytes(16)  # como nos pacotes de mod do BrickVault
+    count = len(entries)
+    hdr += b'ROTV' + struct.pack('>I', count) + bytes(16 * count)
+    hdr += b'ROTV' + struct.pack('>I', count) + bytes(16 * count)
+    hdr += b'ROTV' + struct.pack('>I', count) + bytes(count)
+    hdr += b'ROTV' + struct.pack('>I', count) + b''.join(struct.pack('>I', e[3]) for e in entries)
+    struct.pack_into('>I', hdr, 0, len(hdr) - 4)
+    header_at = (len(dat) + 0xFF) & ~0xFF
+    dat += bytes(header_at - len(dat))
+    dat += hdr
+    struct.pack_into('<II', dat, 0, (((header_at - 0x100) >> 8) ^ 0xFFFFFFFF) & 0xFFFFFFFF, len(hdr))
+    return bytes(hdr), bytes(dat)
+
+
+def read_pack_files(dat):
+    """[(nome, bytes guardados, comprimido, tamanho real)] de um pacote."""
+    out = []
     with open(dat, 'rb') as f:
-        for row_name, usize, zsize, offset, packed in rows:
-            if packed or not row_name.lower().endswith('.sound_event') or row_name.upper() not in positions:
-                continue
+        for name, usize, zsize, offset, packed in nu2toc.read_toc(dat):
             f.seek(offset)
-            new = fix_sound_event(f.read(zsize), os.path.splitext(os.path.basename(row_name))[0])
-            if not new:
-                continue
-            while len(tail) % 16:
-                tail.append(0)
-            write_entry(block, positions[row_name.upper()], archive_id, version, base + len(tail), len(new), len(new), False)
-            tail += new
-            fixed += 1
-    # com o _$L, o jogo pede dx_..._eng.ogg (ou _fre, _ger... conforme o idioma); o mod so traz dx_....ogg: a tabela
-    # do cache ganha os nomes com cada sufixo do jogo, apontando para os mesmos bytes do .DAT do mod
+            out.append((name, f.read(zsize), bool(packed), usize))
+    return out
+
+
+def game_file(tocs, packs, upper_name, raw=False):
+    """Bytes de um arquivo do jogo, do pacote de maior prioridade que o tem; None se nao achar. Sem raw, so os nao
+    comprimidos; com raw, devolve (bytes guardados, tamanho real, comprimido): os blocos comprimidos comecam com o
+    proprio metodo (DFLT...) e podem ir assim para outro pacote, marcados como comprimidos."""
+    order = sorted(tocs, key=lambda p: (0 if p == 'PATCH' else 1 if p.startswith('PATCH') and not p.startswith('PATCHSTREAM')
+                                        else 2 if p.startswith('PATCHSTREAM') else 3, p))
+    for pack in order:
+        block, positions, archive_id, version = tocs[pack]
+        pos = positions.get(upper_name)
+        if pos is None:
+            continue
+        if block[4:8] == b'.CC4':
+            offset, zsize, usize = struct.unpack_from('>QII', block, pos)
+            packed = (offset >> 56) if archive_id <= -13 else usize >> 31
+            offset &= 0xFFFFFFFFFFFFFF
+            usize &= 0x7FFFFFFF
+        else:
+            high, zsize, usize, low = struct.unpack_from('<IIII', block, pos)
+            offset, packed = (high << 8) | (low >> 24), low & 0xFFFFFF
+        if packed and not raw:
+            continue
+        with open(packs[pack][1], 'rb') as f:
+            f.seek(offset)
+            data = f.read(zsize)
+        return (data, usize, bool(packed)) if raw else data
+    return None
+
+
+def camel_name(files, lower):
+    """Grafia de um nome de personagem como aparece nos arquivos (ex. BartSimpson em DX_BartSimpson_Exit)."""
+    counts = {}
+    pattern = re.compile(re.escape(lower.encode()), re.IGNORECASE)
+    for item in files:
+        for m in pattern.finditer(item[1]):
+            word = m.group()
+            if word != word.lower() and word != word.upper():
+                counts[word] = counts.get(word, 0) + 1
+    return max(counts, key=counts.get).decode() if counts else lower.capitalize()
+
+
+def merge_char_txt(game_txt, mod_txt, renames):
+    """.txt de personagem: o do jogo (versao 1.24) com o que o mod acrescenta (linhas novas, e sfx_* trocados);
+    linhas que o jogo deixa comentadas (ex. //baddie) nao entram. renames: (antigo, novo) aplicados no do mod."""
+    text = game_txt.decode('latin-1')
+    newline = '\r\n' if '\r\n' in text else '\n'
+    lines = text.split(newline)
+    mod_text = mod_txt.decode('latin-1')
+    for old, new in renames:
+        mod_text = re.sub(re.escape(old), new, mod_text, flags=re.IGNORECASE)
+    have = {l.strip().lower() for l in lines}
+    commented = [l.strip().lstrip('/').strip().lower() for l in lines if l.strip().startswith('//')]
+    added = []
+    for raw in mod_text.replace('\r\n', '\n').split('\n'):
+        line = raw.strip()
+        if not line or line.startswith('//') or line.lower() in have:
+            continue
+        key = line.split()[0].lower()
+        if any(c.startswith(line.lower()) or c.split()[:1] == [key] and key not in ('ability',) for c in commented):
+            continue
+        if key.startswith('sfx_'):
+            lines = [l for l in lines if not (l.strip().split()[:1] == [line.split()[0]])]
+        added.append(raw.rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return (newline.join(lines + ['', '// Fase 67: linhas do mod'] + added) + newline).encode('latin-1')
+
+
+def rebuild_mod_pack(label, name, dat, cache, tocs, packs, all_names):
+    """Consertos de compatibilidade de um pacote de mod do Anomaly; se algo mudar, um pacote novo (cache\\anomaly) e
+    montado com os arquivos do mod consertados e os que faltam, e o Anomaly abre ele no lugar do original (que nao
+    muda). Devolve (.HDR, .DAT) do pacote novo, ou None.
+      - reacoes de voz emprestadas de outro personagem de nome do mesmo tamanho (o mod de voz do Bart, de connorh315,
+        usa as habilidades AudioReactionData/TriggersWonderWoman, que o jogo ja registra com as falas da Mulher-Maravilha):
+        viram as do proprio personagem, com o pacote global que as registra no boot (feito do da Mulher-Maravilha)
+        e o .txt do personagem com AudioReactionData<Nome>;
+      - eventos de som com hashes em branco e falas sem o idioma (fix_sound_event) e os .ogg com _eng, _fre...;"""
+    files = read_pack_files(dat)
+    changed = []
+    out = []
+    reaction = re.compile(r'\\CHARCACHE\\(\w+)\\ABILITIES\\CHARACTERS\\AUDIOREACTIONS_AUTOGENERATED\\(\w+)AUDIOREACTIONS~AUDIOREACTION(DATA|TRIGGERS)(\w+)\.ABILITY$')
+    borrowed = {}  # personagem -> personagem de quem as reacoes foram copiadas
+    for row_name, data, packed, usize in files:
+        m = reaction.match(row_name.upper())
+        if m and m.group(2) == m.group(4) and m.group(1) != m.group(2) and len(m.group(1)) == len(m.group(2)):
+            borrowed[m.group(1).lower()] = m.group(2).lower()
+    renames = []
+    for char, other in borrowed.items():
+        char_camel, other_camel = camel_name(files, char), None
+        bundle_name = '\\ABILITIES\\CHARACTERS\\AUDIOREACTIONS_AUTOGENERATED\\%sAUDIOREACTIONS~.ABILITIES' % other.upper()
+        bundle = game_file(tocs, packs, bundle_name)
+        other_camel = camel_name([(bundle_name, bundle or b'', False, 0)] + files, other)
+        pairs = [(other_camel, char_camel), (other.lower(), char.lower()), (other.upper(), char.upper())]
+        renames.append(('AudioReactionData' + other, 'AudioReactionData' + char_camel))
+
+        def rename(data, pairs=pairs):
+            for a, b in pairs:
+                data = data.replace(a.encode(), b.encode())
+            return data
+        for row_name, data, packed, usize in files:
+            m = reaction.match(row_name.upper())
+            if m and m.group(1).lower() == char and m.group(2).lower() == other and not packed:
+                new_name = '\\charcache\\%s\\abilities\\characters\\audioreactions_autogenerated\\%saudioreactions~audioreaction%s%s.ability' % (
+                    char, char, m.group(3).lower(), char)
+                out.append((new_name, rename(data)))
+                out.append(('\\abilities\\characters\\audioreactions_autogenerated\\%saudioreactions~audioreaction%s%s.ability' % (
+                    char, m.group(3).lower(), char), rename(data)))
+        if bundle:
+            out.append(('\\abilities\\characters\\audioreactions_autogenerated\\%saudioreactions~.abilities' % char, rename(bundle)))
+        source = game_file(tocs, packs, '\\ABILITIES\\CHARACTERS\\AUDIOREACTIONS_AUTOGENERATED\\%sAUDIOREACTIONS.TXT' % other.upper())
+        if source:
+            out.append(('\\abilities\\characters\\audioreactions_autogenerated\\%saudioreactions.txt' % char, rename(source)))
+        # abilities\abilities.txt e o indice dos pacotes de habilidade lidos no boot: sem a linha do personagem, as reacoes
+        # dele nunca sao registradas
+        index = next((d for n, d in out if n.upper() == '\\ABILITIES\\ABILITIES.TXT'), None) or game_file(tocs, packs, '\\ABILITIES\\ABILITIES.TXT')
+        if index:
+            text = index.decode('latin-1')
+            newline = '\r\n' if '\r\n' in text else '\n'
+            line = 'txt_file "abilities/Characters/AudioReactions_AUTOGENERATED/%sAudioReactions.txt"' % char_camel
+            if line.lower() not in text.lower():
+                rows = text.split(newline)
+                at = next((i for i, r in enumerate(rows) if ('/%saudioreactions.txt"' % other) in r.lower()), len(rows) - 1)
+                rows.insert(at + 1, line)
+                out = [(n, d) for n, d in out if n.upper() != '\\ABILITIES\\ABILITIES.TXT']
+                out.append(('\\abilities\\abilities.txt', newline.join(rows).encode('latin-1')))
+        changed.append(T('reacoes de voz de %s viraram de %s' % (other_camel, char_camel), 'voice reactions of %s became %s\'s' % (other_camel, char_camel)))
+        # .txt do personagem: o do jogo + o que o mod acrescenta
+        for row_name, data, packed, usize in files:
+            if re.match(r'\\CHARS\\\w+\\%s\\%s\.TXT$' % (char.upper(), char.upper()), row_name.upper()) and not packed:
+                game_txt = game_file(tocs, packs, row_name.upper())
+                if game_txt:
+                    out.append((row_name, merge_char_txt(game_txt, data, renames)))
+                    changed.append(T('%s com a versao do jogo + o mod' % os.path.basename(row_name), '%s from the game version + the mod' % os.path.basename(row_name)))
+    replaced = {n.upper() for n, _ in out}
     suffixes = sorted({n.rsplit('_', 1)[1][:-4] for n in all_names
                        if n.startswith('\\AUDIO\\VO\\DX\\') and re.search(r'_[A-Z]{3}\.OGG$', n)})
-    have = {r[0].upper() for r in rows}
-    items = []
-    for row_name, usize, zsize, offset, packed in rows if fixed else []:
+    events = 0
+    for row_name, data, packed, usize in files:
         upper = row_name.upper()
+        m = reaction.match(upper)
+        if m and m.group(1).lower() in borrowed and m.group(2).lower() == borrowed[m.group(1).lower()]:
+            continue  # copia emprestada: substituida pela do proprio personagem
+        if upper in replaced:
+            continue
+        if upper.endswith('.SOUND_EVENT') and not packed:
+            new = fix_sound_event(data, os.path.splitext(os.path.basename(row_name))[0])
+            if new:
+                events += 1
+                data = new
+        out.append((row_name, data, usize, packed) if packed else (row_name, data))
         if upper.startswith('\\AUDIO\\VO\\DX\\') and upper.endswith('.OGG') and not re.search(r'_[A-Z]{3}\.OGG$', upper):
             for s in suffixes:
                 alias = '%s_%s.ogg' % (row_name[:-4], s.lower())
-                if alias.upper() not in have and alias.upper() not in all_names:
-                    items.append((alias, offset, zsize, usize, bool(packed)))
-    lines_named = 0
-    if items:
-        try:
-            block, added = add_files_cc4(block, items)
-            lines_named = len(added) // max(len(suffixes), 1)
-        except ValueError as e:
-            say('AVISO ' + T('%s: nomes de idioma das falas nao entraram (%s)' % (label, e), '%s: language names for the lines were not added (%s)' % (label, e)))
-    if not fixed:
+                if alias.upper() not in all_names:
+                    out.append((alias, data))
+    if events:
+        changed.append(T('%d evento(s) de som consertados, falas com os nomes %s' % (events, ', '.join('_' + s.lower() for s in suffixes)),
+                         '%d sound event(s) fixed, lines with the names %s' % (events, ', '.join('_' + s.lower() for s in suffixes))))
+    if not changed:
         return None
-    cache_hdr = os.path.join(cache, 'anomaly_%s.HDR' % name)
-    cache_tail = os.path.join(cache, 'anomaly_%s.tail' % name)
-    with open(cache_hdr, 'wb') as f:
-        f.write(block)
-    with open(cache_tail, 'wb') as f:
-        f.write(tail)
-    say('SONS ' + T('%s: %d evento(s) de som consertados (hashes e falas com idioma); %d fala(s) com os nomes %s' % (
-                        label, fixed, lines_named, ', '.join('_' + s.lower() for s in suffixes)),
-                    '%s: %d sound event(s) fixed (hashes and localized lines); %d line(s) with the names %s' % (
-                        label, fixed, lines_named, ', '.join('_' + s.lower() for s in suffixes))))
-    return 'pacote\t%s\t%s\t%s\t%s\t%d\t%s' % (name.upper(), hdr, cache_hdr, dat, base, cache_tail)
+    hdr_bytes, dat_bytes = build_pack(out)
+    folder = os.path.join(cache, 'anomaly')
+    os.makedirs(folder, exist_ok=True)
+    new_hdr, new_dat = os.path.join(folder, name + '.HDR'), os.path.join(folder, name + '.DAT')
+    with open(new_hdr, 'wb') as f:
+        f.write(hdr_bytes)
+    with open(new_dat, 'wb') as f:
+        f.write(dat_bytes)
+    say('CONSERTO ' + '%s: %s' % (label, '; '.join(changed)))
+    return new_hdr, new_dat
+
+
+FIGURES_FILE = os.path.join(HERE, '..', 'data', 'figuras_ocultas.json')
+TAG_CONSTANT = bytes([0xB7, 0xD5, 0xD7, 0xE6, 0xE7, 0xBA, 0x3C, 0xA8, 0xD8, 0x75, 0x47, 0x68, 0xCF, 0x23, 0xE9, 0xFE, 0xAA])
+
+
+def tag_character_id(tag):
+    """Id do personagem numa gravacao de tag do Toy Pad (NTAG213): [id, id] cifrado com TEA nas paginas 0x24-0x25,
+    chave tirada do UID (o mesmo algoritmo do hle_toypad.cpp). 0 se nao for um personagem valido."""
+    if len(tag) < 0x26 * 4:
+        return 0
+    mask = 0xFFFFFFFF
+    if tag[0x26 * 4 + 1] == 1:
+        return 0  # veiculo / gadget
+    uid = bytes([tag[0], tag[1], tag[2], tag[4], tag[5], tag[6], tag[7]])
+
+    def rotr(v, n):
+        return ((v >> n) | (v << (32 - n))) & mask
+
+    def scramble(b, words):
+        v = 0
+        for i in range(words):
+            v = (struct.unpack_from('<I', b, i * 4)[0] + rotr(v, 25) + rotr(v, 10) - v) & mask
+        return v
+    key = []
+    for i in range(4):
+        base = bytearray(uid + TAG_CONSTANT)
+        base[(3 + i) * 4 - 1] = 0xAA
+        key.append(scramble(bytes(base), 3 + i))
+    v0, v1 = struct.unpack_from('<II', tag, 0x24 * 4)
+    delta, total = 0x9E3779B9, (0x9E3779B9 * 32) & mask
+    for _ in range(32):
+        v1 = (v1 - ((((v0 << 4) & mask) + key[2]) ^ ((v0 + total) & mask) ^ ((v0 >> 5) + key[3]))) & mask
+        v0 = (v0 - ((((v1 << 4) & mask) + key[0]) ^ ((v1 + total) & mask) ^ ((v1 >> 5) + key[1]))) & mask
+        total = (total - delta) & mask
+    return v0 if v0 == v1 else 0
+
+
+def figure_tags(folder):
+    """Ids de personagem das gravacoes .bin de tag numa pasta de mod."""
+    ids = set()
+    for base, _, files in os.walk(folder):
+        for f in files:
+            path = os.path.join(base, f)
+            if f.lower().endswith('.bin') and os.path.getsize(path) in (180, 540, 572):
+                with open(path, 'rb') as fh:
+                    found = tag_character_id(fh.read())
+                if found:
+                    ids.add(found)
+    return ids
+
+
+def hidden_figure_pack(char, info, tocs, packs, all_names, cache):
+    """Pacote do Anomaly que libera uma figura desligada no jogo (ver figuras_ocultas.json): a linha Collect (em
+    camadas no chars\\collection.txt) e o charcache\\<nome>: o do doador inteiro (animacoes, habilidades e o resto que
+    uma figura carrega), o .cd do personagem e os recursos dele. Os blocos comprimidos vao como estao. None se faltar
+    algo no jogo."""
+    files = [('\\chars\\collection.txt', ('Collect "%s"\tportal_model_id %d\tcharacter_tag\r\n' % (info['collect'], info['id'])).encode('latin-1'))]
+    donor = '\\CHARCACHE\\%s\\' % info['doador'].upper()
+    skip = {(donor + info['cd_doador'].lstrip('\\') + ext).upper() for ext in ('.CD', '.CD.RES')}
+    target = '\\charcache\\%s\\' % char
+
+    def add(dest, source):
+        got = game_file(tocs, packs, source.upper(), raw=True)
+        if got is None:
+            return False
+        data, usize, packed = got
+        files.append((dest, data, usize, packed) if packed else (dest, data))
+        return True
+    for name in sorted(n for n in all_names if n.startswith(donor) and n not in skip):
+        add(target + name[len(donor):].lower(), name)
+    base = target + 'chars\\minifig\\%s\\%s' % (char, char)
+    if not (add(base + '.cd', info['cd'] + '.cd') and add(base + '.cd.res', info['cd'] + '.cd.res')):
+        return None
+    for extra in info['extras']:
+        add(target + extra.lstrip('\\'), extra)
+    hdr_bytes, dat_bytes = build_pack(files)
+    folder = os.path.join(cache, 'anomaly')
+    os.makedirs(folder, exist_ok=True)
+    name = 'FIGURA_' + char.upper()
+    hdr, dat = os.path.join(folder, name + '.HDR'), os.path.join(folder, name + '.DAT')
+    with open(hdr, 'wb') as f:
+        f.write(hdr_bytes)
+    with open(dat, 'wb') as f:
+        f.write(dat_bytes)
+    say('FIGURA ' + T('%s (figura %d) liberado: %d arquivos do jogo no cache da figura (%.0f MB). Ponha o .bin no app do portal.' % (
+        info['nome'], info['id'], len(files), len(dat_bytes) / 1e6, ),
+        '%s (figure %d) enabled: %d game files in the figure cache (%.0f MB). Load the .bin in the portal app.' % (
+        info['nome'], info['id'], len(files), len(dat_bytes) / 1e6)))
+    return name, hdr, dat
 
 
 def csv_row(line):
@@ -488,6 +792,9 @@ def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
     with open(os.path.abspath(__file__), 'rb') as f:  # um mods.py novo (atualizacao do port) refaz o cache
         stamp.update(f.read())
     stamp.update(loader.encode())
+    if os.path.isfile(FIGURES_FILE):
+        with open(FIGURES_FILE, 'rb') as f:
+            stamp.update(f.read())
 
     def stamp_file(path):
         st = os.stat(path)
@@ -526,6 +833,8 @@ def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
                 say('PRONTO %d' % len(sources))
                 return 0
     for old in glob.glob(os.path.join(cache, '*.HDR')) + glob.glob(os.path.join(cache, '*.tail')):
+        os.remove(old)
+    for old in glob.glob(os.path.join(cache, 'anomaly', '*')):  # pacotes de mod consertados (Fase 67)
         os.remove(old)
 
     # tabelas de todos os pacotes do jogo (nome -> posicao da entrada), para saber o que ja existe
@@ -576,7 +885,10 @@ def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
             while name.lower() in taken:
                 name, n = '%s_%d' % (stem, n), n + 1
             if hdr:
-                anomaly.append((label, name, hdr, dat, fix_sound_events(label, name, hdr, dat, cache, all_names)))
+                rebuilt = rebuild_mod_pack(label, name, dat, cache, tocs, packs, all_names)
+                if rebuilt:
+                    hdr, dat = rebuilt
+                anomaly.append((label, name, hdr, dat))
             continue
         try:
             rows = nu2toc.read_toc(dat)
@@ -631,13 +943,49 @@ def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
             wanted[('PATCH', text_name.upper())] = ((-1, 0), T('textos dos mods', 'mod texts'), text_name, merged, len(merged), False)
             say('TEXTOS ' + T('%d linha(s) nova(s) dos mods no text.csv (%s)' % (count, ', '.join(l for l, _ in texts)),
                               '%d new line(s) from the mods in text.csv (%s)' % (count, ', '.join(l for l, _ in texts))))
+    enabled_figures = set()
+    if loader == 'anomaly' and os.path.isfile(FIGURES_FILE):
+        # Fase 67: figura desligada no jogo (ex. Lord Vortech) cuja gravacao .bin esta na pasta de mods
+        with open(FIGURES_FILE, encoding='utf-8') as f:
+            figures = {v['id']: (k, v) for k, v in json.load(f).items() if not k.startswith('_')}
+        for source, label, folder in loose_sources:
+            for fid in sorted(figure_tags(folder)):
+                if fid in figures and fid not in enabled_figures:
+                    char, info = figures[fid]
+                    made = hidden_figure_pack(char, info, tocs, packs, all_names, cache)
+                    if made:
+                        enabled_figures.add(fid)
+                        anomaly.append((info['nome'], made[0], made[1], made[2]))
+                if fid in enabled_figures:
+                    enabled_figures.add(folder)
+    if loader == 'anomaly':
+        # O Anomaly le em camadas os stuff\text\text.csv da lista de colisoes de hash do jogo, e essa lista muda com o
+        # numero de arquivos: com mods grandes entra tambem o do GAME (textos originais, em ingles), lido depois do do
+        # PATCH (traducao). Toda copia de base fica igual ao text.csv que o jogo usaria sem o Anomaly.
+        upper = text_name.upper()
+        current = wanted.get(('PATCH', upper))
+        effective = current[3] if current else game_file(tocs, packs, upper)
+        # as linhas dos mods do Anomaly (ex. legendas do Bart) entram nesse texto unico: nao dependem da lista
+        extra_texts = []
+        for label, _name, _hdr, dat in anomaly:
+            for row_name, data, packed, _usize in read_pack_files(dat):
+                if row_name.upper() == upper and not packed:
+                    extra_texts.append((label, data))
+        if effective and extra_texts:
+            merged, count = merge_text(effective, extra_texts)
+            if merged:
+                effective = merged
+                wanted[('PATCH', upper)] = ((-1, 0), T('textos dos mods', 'mod texts'), text_name, merged, len(merged), False)
+                say('TEXTOS ' + T('%d linha(s) dos mods do Anomaly no texto do jogo' % count, '%d line(s) from the Anomaly mods in the game text' % count))
+        if effective:
+            for pack, (_block, positions, _aid, _ver) in tocs.items():
+                if pack != 'PATCH' and upper in positions and (pack, upper) not in wanted:
+                    wanted[(pack, upper)] = ((-1, 1), T('textos do jogo', 'game texts'), text_name, effective, len(effective), False)
 
     lines = ['# chave ' + key]
     lines += ['overlay\t%s' % o for o in overlays]
-    for label, name, hdr, dat, fixed in anomaly:
+    for label, name, hdr, dat in anomaly:
         lines.append('anomaly\t%s\t%s\t%s' % (name, hdr, dat))
-        if fixed:
-            lines.append(fixed)
         say('MOD ' + T('%s: pacote inteiro pelo Anomaly (connorh315)' % label, '%s: whole pack through Anomaly (connorh315)' % label))
     found = set()
     new_names = {k for k in wanted if k[0] is None and k[1] not in all_names}
@@ -708,7 +1056,7 @@ def prepare(root, app0, patch, mods_dir, cache, addcont, loader='anomaly'):
                              '%s: %d file(s) were left out (repeated name or the game lacks the pack)' % (label, out)))
     for source, label, folder in loose_sources:
         has_loose = any(k for k, v in wanted.items() if v[1].startswith(label + ' ('))
-        if not has_loose and not any(m[0] == source for m in mod_files):
+        if not has_loose and not any(m[0] == source for m in mod_files) and folder not in enabled_figures:
             not_a_mod(label, folder)
     with open(manifest, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')

@@ -69,6 +69,11 @@ target_compile_definitions(shader_compiler_tool PRIVATE
     ZYCORE_STATIC_BUILD ZYDIS_STATIC_BUILD BOOST_ASIO_STANDALONE
 )
 target_compile_options(shader_compiler_tool PRIVATE /EHsc /utf-8 /wd4201 -march=x86-64-v3 -w)
+# __FILE__ dos fontes do shadPS4 (asserts) sem o caminho do checkout local no .exe distribuido
+file(TO_NATIVE_PATH "${SHADPS4_DIR}" SHADPS4_DIR_NATIVE)
+target_compile_options(shader_compiler_tool PRIVATE
+    "/clang:-ffile-prefix-map=${SHADPS4_DIR}=shadPS4"
+    "/clang:-ffile-prefix-map=${SHADPS4_DIR_NATIVE}=shadPS4")
 
 target_link_libraries(shader_compiler_tool PRIVATE
     ${SHADPS4_BUILD}/externals/sirit/src/sirit.lib

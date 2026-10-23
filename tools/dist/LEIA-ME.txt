@@ -100,5 +100,11 @@ DICAS
     AllWorld.DAT) sao abertos pelo proprio jogo na frente dos pacotes dele, como no shadPS4 com o Anomaly,
     e os text.csv / collection.txt de todos os mods se somam. No menu principal do jogo aparece
     "Anomaly (N loaded)". Desligando, volta o carregador antigo do port. Eventos de som de mod feitos com
-    hashes em branco ou falas sem o idioma (ex. o mod de voz do Bart, de connorh315) sao consertados no cache.
+    hashes em branco ou falas sem o idioma (ex. o mod de voz do Bart, de connorh315) sao consertados no cache:
+    o Bart fala ao entrar/sair do portal e aparecem as legendas dele. Os textos do jogo (e a traducao do
+    mod de texto, se houver) continuam valendo mesmo com mods grandes, e as legendas dos mods sao somadas.
+  - Figuras que o jogo tem mas deixa desligadas (ex. Lord Vortech, figura 73): ponha a pasta do mod com a
+    gravacao .bin da figura na pasta mods. O port monta no cache o personagem com os arquivos do seu
+    proprio jogo (nada do jogo vem no port) e o jogo passa a aceitar a figura. Depois abra o .bin no app
+    do portal, como as outras figuras.
   - Use pastas com nomes sem acento (o port recebe os caminhos em ANSI).

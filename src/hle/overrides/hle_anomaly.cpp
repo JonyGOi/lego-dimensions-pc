@@ -8,6 +8,7 @@
 #include <Zydis/Zydis.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "hle/generated/hle_stub.h"
@@ -148,7 +149,13 @@ HLE_SYSV_ABI int FindHash(int* file_table, unsigned int file_hash, char* file_pa
         }
         layerable->is_loaded = true;
     }
-    return g_find_hash(file_table, file_hash, file_path);
+    const int found = g_find_hash(file_table, file_hash, file_path);
+    // diagnostico (LD_ANOMALY_FALTANDO=1): arquivos que o jogo pede e nenhum pacote tem
+    static const bool log_missing = std::getenv("LD_ANOMALY_FALTANDO") != nullptr;
+    if (log_missing && found < 0 && file_path) {
+        std::printf("[ANOMALY] pedido e nao achado: %s\n", file_path);
+    }
+    return found;
 }
 
 // NuStringTableLoadCSV: carrega o text.csv uma vez por pacote que o tem, sem limpar a tabela entre um e outro.

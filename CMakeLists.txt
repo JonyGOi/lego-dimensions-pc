@@ -103,6 +103,8 @@ endif()
 # O codigo do jogo roda na pilha da thread principal: 8 MiB, ja com commit total. O codigo do
 # Orbis nao faz stack probing, entao a pilha nao pode depender das guard pages do Windows.
 target_link_options(lego_dimensions PRIVATE "/STACK:8388608,8388608")
+# o .exe distribuido guarda so o nome do .pdb, nao o caminho da maquina que compilou
+target_link_options(lego_dimensions PRIVATE "/PDBALTPATH:%_PDB%")
 
 # ---- Ferramenta: desmontagem dos call sites de imports no eboot ------------
 add_executable(callsites tools/callsites/callsites.cpp)

@@ -104,5 +104,11 @@ TIPS
     (e.g. AllWorld.DAT) are opened by the game itself ahead of its own packs, as in shadPS4 with Anomaly,
     and the text.csv / collection.txt of every mod add up. The game's main menu shows
     "Anomaly (N loaded)". Turning it off brings back the port's older loader. Mod sound events made with
-    blank hashes or lines without the language (e.g. the Bart voice mod by connorh315) are fixed in the cache.
+    blank hashes or lines without the language (e.g. the Bart voice mod by connorh315) are fixed in the cache:
+    Bart speaks when he enters/leaves the portal and his subtitles show up. The game's text (and a text
+    translation mod, if any) keeps working even with large mods, and the mods' subtitles are added to it.
+  - Figures the game has but leaves disabled (e.g. Lord Vortech, figure 73): put the mod folder with the
+    figure's .bin dump in the mods folder. The port builds the character in the cache from your own game's
+    files (no game content ships with the port) and the game accepts the figure. Then open the .bin in the
+    portal app, like any other figure.
   - Use folder names without accents (the port receives paths in ANSI).

@@ -15,6 +15,7 @@ extraidos, o pacote AOT, os saves - o launcher gera tudo a partir dos arquivos d
 uso (da raiz do projeto, depois de build.bat e tools/dist/build_dist.bat):
     python tools/dist/montar.py
 """
+import importlib.util
 import os
 import shutil
 import struct
@@ -29,6 +30,7 @@ PYTHON = os.path.dirname(sys.executable)
 REDIST = r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.51.36231\x64\Microsoft.VC145.CRT'
 VC_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']
 MAGIC = b'LDPCPAY1'
+HOME = os.path.expanduser('~').lower()  # pasta do usuario que monta: nao pode aparecer nos textos distribuidos
 
 # do Python, so o necessario para a preparacao (sem pacotes de terceiros, testes, tkinter, idle...)
 PY_SKIP_DIRS = {'site-packages', 'test', 'tests', 'idlelib', 'tkinter', 'turtledemo', 'ensurepip', '__pycache__', 'lib2to3',
@@ -92,6 +94,7 @@ def stage():
     copy(R('tools', 'dist', 'VERSION'), S('version.txt'))  # Fase 61: versao instalada (comparada com a release do GitHub)
     copy_tree(R('tools', 'data', 'dat_index'), S('tools', 'data', 'dat_index'), suffixes=('.tsv',))
     copy(R('tools', 'data', 'layout_dictionary.json'), S('tools', 'data', 'layout_dictionary.json'))
+    copy(R('tools', 'data', 'figuras_ocultas.json'), S('tools', 'data', 'figuras_ocultas.json'))  # Fase 67: figuras desligadas no jogo
     copy(R('tools', 'data', 'vs_reais.txt'), S('tools', 'data', 'vs_reais.txt'))  # Fase 51: leituras de vertice reais (so numeros)
     # Python portatil
     for f in ('python.exe', 'pythonw.exe', 'python3.dll', 'python%d%d.dll' % sys.version_info[:2], 'vcruntime140.dll', 'vcruntime140_1.dll',
@@ -109,10 +112,25 @@ def stage():
     keep(S('build', 'logs'))
     copy(R('tools', 'dist', 'LEIA-ME.txt'), S('LEIA-ME.txt'))
     copy(R('tools', 'dist', 'README.txt'), S('README.txt'))  # Fase 60: o mesmo em ingles
+    # caminhos da maquina de desenvolvimento nos textos trocados pelos mesmos genericos do repositorio
+    spec = importlib.util.spec_from_file_location('exportar_repo', R('tools', 'dist', 'exportar_repo.py'))
+    exportar_repo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exportar_repo)
     # conferencia: nada do jogo dentro
     for base, _, files in os.walk(STAGE):
         for f in files:
             low = f.lower()
+            full = os.path.join(base, f)
+            if low.endswith(exportar_repo.TEXT) and not full.startswith(S('tools', 'python')):
+                with open(full, 'rb') as fh:
+                    data = fh.read()
+                text = data.decode('latin-1')
+                for a, b in exportar_repo.REPLACE:
+                    text = text.replace(a, b)
+                if text.encode('latin-1') != data:
+                    with open(full, 'wb') as fh:
+                        fh.write(text.encode('latin-1'))
+                assert HOME not in text.lower() and HOME.replace('\\', '/') not in text.lower(), full
             assert not low.endswith(('.dat', '.dat2', '.hdr', '.hdr2', '.elf', '.prx', '.sprx', '.self', '.pak', '.spv')), f
             assert low != 'eboot.bin', f
 

@@ -129,8 +129,13 @@ std::filesystem::path FindPatchDir(const std::filesystem::path& app0) {
     return {};
 }
 
-// Dump do jogo usado como /app0 quando --app0 nao e informado.
-constexpr const char* kDefaultApp0 = R"(C:\Jogos\CUSA01176)";
+// Dump do jogo usado como /app0 quando --app0 nao e informado: a pasta do jogo escolhida no launcher
+// (linha jogo= do launcher.ini na pasta do port).
+std::filesystem::path DefaultApp0(const std::filesystem::path& root) {
+    wchar_t buffer[2048] = {};
+    GetPrivateProfileStringW(L"launcher", L"jogo", L"", buffer, 2048, (root / "launcher.ini").wstring().c_str());
+    return buffer;
+}
 
 // Fase 49: pasta do port (a que tem assets\ e tools\). Antes era a pasta do projeto gravada na
 // compilacao; agora sai de onde esta o .exe (build\lego_dimensions.exe -> pasta acima), para a
@@ -1158,7 +1163,7 @@ std::filesystem::path WideArg(int i, const char* fallback) {
 int main(int argc, char** argv) {
     const std::filesystem::path root = FindRoot(argc, argv);
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
-    std::filesystem::path app0 = kDefaultApp0;
+    std::filesystem::path app0 = DefaultApp0(root);
     std::filesystem::path app0_patch; // Fase 58
     std::filesystem::path mods_cache = root / "assets" / "mods_cache"; // Fase 64: mods preparados pelo mods.py ("-" = --no-mods)
     bool live_compiler = true;
