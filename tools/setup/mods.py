@@ -38,6 +38,9 @@ LANG = 'pt'
 # Dados de build de cada pacote (idiomas, SKU, versao), nao conteudo de mod: num pacote do jogo editado vem os da versao
 # de quem fez o mod. O ttbmetadata.xml do PATCH de um mod sem ru-ru derruba a v1.24 no boot (sem memoria, eboot+0x4a8797).
 BUILD_INFO = {'\\STUFF\\TTBMETADATA.XML'}
+# Arquivos que o jogo le de um pacote so (o de maior prioridade, sem juntar os dos outros) e que tem o jogo inteiro: num
+# pacote proprio (BARTVOICE) vem so as linhas do mod; o text.csv de 34 linhas no lugar do de 20 mil apaga os textos.
+WHOLE_GAME_FILES = {'\\STUFF\\TEXT\\TEXT.CSV'}
 
 
 def T(pt, en):
@@ -57,6 +60,30 @@ def overlay_root(folder):
         return folder
     subs = [os.path.join(folder, d) for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))]
     return subs[0] if len(subs) == 1 and looks(subs[0]) else None
+
+
+def figure_dump(folder):
+    """Gravacao de figura do Toy Pad (tag NFC NTAG213: .bin de 180 bytes, as vezes com 540 ou 572), nao mod."""
+    bins = others = 0
+    for root, _, files in os.walk(folder):
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext == '.bin' and os.path.getsize(os.path.join(root, f)) in (180, 540, 572):
+                bins += 1
+            elif ext not in ('.png', '.jpg', '.jpeg', '.txt', '.json', '.ini'):
+                others += 1
+    return bins > 0 and others == 0
+
+
+def not_a_mod(label, folder):
+    if figure_dump(folder):
+        say('AVISO ' + T('%s: e a gravacao de uma figura (tag .bin do Toy Pad), nao um mod. Use no app do portal (LegoToypad) '
+                         'e tire da pasta de mods' % label,
+                         '%s: this is a figure dump (Toy Pad .bin tag), not a mod. Load it in the portal app (LegoToypad) '
+                         'and remove it from the mods folder' % label))
+    else:
+        say('AVISO ' + T('%s: nada que o port saiba carregar (nem pacote .HDR/.DAT, nem pastas data\\ ou sce_sys\\)' % label,
+                         '%s: nothing the port can load (no .HDR/.DAT pack, no data\\ or sce_sys\\ folders)' % label))
 
 
 def find_packs(folder):
@@ -224,8 +251,7 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
             stamp.update(('%s|%d|%d' % (dat, st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
             mod_files.append((label + ': ' + os.path.splitext(os.path.basename(dat))[0], dat))
         if not over and not find_packs(folder):
-            say('AVISO ' + T('%s: nada que o port saiba carregar (nem pacote .HDR/.DAT, nem pastas data\\ ou sce_sys\\)' % label,
-                             '%s: nothing the port can load (no .HDR/.DAT pack, no data\\ or sce_sys\\ folders)' % label))
+            not_a_mod(label, folder)
     layers = overlays + ([patch] if patch and os.path.isdir(patch) else []) + [app0]
     packs = game_packs(layers, addcont)
     for name, (hdr_path, dat_path) in sorted(packs.items()):
@@ -275,6 +301,10 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
                     g.seek(old[3])
                     if g.read(zsize) == data:
                         continue
+                if not scope and name.upper() in WHOLE_GAME_FILES:
+                    say('AVISO ' + T('%s: %s do mod ignorado (tem so os textos do mod; no lugar do do jogo apagaria todos os textos)' % (label, name),
+                                     '%s: the mod\'s %s was skipped (it only has the mod\'s texts; replacing the game\'s would erase all texts)' % (label, name)))
+                    continue
                 if scope and name.upper() in BUILD_INFO:
                     say('AVISO ' + T('%s: %s do mod ignorado (descreve a versao do jogo de quem fez o mod; trocar derruba o jogo)' % (label, name),
                                      '%s: the mod\'s %s was skipped (it describes the mod author\'s game version; replacing it crashes the game)' % (label, name)))
@@ -447,6 +477,13 @@ def install(archive, mods_dir):
     if not done:
         say('ERRO ' + T('nao consegui abrir %s (%s). Extraia com o 7-Zip / WinRAR e ponha a pasta em mods\\' % (base, '; '.join(errors)),
                         'could not open %s (%s). Extract it with 7-Zip / WinRAR and put the folder in mods\\' % (base, '; '.join(errors))))
+        return 1
+    if not overlay_root(dest) and figure_dump(dest):
+        shutil.rmtree(dest, ignore_errors=True)
+        say('ERRO ' + T('%s e a gravacao de uma figura (tag .bin do Toy Pad), nao um mod: nada foi instalado. Abra o .bin no app '
+                        'do portal (LegoToypad)' % base,
+                        '%s is a figure dump (Toy Pad .bin tag), not a mod: nothing was installed. Open the .bin in the portal '
+                        'app (LegoToypad)' % base))
         return 1
     if not overlay_root(dest) and not find_packs(dest):
         say('AVISO ' + T('%s: nao tem pacote .HDR/.DAT nem pastas data\\ ou sce_sys\\; confira se e um mod de PS4' % os.path.basename(dest),
