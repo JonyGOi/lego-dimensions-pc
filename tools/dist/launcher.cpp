@@ -90,6 +90,7 @@ HICON g_icon;
 HFONT g_font, g_small, g_label, g_title, g_subtitle, g_button, g_play_font;
 HBRUSH g_field_brush, g_bg_brush;
 fs::path g_root;
+bool g_dev_tree = false; // Fase 66: launcher dentro da pasta de desenvolvimento (fontes + build\): sem Atualizar nem limpeza
 bool g_busy = false;
 int g_pct = 0;
 std::wstring g_step;
@@ -550,6 +551,15 @@ void CheckUpdate() {
     if (g_busy) {
         return;
     }
+    if (g_dev_tree) { // Fase 66: a release do GitHub trocaria o build e as ferramentas da pasta de desenvolvimento
+        MessageBoxW(g_main,
+                    ui::T(L"Este launcher está na pasta de desenvolvimento: ele usa o build\\lego_dimensions.exe compilado aqui, com os seus shaders e "
+                          L"pipelines. Atualize compilando (build.bat); o Atualizar do GitHub só vale na versão instalada.",
+                          L"This launcher is in the development folder: it uses the build\\lego_dimensions.exe built here, with your shaders and pipelines. "
+                          L"Update by building (build.bat); Check updates from GitHub only applies to the installed version."),
+                    L"LEGO Dimensions PC", MB_ICONINFORMATION);
+        return;
+    }
     g_new_version.clear();
     g_notes.clear();
     if (RunPython(L"atualizar.py", L" --check", Task::kCheck)) {
@@ -585,6 +595,9 @@ void RestartLauncher() {
 
 // Sobras de uma atualizacao: arquivos que estavam em uso foram renomeados para *.antigo
 void CleanOldFiles() {
+    if (g_dev_tree) {
+        return; // Fase 66: na pasta de desenvolvimento nao varre nada (e grande, e os .antigo de la sao backups)
+    }
     std::error_code ec;
     for (auto it = fs::recursive_directory_iterator(g_root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (it->path().filename() == L"assets" && it.depth() == 0) {
@@ -599,13 +612,14 @@ void CleanOldFiles() {
 }
 
 std::wstring ReadVersion() {
-    std::ifstream in(g_root / L"version.txt");
+    // Fase 66: na pasta de desenvolvimento a versao vem do tools\dist\VERSION
+    std::ifstream in(g_dev_tree ? g_root / L"tools" / L"dist" / L"VERSION" : g_root / L"version.txt");
     std::string text;
     std::getline(in, text);
     while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) {
         text.pop_back();
     }
-    return text.empty() ? L"?" : std::wstring(text.begin(), text.end());
+    return (text.empty() ? L"?" : std::wstring(text.begin(), text.end())) + (g_dev_tree ? L" dev" : L"");
 }
 
 void OnLine(const std::wstring& line) {
@@ -749,13 +763,14 @@ void WriteDisabledMods(const std::vector<std::wstring>& off) {
     }
 }
 
-std::wstring BrowseZip() {
+// .rar e .7z sao extraidos pelo tar.exe do Windows (libarchive) dentro do mods.py.
+std::wstring BrowseModArchive() {
     std::wstring result;
     IFileOpenDialog* dialog = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
-        const COMDLG_FILTERSPEC filter[] = {{L"Mod (.zip)", L"*.zip"}};
+        const COMDLG_FILTERSPEC filter[] = {{L"Mod (.zip, .rar, .7z)", L"*.zip;*.rar;*.7z"}};
         dialog->SetFileTypes(1, filter);
-        dialog->SetTitle(ui::T(L"Mod para instalar (.zip)", L"Mod to install (.zip)"));
+        dialog->SetTitle(ui::T(L"Mod para instalar (.zip, .rar ou .7z)", L"Mod to install (.zip, .rar or .7z)"));
         if (SUCCEEDED(dialog->Show(g_main))) {
             IShellItem* item = nullptr;
             if (SUCCEEDED(dialog->GetResult(&item))) {
@@ -772,7 +787,7 @@ std::wstring BrowseZip() {
     return result;
 }
 
-// Menu do botao Mods: cada pasta de mods\ com marca (clicar liga / desliga), abrir a pasta, instalar um .zip.
+// Menu do botao Mods: cada pasta de mods\ com marca (clicar liga / desliga), abrir a pasta, instalar um .zip / .rar / .7z.
 void ModsMenu(HWND button) {
     const std::vector<std::wstring> mods = ListMods();
     std::vector<std::wstring> off = ReadDisabledMods();
@@ -794,7 +809,7 @@ void ModsMenu(HWND button) {
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"(também os da pasta do jogo: Mods / -mods)", L"(also the ones in the game folder: Mods / -mods)"));
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod de um .zip...", L"Install a mod from a .zip..."));
+    AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod (.zip, .rar, .7z)...", L"Install a mod (.zip, .rar, .7z)..."));
     AppendMenuW(menu, MF_STRING, 2, ui::T(L"Abrir a pasta de mods", L"Open the mods folder"));
     RECT r;
     GetWindowRect(button, &r);
@@ -811,8 +826,8 @@ void ModsMenu(HWND button) {
         }
         WriteDisabledMods(off);
     } else if (picked == 1) {
-        if (const std::wstring zip = BrowseZip(); !zip.empty()) {
-            RunSetupScript(L"mods.py", L" --instalar " + Quote(zip) + L" --mods " + Quote(ModsDir().wstring()), L"mods_instalar.log", 300000);
+        if (const std::wstring archive = BrowseModArchive(); !archive.empty()) {
+            RunSetupScript(L"mods.py", L" --instalar " + Quote(archive) + L" --mods " + Quote(ModsDir().wstring()), L"mods_instalar.log", 300000);
         }
     } else if (picked == 2) {
         fs::create_directories(ModsDir(), ec);
@@ -1126,15 +1141,20 @@ void CreateControls() {
     // Fase 63: LD PC Transfer (conversor de saves) no canto da arte; a regiao arredondada deixa a arte aparecer nas pontas
     HWND transfer = ui::Button(g_main, L"LD PC Transfer", ui::Style::kSecondary, S(kW - 236), S(30), S(196), S(40), kTransfer, g_button);
     SetWindowRgn(transfer, CreateRoundRectRgn(0, 0, S(196) + 1, S(40) + 1, S(18), S(18)), TRUE);
-    // Fase 64: mods (menu com os instalados, instalar de um .zip, abrir a pasta)
+    // Fase 64: mods (menu com os instalados, instalar de um .zip / .rar / .7z, abrir a pasta)
     g_mods = ui::Button(g_main, L"Mods  ▾", ui::Style::kSecondary, S(kW - 362), S(30), S(116), S(40), kMods, g_button);
     SetWindowRgn(g_mods, CreateRoundRectRgn(0, 0, S(116) + 1, S(40) + 1, S(18), S(18)), TRUE);
 }
 
 // Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
 void OpenTransfer() {
-    const fs::path exe = g_root / L"LD_PC_Transfer.exe";
+    wchar_t self[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, self, MAX_PATH * 4);
     std::error_code ec;
+    fs::path exe = fs::path(self).parent_path() / L"LD_PC_Transfer.exe"; // ao lado do launcher (Fase 66: tambem no build\)
+    if (!fs::is_regular_file(exe, ec)) {
+        exe = g_root / L"LD_PC_Transfer.exe";
+    }
     std::wstring command = Quote(exe.wstring());
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
@@ -1365,6 +1385,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wchar_t exe[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
     g_root = fs::path(exe).parent_path();
+    {
+        // Fase 66: o launcher tambem pode ficar dentro do build\ (ao lado do lego_dimensions.exe): a raiz e a pasta de cima
+        std::error_code ec;
+        if (fs::is_regular_file(g_root / L"lego_dimensions.exe", ec) && fs::is_directory(g_root.parent_path() / L"assets", ec)) {
+            g_root = g_root.parent_path();
+        }
+        g_dev_tree = fs::is_regular_file(g_root / L"CMakeLists.txt", ec) && fs::is_directory(g_root / L"src", ec);
+    }
     // Fase 61: idioma escolhido no launcher (launcher.ini); "auto" segue LD_LANG / Windows
     if (const std::wstring choice = ReadIni(L"idioma", L"auto"); choice != L"auto" && !choice.empty()) {
         SetEnvironmentVariableW(L"LD_LANG", choice == L"pt" ? L"pt" : L"en");

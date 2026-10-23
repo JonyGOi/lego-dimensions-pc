@@ -503,6 +503,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wchar_t exe[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, exe, MAX_PATH * 4);
     g_root = fs::path(exe).parent_path();
+    if (std::error_code ec; fs::is_regular_file(g_root / L"lego_dimensions.exe", ec) && fs::is_directory(g_root.parent_path() / L"assets", ec)) {
+        g_root = g_root.parent_path(); // Fase 66: dentro do build\ da pasta de desenvolvimento, a raiz e a de cima
+    }
     // mesmo idioma escolhido no launcher
     wchar_t lang[16] = {};
     GetPrivateProfileStringW(L"launcher", L"idioma", L"auto", lang, 16, Ini().c_str());

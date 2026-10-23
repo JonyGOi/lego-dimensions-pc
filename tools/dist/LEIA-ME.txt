@@ -83,8 +83,8 @@ DICAS
     destino ja tinha vai para a pasta saves_backup. So o progresso vem; as opcoes voltam ao padrao.
     Num console de verdade o save ainda precisa ser reassinado (Apollo / Save Wizard / Horizon).
     Xbox One nao da: os saves dele ficam na nuvem, criptografados.
-  - Mods (botao "Mods" no launcher): aceita os mods de PS4 / shadPS4 do LEGO Dimensions. "Instalar mod de
-    um .zip" poe o mod na pasta mods\ do port (ou extraia voce mesmo la, uma pasta por mod); clicar no nome
+  - Mods (botao "Mods" no launcher): aceita os mods de PS4 / shadPS4 do LEGO Dimensions. "Instalar mod
+    (.zip, .rar, .7z)" poe o mod na pasta mods\ do port (ou extraia voce mesmo la, uma pasta por mod); clicar no nome
     liga / desliga. Tambem valem os que ja estiverem na pasta de mods do shadPS4 (CUSA01176-mods, ao lado
     do jogo) ou em CUSA01176\Mods. Tipos aceitos: pacote .HDR + .DAT (ex. feitos com o BrickVault) e
     arquivos soltos no formato da pasta do jogo (data\, sce_sys\). O jogo e os pacotes originais nao sao

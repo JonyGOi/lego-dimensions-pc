@@ -15,7 +15,7 @@ mudado e o .DAT com a cauda (o .DAT de verdade nunca e copiado nem alterado).
 
 Saida em assets\\mods_cache: <PACOTE>.HDR (tabela mudada), <PACOTE>.tail (bytes dos mods), mods.txt (manifesto),
 e os indices do radar em assets\\dat_index\\<PACOTE>_MODS.tsv.
-Uso: mods.py --instalar MOD.zip --mods PASTA
+Uso: mods.py --instalar MOD.zip|.rar|.7z --mods PASTA
      mods.py --root PORT --app0 JOGO [--patch PASTA] [--addcont PASTA] [--mods PASTA] [--cache PASTA] [--lingua en]
 Linhas: MOD <nome>: <n> arquivos trocados, SOBREPOSICAO <pasta>, INSTALADO <pasta>, PRONTO <n>, AVISO ..., ERRO ...
 """
@@ -300,26 +300,52 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
     return 0
 
 
-def install(zip_path, mods_dir):
-    """Extrai um mod (.zip) em mods\\<nome do zip>; recusa caminhos que sairiam da pasta."""
+def unsafe(name, dest):
+    """Caminho de dentro do arquivo que sairia da pasta do mod (absoluto, com unidade ou com ..)."""
+    target = os.path.normpath(os.path.join(dest, name))
+    return os.path.isabs(name) or ':' in name or not (target + os.sep).startswith(os.path.normpath(dest) + os.sep)
+
+
+def install(archive, mods_dir):
+    """Extrai um mod (.zip, .rar ou .7z) em mods\\<nome do arquivo>; recusa caminhos que sairiam da pasta.
+    .zip pelo zipfile; .rar / .7z pelo tar.exe do Windows (libarchive, Windows 10 1803 ou mais novo)."""
+    import subprocess
     import zipfile
-    name = re.sub(r'[<>:"/\\|?*]', '_', os.path.splitext(os.path.basename(zip_path))[0]).strip(' .') or 'mod'
+    base = os.path.basename(archive)
+    name = re.sub(r'[<>:"/\\|?*]', '_', os.path.splitext(base)[0]).strip(' .') or 'mod'
     dest, n = os.path.join(mods_dir, name), 2
     while os.path.exists(dest):
         dest = os.path.join(mods_dir, '%s (%d)' % (name, n))
         n += 1
-    with zipfile.ZipFile(zip_path) as z:
-        for info in z.infolist():
-            target = os.path.normpath(os.path.join(dest, info.filename))
-            if os.path.isabs(info.filename) or not target.startswith(os.path.normpath(dest) + os.sep):
-                say('ERRO ' + T('o zip tem um caminho perigoso (%s): nada foi instalado' % info.filename,
-                                'the zip has an unsafe path (%s): nothing was installed' % info.filename))
+    bad = None
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as z:
+            bad = next((i.filename for i in z.infolist() if unsafe(i.filename, dest)), None)
+            if not bad:
+                os.makedirs(dest)
+                z.extractall(dest)
+    else:
+        tar = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'tar.exe')
+        listing = subprocess.run([tar, '-tf', archive], capture_output=True, text=True, encoding='utf-8', errors='replace') \
+            if os.path.exists(tar) else None
+        if not listing or listing.returncode != 0:
+            say('ERRO ' + T('nao consegui abrir %s (o Windows so le .zip, .rar e .7z). Extraia com o 7-Zip / WinRAR e ponha a pasta em mods\\' % base,
+                            'could not open %s (Windows only reads .zip, .rar and .7z). Extract it with 7-Zip / WinRAR and put the folder in mods\\' % base))
+            return 1
+        bad = next((line for line in listing.stdout.splitlines() if line and unsafe(line, dest)), None)
+        if not bad:
+            os.makedirs(dest)
+            done = subprocess.run([tar, '-xf', archive, '-C', dest], capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if done.returncode != 0:
+                say('ERRO ' + T('a extracao de %s falhou: %s' % (base, done.stderr.strip()[:200]), 'extracting %s failed: %s' % (base, done.stderr.strip()[:200])))
                 return 1
-        os.makedirs(dest)
-        z.extractall(dest)
+    if bad:
+        say('ERRO ' + T('o arquivo tem um caminho perigoso (%s): nada foi instalado' % bad,
+                        'the archive has an unsafe path (%s): nothing was installed' % bad))
+        return 1
     if not overlay_root(dest) and not find_packs(dest):
-        say('AVISO ' + T('%s: o zip nao tem pacote .HDR/.DAT nem pastas data\\ ou sce_sys\\; confira se e um mod de PS4' % os.path.basename(dest),
-                         '%s: the zip has no .HDR/.DAT pack and no data\\ or sce_sys\\ folders; check that it is a PS4 mod' % os.path.basename(dest)))
+        say('AVISO ' + T('%s: nao tem pacote .HDR/.DAT nem pastas data\\ ou sce_sys\\; confira se e um mod de PS4' % os.path.basename(dest),
+                         '%s: no .HDR/.DAT pack and no data\\ or sce_sys\\ folders; check that it is a PS4 mod' % os.path.basename(dest)))
     say('INSTALADO ' + os.path.basename(dest))
     return 0
 
@@ -327,7 +353,7 @@ def install(zip_path, mods_dir):
 def main():
     global LANG
     parser = argparse.ArgumentParser(description='LEGO Dimensions PC: mods')
-    parser.add_argument('--instalar', help='extrai um mod (.zip) na pasta de mods')
+    parser.add_argument('--instalar', help='extrai um mod (.zip, .rar ou .7z) na pasta de mods')
     parser.add_argument('--root')
     parser.add_argument('--app0')
     parser.add_argument('--patch', default='')

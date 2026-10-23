@@ -88,7 +88,7 @@ TIPS
     options go back to default. On a real console the save still has to be re-signed (Apollo / Save
     Wizard / Horizon). Xbox One is not possible: its saves live in the cloud, encrypted.
   - Mods ("Mods" button in the launcher): takes the PS4 / shadPS4 LEGO Dimensions mods. "Install a mod
-    from a .zip" puts the mod in the port's mods\ folder (or extract it there yourself, one folder per
+    (.zip, .rar, .7z)" puts the mod in the port's mods\ folder (or extract it there yourself, one folder per
     mod); clicking its name turns it on / off. Mods already in the shadPS4 mods folder (CUSA01176-mods,
     next to the game) or in CUSA01176\Mods work too. Accepted kinds: a .HDR + .DAT pack (e.g. made with
     BrickVault) and loose files laid out like the game folder (data\, sce_sys\). The game and its
