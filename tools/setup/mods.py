@@ -225,39 +225,173 @@ def game_packs(layers, addcont):
     return {k: (hdrs[k], dats[k]) for k in hdrs if k in dats}
 
 
+def add_files_cc4(block, items):
+    """Poe arquivos novos numa tabela .CC4 (PATCH): entradas e hashes na ordem dos hashes, e o indice +6 dos nos da
+    arvore remapeado. Os nomes novos nao entram na arvore: o jogo acha um arquivo pelo hash FNV-1a do caminho.
+    items: (nome, offset, tamanho guardado, tamanho real, comprimido). Devolve (tabela nova, nomes postos)."""
+    archive_id, version, file_count, name_count, names_size = struct.unpack_from('>iiIII', block, 12)
+    if version < 2 or archive_id > -10:
+        raise ValueError('formato de tabela desconhecido')
+    tree = 36 + names_size
+    q = tree + 12 * name_count
+    if struct.unpack_from('>iI', block, q) != (archive_id, file_count):
+        raise ValueError('tabela fora do esperado')
+    entries_at = q + 8
+    hashes_at = entries_at + 16 * file_count
+    rest = bytes(block[hashes_at + 4 * file_count:])
+    old = [(struct.unpack_from('>I', block, hashes_at + 4 * i)[0], bytes(block[entries_at + 16 * i:entries_at + 16 * i + 16]), i)
+           for i in range(file_count)]
+    # confere a variante do hash com nomes que ja estao na tabela
+    positions = toc_positions(bytes(block))[0]
+    checked = 0
+    for name, pos in list(positions.items())[:200]:
+        index = (pos - entries_at) // 16
+        if old[index][0] and old[index][0] != nu2toc.fnv(name[1:], 32, 1677619):
+            raise ValueError('hash da tabela diferente do esperado')
+        checked += 1
+    if not checked:
+        raise ValueError('tabela sem nomes conferiveis')
+    taken = {h for h, _, _ in old}
+    new, added = [], []
+    for name, offset, zsize, usize, packed in items:
+        h = nu2toc.fnv(name[1:], 32, 1677619)
+        if not h or h in taken:
+            continue
+        taken.add(h)
+        if archive_id <= -13:
+            entry = struct.pack('>QII', offset | ((2 << 56) if packed else 0), zsize, usize)
+        else:
+            entry = struct.pack('>QII', offset, zsize, usize | (0x80000000 if packed else 0))
+        new.append((h, entry, None))
+        added.append(name)
+    rows = sorted(old + new, key=lambda r: r[0])  # estavel: os de hash 0 (nomes por extenso) continuam no comeco
+    remap = {r[2]: i for i, r in enumerate(rows) if r[2] is not None}
+    out = bytearray(block[:entries_at])
+    for i in range(name_count):  # so os nos de arquivo (+10 = numero do arquivo; o ultimo no e arquivo sempre)
+        at = tree + 12 * i
+        if struct.unpack_from('>I', out, at)[0] != 0xFFFFFFFF and (struct.unpack_from('>H', out, at + 10)[0] or i == name_count - 1):
+            struct.pack_into('>H', out, at + 6, remap[struct.unpack_from('>H', out, at + 6)[0]])
+    if len(rows) > 0xFFFF:
+        raise ValueError('arquivos demais para o indice de 16 bits')
+    struct.pack_into('>I', out, q + 4, len(rows))
+    struct.pack_into('>I', out, 20, len(rows))
+    out += b''.join(r[1] for r in rows)
+    out += b''.join(struct.pack('>I', r[0]) for r in rows)
+    out += rest
+    struct.pack_into('>I', out, 0, len(out) - 4)
+    return out, added
+
+
+def csv_row(line):
+    import csv
+    return next(csv.reader([line]), [])
+
+
+def merge_text(base, extras):
+    """text.csv do jogo + as linhas (rotulos novos) do text.csv de cada mod; o jogo so le um text.csv (o do pacote de
+    maior prioridade), entao as legendas e nomes de um mod de pacote proprio entram neste."""
+    import csv
+    import io
+    text = base.decode('cp1252', errors='replace')
+    newline = '\r\n' if '\r\n' in text else '\n'
+    lines = text.split(newline)
+    header = csv_row(lines[0])
+    seen = {csv_row(l)[0].upper() for l in lines[1:] if l.strip() and csv_row(l)}
+    added = []
+    for label, data in extras:
+        try:
+            mod_text = data.decode('utf-8')
+        except UnicodeDecodeError:
+            mod_text = data.decode('cp1252', errors='replace')
+        rows = list(csv.reader(io.StringIO(mod_text)))
+        if not rows:
+            continue
+        mod_header = [h.upper() for h in rows[0]]
+        for row in rows[1:]:
+            if not row or not row[0] or row[0].upper() in seen:
+                continue
+            fields = dict(zip(mod_header, row))
+            english = fields.get('ENGLISH') or next((v for v in row[3:] if v), '')
+            out = io.StringIO()
+            csv.writer(out, quoting=csv.QUOTE_ALL, lineterminator='').writerow(
+                [fields.get(h.upper(), english if i >= 3 else '') for i, h in enumerate(header)])
+            added.append(out.getvalue())
+            seen.add(row[0].upper())
+    if not added:
+        return None, 0
+    while lines and not lines[-1].strip():
+        lines.pop()
+    merged = newline.join(lines + added) + newline
+    return merged.encode('cp1252', errors='replace'), len(added)
+
+
+def read_ignore(folder):
+    """mods\\<mod>\\ignorar.txt: um caminho interno por linha (ex. collectables\\cheats.txt) que o port nao usa do mod."""
+    path = os.path.join(folder, 'ignorar.txt')
+    names = set()
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8-sig', errors='replace') as f:
+            for line in f:
+                line = line.split('#')[0].strip().replace('/', '\\')
+                if line:
+                    names.add(('\\' + line.lstrip('\\')).upper())
+    return names
+
+
+def loose_files(folder, top_dirs):
+    """Arquivos soltos com o caminho interno do jogo, como os mods de PC (chars\\collection.txt na pasta do mod): so os
+    que estao numa pasta de primeiro nivel que o jogo tem (chars, audio, stuff...), para deixar de fora leia-me e fotos."""
+    out = []
+    for base, dirs, files in os.walk(folder):
+        for f in files:
+            if os.path.splitext(f)[1].lower() in ('.hdr', '.dat', '.hdr2', '.dat2'):
+                continue
+            path = os.path.join(base, f)
+            rel = os.path.relpath(path, folder).replace('/', '\\')
+            if '\\' in rel and rel.split('\\')[0].lower() in top_dirs:
+                out.append(('\\' + rel, path))
+    return out
+
+
 # ---------------------------------------------------------------- principal
 def prepare(root, app0, patch, mods_dir, cache, addcont):
     os.makedirs(cache, exist_ok=True)
     manifest = os.path.join(cache, 'mods.txt')
     sources = mod_sources(mods_dir, app0)
-    overlays, mod_files = [], []  # mod_files: (mod, nome, bytes guardados, tamanho real, comprimido)
+    overlays, mod_files, loose_sources = [], [], []  # mod_files: (ordem da fonte, rotulo, .DAT, pasta)
     stamp = hashlib.sha1()
     with open(os.path.abspath(__file__), 'rb') as f:  # um mods.py novo (atualizacao do port) refaz o cache
         stamp.update(f.read())
-    for label, folder in sources:
+
+    def stamp_file(path):
+        st = os.stat(path)
+        stamp.update(('%s|%d|%d' % (path, st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
+    for source, (label, folder) in enumerate(sources):
         over = overlay_root(folder)
         if over:
             overlays.append(over)
             say('SOBREPOSICAO %s' % over)
             for base, _, files in os.walk(over):
                 for f in files:
-                    st = os.stat(os.path.join(base, f))
-                    stamp.update(('%s|%d|%d' % (os.path.join(base, f), st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
-        for dat in find_packs(folder):
+                    stamp_file(os.path.join(base, f))
+        packs_here = find_packs(folder)
+        for dat in packs_here:
             stem = os.path.splitext(os.path.basename(dat))[0]
             if over and GAME_PACK.match(stem) and os.path.normcase(dat).startswith(os.path.normcase(over) + os.sep):
                 continue  # pacote do jogo dentro de data\chunkN: a sobreposicao ja troca o pacote inteiro
-            st = os.stat(dat)
-            stamp.update(('%s|%d|%d' % (dat, st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
-            mod_files.append((label + ': ' + os.path.splitext(os.path.basename(dat))[0], dat))
-        if not over and not find_packs(folder):
-            not_a_mod(label, folder)
+            stamp_file(dat)
+            mod_files.append((source, label + ': ' + stem, dat, folder))
+        if not over:
+            loose_sources.append((source, label, folder))
+            for base, _, files in os.walk(folder):
+                for f in files:
+                    if os.path.splitext(f)[1].lower() not in ('.hdr', '.dat', '.hdr2', '.dat2'):
+                        stamp_file(os.path.join(base, f))
     layers = overlays + ([patch] if patch and os.path.isdir(patch) else []) + [app0]
     packs = game_packs(layers, addcont)
     for name, (hdr_path, dat_path) in sorted(packs.items()):
-        for path in (hdr_path, dat_path):
-            st = os.stat(path)
-            stamp.update(('%s|%d|%d' % (path, st.st_size, st.st_mtime_ns)).encode('utf-8', 'replace'))
+        stamp_file(hdr_path)
+        stamp_file(dat_path)
     key = stamp.hexdigest()
     if os.path.exists(manifest):
         with open(manifest, encoding='utf-8') as f:
@@ -268,12 +402,43 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
     for old in glob.glob(os.path.join(cache, '*.HDR')) + glob.glob(os.path.join(cache, '*.tail')):
         os.remove(old)
 
-    # arquivos de cada pacote de mod, por (escopo, nome): escopo None = pacote proprio (AllWorld), que troca o arquivo em
-    # todo pacote do jogo que o tem; escopo PACOTE = pacote do jogo editado, que so troca dentro do pacote de mesmo nome,
-    # como no shadPS4 (cada pacote tem o seu stuff\ttbmetadata.xml: o do PATCH no GAME derruba o jogo).
-    # Num mesmo pacote do jogo, o primeiro mod (ordem alfabetica) que trouxer um nome vence.
-    wanted = {}
-    for order, (label, dat) in enumerate(mod_files):
+    # tabelas de todos os pacotes do jogo (nome -> posicao da entrada), para saber o que ja existe
+    tocs = {}
+    for pack, (hdr_path, dat_path) in sorted(packs.items()):
+        with open(hdr_path, 'rb') as f:
+            block = bytearray(f.read())
+        try:
+            tocs[pack] = (block,) + (toc_positions if block[4:8] == b'.CC4' else toc_positions_old)(bytes(block))
+        except Exception as e:
+            say('AVISO ' + T('tabela de %s nao lida (%s)' % (pack, e), 'table of %s not read (%s)' % (pack, e)))
+    all_names = set()
+    for _block, positions, _id, _version in tocs.values():
+        all_names.update(positions)
+    top_dirs = {n.split('\\')[1].lower() for n in all_names if n.count('\\') > 1}
+
+    # arquivos de cada mod, por (escopo, nome): escopo None = pacote proprio (AllWorld) ou arquivo solto, que troca o
+    # arquivo em todo pacote do jogo que o tem (ou entra como arquivo novo no PATCH); escopo PACOTE = pacote do jogo
+    # editado, que so troca dentro do pacote de mesmo nome, como no shadPS4 (cada pacote tem o seu
+    # stuff\ttbmetadata.xml: o do PATCH no GAME derruba o jogo). O primeiro mod (ordem alfabetica) que trouxer um
+    # nome vence. Os text.csv de pacote proprio / soltos sao juntados ao do jogo (texts), nao trocados.
+    wanted, texts = {}, []
+    ignored = {}
+
+    def take(scope, order, label, name, data, usize, packed, folder):
+        upper = name.upper()
+        if upper in ignored.setdefault(folder, read_ignore(folder)):
+            return
+        if (scope, upper) in wanted:
+            return
+        if not scope and upper in WHOLE_GAME_FILES:
+            texts.append((label, data) if not packed else None)
+            return
+        if scope and upper in BUILD_INFO:
+            say('AVISO ' + T('%s: %s do mod ignorado (descreve a versao do jogo de quem fez o mod; trocar derruba o jogo)' % (label, name),
+                             '%s: the mod\'s %s was skipped (it describes the mod author\'s game version; replacing it crashes the game)' % (label, name)))
+            return
+        wanted[(scope, upper)] = (order, label, name, data, usize, packed)
+    for source, label, dat, folder in mod_files:
         try:
             rows = nu2toc.read_toc(dat)
         except Exception as e:
@@ -292,8 +457,6 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
         scope = stem if same_pack else None
         with open(dat, 'rb') as f, open(same_pack[1] if same_pack else dat, 'rb') as g:
             for name, usize, zsize, offset, packed in rows:
-                if (scope, name.upper()) in wanted:
-                    continue
                 f.seek(offset)
                 data = f.read(zsize)
                 old = original.get(name.upper())
@@ -301,46 +464,75 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
                     g.seek(old[3])
                     if g.read(zsize) == data:
                         continue
-                if not scope and name.upper() in WHOLE_GAME_FILES:
-                    say('AVISO ' + T('%s: %s do mod ignorado (tem so os textos do mod; no lugar do do jogo apagaria todos os textos)' % (label, name),
-                                     '%s: the mod\'s %s was skipped (it only has the mod\'s texts; replacing the game\'s would erase all texts)' % (label, name)))
-                    continue
-                if scope and name.upper() in BUILD_INFO:
-                    say('AVISO ' + T('%s: %s do mod ignorado (descreve a versao do jogo de quem fez o mod; trocar derruba o jogo)' % (label, name),
-                                     '%s: the mod\'s %s was skipped (it describes the mod author\'s game version; replacing it crashes the game)' % (label, name)))
-                    continue
-                wanted[(scope, name.upper())] = (order, label, name, data, usize, bool(packed))
+                if scope and name.upper() not in original:
+                    scope_new = None  # arquivo que o pacote do jogo nao tem: entra como os de pacote proprio
+                else:
+                    scope_new = scope
+                take(scope_new, (source, 0), label, name, data, usize, bool(packed), folder)
+    for source, label, folder in loose_sources:
+        for name, path in loose_files(folder, top_dirs):
+            with open(path, 'rb') as f:
+                data = f.read()
+            take(None, (source, 1), label + T(' (soltos)', ' (loose)'), name, data, len(data), False, folder)
+    texts = [t for t in texts if t]
+    text_name = '\\stuff\\text\\text.csv'
+    if texts and 'PATCH' in tocs and text_name.upper() in tocs['PATCH'][1]:
+        current = wanted.get(('PATCH', text_name.upper()))
+        if current:
+            base = current[3]
+        else:
+            base = None
+            for row in nu2toc.read_toc(packs['PATCH'][1]):
+                if row[0].upper() == text_name.upper():
+                    with open(packs['PATCH'][1], 'rb') as f:
+                        f.seek(row[3])
+                        base = f.read(row[2]) if not row[4] else None
+        merged, count = merge_text(base, texts) if base else (None, 0)
+        if merged:
+            wanted[('PATCH', text_name.upper())] = ((-1, 0), T('textos dos mods', 'mod texts'), text_name, merged, len(merged), False)
+            say('TEXTOS ' + T('%d linha(s) nova(s) dos mods no text.csv (%s)' % (count, ', '.join(l for l, _ in texts)),
+                              '%d new line(s) from the mods in text.csv (%s)' % (count, ', '.join(l for l, _ in texts))))
 
     lines = ['# chave ' + key]
     lines += ['overlay\t%s' % o for o in overlays]
     found = set()
+    new_names = {k for k in wanted if k[0] is None and k[1] not in all_names}
     for pack, (hdr_path, dat_path) in sorted(packs.items()):
-        if not wanted:
-            break
-        with open(hdr_path, 'rb') as f:
-            block = bytearray(f.read())
-        try:
-            positions, archive_id, version = (toc_positions if block[4:8] == b'.CC4' else toc_positions_old)(bytes(block))
-        except Exception as e:
-            say('AVISO ' + T('tabela de %s nao lida (%s)' % (pack, e), 'table of %s not read (%s)' % (pack, e)))
+        if pack not in tocs:
             continue
+        block, positions, archive_id, version = tocs[pack]
         hits = {}  # nome -> chave de wanted (o mod de menor ordem entre os de escopo None e os deste pacote)
-        for key, entry in wanted.items():
-            if key[0] in (None, pack) and key[1] in positions and (key[1] not in hits or entry[0] < wanted[hits[key[1]]][0]):
-                hits[key[1]] = key
-        if not hits:
+        for key_, entry in wanted.items():
+            if key_[0] in (None, pack) and key_[1] in positions and (key_[1] not in hits or entry[0] < wanted[hits[key_[1]]][0]):
+                hits[key_[1]] = key_
+        extra = sorted(new_names) if pack == 'PATCH' and block[4:8] == b'.CC4' else []
+        if not hits and not extra:
             continue
         base = os.path.getsize(dat_path)
         tail = bytearray()
         index_rows = []
-        for n, key in hits.items():
-            _order, label, name, data, usize, packed = wanted[key]
+        for n, key_ in hits.items():
+            _order, label, name, data, usize, packed = wanted[key_]
             while len(tail) % 16:
                 tail.append(0)
             write_entry(block, positions[n], archive_id, version, base + len(tail), len(data), usize, packed)
             index_rows.append((name, usize, len(data), len(tail), 2 if packed else 0))
             tail += data
-            found.add(key)
+            found.add(key_)
+        if extra:
+            items = []
+            for key_ in extra:
+                _order, label, name, data, usize, packed = wanted[key_]
+                while len(tail) % 16:
+                    tail.append(0)
+                items.append((name, base + len(tail), len(data), usize, packed))
+                index_rows.append((name, usize, len(data), len(tail), 2 if packed else 0))
+                tail += data
+            try:
+                block, added = add_files_cc4(block, items)
+                found.update((None, n.upper()) for n in added)
+            except ValueError as e:
+                say('AVISO ' + T('arquivos novos dos mods nao entraram no PATCH (%s)' % e, 'the mods\' new files were not added to PATCH (%s)' % e))
         cache_hdr = os.path.join(cache, pack + '.HDR')
         cache_tail = os.path.join(cache, pack + '.tail')
         with open(cache_hdr, 'wb') as f:
@@ -353,15 +545,24 @@ def prepare(root, app0, patch, mods_dir, cache, addcont):
         except OSError:
             pass
         lines.append('pacote\t%s\t%s\t%s\t%s\t%d\t%s' % (pack, hdr_path, cache_hdr, dat_path, base, cache_tail))
-    per_mod = {label: [0, 0] for label, _ in mod_files}  # um pacote igual ao do jogo aparece com 0
-    for key, (_order, label, *_rest) in wanted.items():
-        hit = per_mod.setdefault(label, [0, 0])
-        hit[0 if key in found else 1] += 1
-    for label, (ok, new) in per_mod.items():
-        say('MOD ' + T('%s: %d arquivo(s) do jogo trocado(s)' % (label, ok), '%s: %d game file(s) replaced' % (label, ok)))
-        if new:
-            say('AVISO ' + T('%s: %d arquivo(s) que o jogo nao tem ficaram de fora (o port so troca arquivos que ja existem)' % (label, new),
-                             '%s: %d file(s) the game does not have were left out (the port only replaces existing files)' % (label, new)))
+    per_mod = {}  # rotulo -> [trocados, novos, de fora]
+    for label in [m[1] for m in mod_files]:
+        per_mod[label] = [0, 0, 0]
+    for key_, (_order, label, *_rest) in wanted.items():
+        if _order[0] < 0:
+            continue
+        hit = per_mod.setdefault(label, [0, 0, 0])
+        hit[(1 if key_ in new_names else 0) if key_ in found else 2] += 1
+    for label, (ok, new, out) in per_mod.items():
+        extra_text = T(', %d novo(s)' % new, ', %d new' % new) if new else ''
+        say('MOD ' + T('%s: %d arquivo(s) do jogo trocado(s)%s' % (label, ok, extra_text), '%s: %d game file(s) replaced%s' % (label, ok, extra_text)))
+        if out:
+            say('AVISO ' + T('%s: %d arquivo(s) ficaram de fora (nome repetido ou o jogo nao tem o pacote)' % (label, out),
+                             '%s: %d file(s) were left out (repeated name or the game lacks the pack)' % (label, out)))
+    for source, label, folder in loose_sources:
+        has_loose = any(k for k, v in wanted.items() if v[1].startswith(label + ' ('))
+        if not has_loose and not any(m[0] == source for m in mod_files):
+            not_a_mod(label, folder)
     with open(manifest, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
     say('PRONTO %d' % len(sources))

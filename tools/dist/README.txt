@@ -94,6 +94,9 @@ TIPS
     BrickVault), an edited game pack (e.g. PATCH.HDR + PATCH.DAT: only the files that changed are used) and loose files laid out like the game folder (data\, sce_sys\). The game and its
     original packs are not changed: the port just shows the game the mod's files instead of the original
     ones. The launcher prepares the mods when you click PLAY (the first time with a new mod takes a few
-    seconds). A mod can only replace files the game already has; new files are left out (the launcher
-    says so in its log).
+    seconds). A mod's new files (e.g. new voice lines for a character) are added too, and the subtitles
+    in a mod's text.csv are merged into the game's. Loose files with the game's internal path work as in
+    PC mods (e.g. mods\my_mod\chars\collection.txt). If two mods clash, an ignorar.txt in one mod's
+    folder, with one internal path per line (e.g. collectables\cheats.txt), makes the port skip those
+    files from it. Figures (Toy Pad .bin files) are not mods: open them in the portal app.
   - Use folder names without accents (the port receives paths in ANSI).

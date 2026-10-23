@@ -89,6 +89,10 @@ DICAS
     do jogo) ou em CUSA01176\Mods. Tipos aceitos: pacote .HDR + .DAT (ex. feitos com o BrickVault), um
     pacote do jogo editado (ex. PATCH.HDR + PATCH.DAT: entram so os arquivos que mudaram) e arquivos soltos no formato da pasta do jogo (data\, sce_sys\). O jogo e os pacotes originais nao sao
     alterados: o port so mostra ao jogo os arquivos do mod no lugar dos originais. O launcher prepara os
-    mods ao clicar em JOGAR (a primeira vez com um mod novo leva alguns segundos). Um mod so pode trocar
-    arquivos que o jogo ja tem; arquivos novos ficam de fora (o launcher avisa no log).
+    mods ao clicar em JOGAR (a primeira vez com um mod novo leva alguns segundos). Arquivos novos de um
+    mod (ex. falas novas de um personagem) entram tambem, e as legendas do text.csv de um mod sao juntadas
+    as do jogo. Tambem valem arquivos soltos com o caminho interno do jogo, como nos mods de PC (ex.
+    mods\meu_mod\chars\collection.txt). Se dois mods brigarem, um ignorar.txt na pasta de um deles, com um
+    caminho interno por linha (ex. collectables\cheats.txt), faz o port nao usar aqueles arquivos dele.
+    Figuras (.bin do Toy Pad) nao sao mods: abra no app do portal.
   - Use pastas com nomes sem acento (o port recebe os caminhos em ANSI).
