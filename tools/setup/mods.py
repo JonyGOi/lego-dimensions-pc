@@ -671,6 +671,89 @@ def figure_tags(folder):
     return ids
 
 
+def cd_objects(data):
+    """Objetos com tamanho de um .cd: (posicao, tamanho, tag). Cada um e u32 tamanho (contando ele), u32 5, TAG\\0."""
+    return [(m.start() - 4, struct.unpack_from('<I', data, m.start() - 4)[0], m.group(1))
+            for m in re.finditer(rb'\x05\x00\x00\x00(MOBJ|OLST)\x00', data)]
+
+
+def set_anim_sets(data, current, names):
+    """Troca a lista de conjuntos de animacao de um .cd (a OLST que tem o nome current; formato dos .cd de inimigo:
+    u16 tipo, u32 quantos, um MOBJ por nome = u32 0, u32 tamanho, nome\\0, u8 Force Load) e corrige o tamanho dos
+    objetos que a contem. None se o arquivo nao tiver esse formato."""
+    at = data.find(current.encode('latin-1') + b'\0')
+    lists = [(p, s) for p, s, t in cd_objects(data) if t == b'OLST' and p < at < p + s] if at >= 0 else []
+    if not lists:
+        return None
+    p, size = min(lists, key=lambda x: x[1])
+    kind, count = struct.unpack_from('<HI', data, p + 13)
+    pos = p + 19
+    for _ in range(count):
+        child = struct.unpack_from('<I', data, pos)[0]
+        if data[pos + 4:pos + 13] != b'\x05\x00\x00\x00MOBJ\x00' or child != 22 + struct.unpack_from('<I', data, pos + 17)[0]:
+            return None
+        pos += child
+    if pos != p + size:
+        return None
+    body = b''
+    for name in names:
+        s = name.encode('latin-1') + b'\0'
+        body += struct.pack('<II', 22 + len(s), 5) + b'MOBJ\0' + struct.pack('<II', 0, len(s)) + s + b'\0'
+    new = struct.pack('<II', 19 + len(body), 5) + b'OLST\0' + struct.pack('<HI', kind, len(names)) + body
+    out = bytearray(data[:p] + new + data[p + size:])
+    for q, s, _ in cd_objects(data):
+        if q < p and q + s >= p + size:
+            struct.pack_into('<I', out, q, s + len(new) - size)
+    return bytes(out)
+
+
+def figure_txt(info, tocs, packs):
+    """O .txt do personagem como figura jogavel: as habilidades escolhidas do doador, as marcas (ex. magic), o cajado
+    da figura no lugar do item dele e sem as linhas de inimigo."""
+    txt = game_file(tocs, packs, info['txt'].upper())
+    donor_txt = game_file(tocs, packs, info['txt_doador'].upper())
+    if txt is None or donor_txt is None:
+        return None
+    wanted = set(info['habilidades_do_doador'])
+    ability = re.compile(r'\s*Ability "([^"]+)"')
+    abilities = [line.strip() for line in donor_txt.decode('latin-1').splitlines()
+                 if ability.match(line) and ability.match(line).group(1) in wanted]
+    lines = []
+    for line in txt.decode('latin-1').splitlines():
+        s = line.strip()
+        if s in info.get('tirar_do_txt', []):
+            line = '//' + line
+        elif 'item' in info and s.startswith('default_item "%s"' % info['item']['atual']):
+            line = 'default_item "%s" always_got held' % info['item']['nome']
+        lines.append(line)
+    # as habilidades do doador entram depois da ultima do personagem; as marcas, no fim
+    last = max((i for i, line in enumerate(lines) if ability.match(line)), default=len(lines) - 1)
+    lines[last + 1:last + 1] = abilities
+    lines += [''] + info.get('marcas', [])
+    return '\r\n'.join(lines).encode('latin-1') + b'\r\n'
+
+
+def figure_item(info, tocs, packs):
+    """O arquivo de itens com um item novo para a figura: copia do item do doador (habilidades de tiro, magia etc.)
+    com o modelo do item do personagem, e que pode ser guardado nas costas (guardado, a figura usa as animacoes
+    normais de minifigura)."""
+    item = info['item']
+    data = game_file(tocs, packs, item['arquivo'].upper())
+    if data is None:
+        return None
+    text = data.decode('latin-1')
+    m = re.search(r'item_type "%s".*?\n}\r?\n' % re.escape(item['base']), text, re.S)
+    if not m:
+        return None
+    block = m.group(0).replace('item_type "%s"' % item['base'], 'item_type "%s"' % item['nome'])
+    block = re.sub(r'(\n\s*obj\s+)"[^"]*"', lambda x: x.group(1) + '"%s"' % item['obj'], block, count=1)
+    block = re.sub(r'(\n\s*name\s+)"[^"]*"', lambda x: x.group(1) + '"%s"' % item['nome'], block, count=1)
+    block = re.sub(r'\n(\s*)cannot_manual_put_away', r'\n\1//cannot_manual_put_away', block)
+    block = block[:block.rstrip().rfind('}')] + ('\tputaway_locator\r\n\t{\r\n\t\tlocator "BackPack"\r\n\t\tmaya_offset 0 0 -0.9\r\n'
+                                                  '\t\tmaya_rot -100 -88.078 0\r\n\t\tscale 0.6\r\n\t}\r\n}\r\n')
+    return (text.rstrip() + '\r\n\r\n' + block).encode('latin-1')
+
+
 def hidden_figure_pack(char, info, tocs, packs, all_names, cache):
     """Pacote do Anomaly que libera uma figura desligada no jogo (ver figuras_ocultas.json): a linha Collect (em
     camadas no chars\\collection.txt) e o charcache\\<nome>: o do doador inteiro (animacoes, habilidades e o resto que
@@ -693,21 +776,27 @@ def hidden_figure_pack(char, info, tocs, packs, all_names, cache):
     base = target + 'chars\\minifig\\%s\\%s' % (char, char)
     if not add(base + '.cd', info['cd'] + '.cd'):
         return None
-    # Fase 67: o .cd de inimigo do personagem so cita os conjuntos de animacao das fases dele; um deles vira o
-    # SharedAnims de toda figura (andar, pular, lutar), senao a figura fica em T. O nome novo e completado com
-    # zeros no mesmo espaco, para nenhum tamanho do arquivo mudar.
+    # Fase 67: o .cd de inimigo do personagem so cita os conjuntos de animacao das fases dele (sem eles a figura fica
+    # em T); a lista vira a do doador: as animacoes de cajado e habilidades dele + o SharedAnims de toda figura.
     cd = files[-1]
-    if len(cd) != 2:
-        return None  # .cd comprimido: nao da para trocar o nome
-    cd_data = cd[1]
-    for old, new in info.get('animacoes', []):
-        old_b, new_b = old.encode('latin-1'), new.encode('latin-1')
-        if len(new_b) > len(old_b) or cd_data.count(old_b) != 1:
+    sets = info.get('conjuntos_de_animacao')
+    if sets:
+        cd_data = set_anim_sets(cd[1], sets['atual'], sets['novos']) if len(cd) == 2 else None
+        if cd_data is None:
             return None
-        cd_data = cd_data.replace(old_b, new_b + b'\0' * (len(old_b) - len(new_b)))
-    files[-1] = (cd[0], cd_data)
+        files[-1] = (cd[0], cd_data)
     if not add(base + '.cd.res', info['cd'] + '.cd.res'):
         return None
+    if 'txt' in info:
+        txt = figure_txt(info, tocs, packs)
+        if txt is None:
+            return None
+        files.append((info['txt'], txt))
+    if 'item' in info:
+        items = figure_item(info, tocs, packs)
+        if items is None:
+            return None
+        files.append((info['item']['arquivo'], items))
     for extra in info['extras']:
         add(target + extra.lstrip('\\'), extra)
     hdr_bytes, dat_bytes = build_pack(files)

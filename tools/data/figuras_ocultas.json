@@ -1,5 +1,5 @@
 {
- "_sobre": "Fase 67: figuras que o jogo tem mas deixa desligadas (linha comentada no chars\\collection.txt e sem charcache). O mods.py libera a figura quando a pasta de mods tem a gravacao .bin dela: linha Collect, charcache feito do de um doador (animacoes e habilidades de figura) e o .cd do personagem, com os conjuntos de animacao trocados (animacoes: [nome no .cd, nome novo], o novo nao pode ser maior). extras = recursos que o jogo pede dentro do charcache (so caminhos; os arquivos vem do jogo do jogador).",
+ "_sobre": "Fase 67: figuras que o jogo tem mas deixa desligadas (linha comentada no chars\\collection.txt e sem charcache). O mods.py libera a figura quando a pasta de mods tem a gravacao .bin dela: linha Collect, charcache feito do de um doador (animacoes e habilidades de figura) e o .cd do personagem. conjuntos_de_animacao: a lista do .cd (a que tem \"atual\") vira \"novos\"; txt: o .txt do personagem ganha as habilidades_do_doador e as marcas e perde as linhas tirar_do_txt; item: item novo copiado de \"base\" com o modelo \"obj\", que pode ser guardado nas costas. extras = recursos que o jogo pede dentro do charcache (so caminhos; os arquivos vem do jogo do jogador).",
  "lordvortech": {
   "id": 73,
   "collect": "LordVortech",
@@ -7,12 +7,51 @@
   "doador": "gandalfthegrey",
   "cd_doador": "\\chars\\minifig\\gandalf\\gandalfthegrey",
   "cd": "\\chars\\minifig\\lordvortech\\lordvortech",
-  "animacoes": [
-   [
-    "12_FoundationPrimeB",
+  "conjuntos_de_animacao": {
+   "atual": "12_FoundationPrimeB",
+   "novos": [
+    "Ability_Combat_Idle_Gandalf",
+    "Gandalf_Default_Staff_Player",
+    "Ability_CombatRoll_Gandalf",
+    "Ability_Force_Gandalf",
+    "Ability_SpellIt_Gandalf",
+    "Ability_MagicShield_Gandalf",
+    "Gandalf_Default_Staff",
+    "Ability_Fight_Combo_Gandalf",
+    "Ability_Fight_Special_Gandalf",
+    "Ability_Illumination_Gandalf",
+    "Ability_Shoot_Gandalf",
+    "Ability_Vortech_Gandalf",
+    "Ability_Lunge_Gandalf",
     "SharedAnims"
    ]
+  },
+  "txt": "\\chars\\minifig\\lordvortech\\lordvortech.txt",
+  "txt_doador": "\\chars\\minifig\\gandalf\\gandalfthegrey.txt",
+  "habilidades_do_doador": [
+   "MagicLocomote",
+   "DefLungeShockwave",
+   "GANDALF_Targeting",
+   "GandalfForceField",
+   "MagicGlowSettings",
+   "StandardCharacterTag",
+   "PreventInteractWaterGrowSpot"
   ],
+  "tirar_do_txt": [
+   "baddie",
+   "hit_points=1"
+  ],
+  "marcas": [
+   "magic",
+   "streak blue"
+  ],
+  "item": {
+   "arquivo": "\\chars\\items_txt\\staffs.txt",
+   "base": "GandalfStaff",
+   "atual": "VortechStaff",
+   "nome": "VortechStaff_Figura",
+   "obj": "VortechStaff"
+  },
   "extras": [
    "\\charcache\\gandalfthegrey\\chars\\levels\\levels_minifig\\11_scoobydoo\\11_scoobydooc2\\11_scoobydooc2_minifig.as",
    "\\charcache\\gandalfthegrey\\chars\\levels\\levels_minifig\\11_scoobydoo\\11_scoobydooc2\\11_scoobydooc2_minifig_as\\minecarthanging_minifig_def_dx11.an4",
