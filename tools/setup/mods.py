@@ -751,6 +751,13 @@ def figure_item(info, tocs, packs):
     block = re.sub(r'(\n\s*obj\s+)"[^"]*"', lambda x: x.group(1) + '"%s"' % item['obj'], block, count=1)
     block = re.sub(r'(\n\s*name\s+)"[^"]*"', lambda x: x.group(1) + '"%s"' % item['nome'], block, count=1)
     block = re.sub(r'\n(\s*)cannot_manual_put_away', r'\n\1//cannot_manual_put_away', block)
+    # as habilidades do item do proprio personagem tambem (ex. o portal dentro do anel do cajado do Vortech)
+    own = re.search(r'item_type "%s".*?\n}\r?\n' % re.escape(item['atual']), text, re.S)
+    if own:
+        for line in own.group(0).splitlines():
+            s = line.strip()
+            if re.match(r'(ItemAbility|OwnerAbility)\s', s) and s not in block:
+                block = block[:block.rstrip().rfind('}')] + '\t' + s + '\r\n}\r\n'
     block = block[:block.rstrip().rfind('}')] + ('\tputaway_locator\r\n\t{\r\n\t\tlocator "BackPack"\r\n\t\tmaya_offset 0 0 -0.9\r\n'
                                                   '\t\tmaya_rot -100 -88.078 0\r\n\t\tscale 0.6\r\n\t}\r\n}\r\n')
     return (text.rstrip() + '\r\n\r\n' + block).encode('latin-1')
