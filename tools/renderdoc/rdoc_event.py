@@ -59,11 +59,13 @@ try:
                     log('      %3d: %s | %s' % (i, ' '.join('%08x' % w for w in words[i:i + 4]),
                                                 ' '.join('%12.5g' % f for f in floats[i:i + 4])))
     try:
-        for res in state.GetSamplers(rd.ShaderStage.Fragment):
-            d = res.descriptor
-            log('sampler PS[%s]: U %s V %s W %s | filtro %s | lod %s..%s bias %s | comparacao %s' %
-                (res.access.index, d.addressU, d.addressV, d.addressW, d.filter.minify if hasattr(d.filter, 'minify') else d.filter,
-                 d.minLOD, d.maxLOD, d.mipBias, d.compareFunction))
+        for stage, name in ((rd.ShaderStage.Vertex, 'VS'), (rd.ShaderStage.Fragment, 'PS')):
+            for res in state.GetSamplers(stage):
+                d = getattr(res, 'sampler', None) or res.descriptor
+                log('sampler %s[%s]: U %s V %s W %s | filtro %s | lod %s..%s bias %s | comparacao %s | sem normalizar %s' %
+                    (name, res.access.index, d.addressU, d.addressV, d.addressW,
+                     d.filter.minify if hasattr(d.filter, 'minify') else d.filter, d.minLOD, d.maxLOD, d.mipBias,
+                     d.compareFunction, getattr(d, 'unnormalized', '?')))
     except Exception as e:
         log('samplers: ? (%s)' % e)
     try:
@@ -71,13 +73,16 @@ try:
         log('viewport: %s %s %s %s profundidade %s..%s' % (vp.x, vp.y, vp.width, vp.height, vp.minDepth, vp.maxDepth))
     except Exception as e:
         log('viewport: ? (%s)' % e)
-    try:
-        refl = state.GetShaderReflection(rd.ShaderStage.Fragment)
-        targets = controller.GetDisassemblyTargets(True)
-        log('===== PS desmontado (%s) =====' % targets[0])
-        log(controller.DisassembleShader(state.GetGraphicsPipelineObject(), refl, targets[0]))
-    except Exception as e:
-        log('desmontagem: ? (%s)' % e)
+    # RDOC_VS=1: desmonta tambem o vertex shader
+    stages = [(rd.ShaderStage.Vertex, 'VS')] if os.environ.get('RDOC_VS') == '1' else []
+    for stage, name in stages + [(rd.ShaderStage.Fragment, 'PS')]:
+        try:
+            refl = state.GetShaderReflection(stage)
+            targets = controller.GetDisassemblyTargets(True)
+            log('===== %s desmontado (%s) =====' % (name, targets[0]))
+            log(controller.DisassembleShader(state.GetGraphicsPipelineObject(), refl, targets[0]))
+        except Exception as e:
+            log('desmontagem: ? (%s)' % e)
     flush()
     controller.Shutdown()
     cap.Shutdown()

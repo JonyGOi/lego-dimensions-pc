@@ -111,3 +111,16 @@ add_executable(callsites tools/callsites/callsites.cpp)
 target_include_directories(callsites PRIVATE src)
 target_link_libraries(callsites PRIVATE Zydis)
 target_compile_definitions(callsites PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# ---- Ferramenta: extrator de PKG do PS4 para o launcher (extracao do shadPS4 0.7.0, inflate do miniz) ----
+add_executable(pkg_extractor
+    tools/pkg_extractor/main.cpp
+    tools/pkg_extractor/pkg.cpp
+    tools/pkg_extractor/pkg_type.cpp
+    tools/pkg_extractor/crypto.cpp
+    tools/pkg_extractor/miniz/miniz_tinfl.c)
+target_include_directories(pkg_extractor PRIVATE tools/pkg_extractor tools/pkg_extractor/miniz)
+target_compile_definitions(pkg_extractor PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(pkg_extractor PRIVATE bcrypt)
+target_link_options(pkg_extractor PRIVATE "/PDBALTPATH:%_PDB%")
+set_property(TARGET pkg_extractor PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded") # sem DLL do runtime, como o launcher

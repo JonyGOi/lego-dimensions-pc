@@ -21,6 +21,7 @@ Baixe o instalador (`LEGO_Dimensions_PC_Setup.exe`) ou o zip portátil na págin
   1. tudo junto: a atualização já dentro do dump (`data\chunk1` com `PATCH.DAT`, `PATCH0.DAT`...);
   2. jogo base + atualização numa pasta separada, `CUSA01176-patch` (formato do shadPS4), dentro da pasta do jogo ou ao lado dela.
 - Opcional: DLCs (uma subpasta por DLC, no formato da pasta `addcont` do shadPS4), controle DS4/Xbox e o app LegoToypad para o portal.
+- Jogo, atualização ou DLCs em arquivos `.pkg`: o botão **Extrair PKG...** do launcher extrai no formato acima e preenche as pastas (extração de PKG do shadPS4 0.7.0).
 
 ## Como usar
 

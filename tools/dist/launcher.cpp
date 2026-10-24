@@ -37,16 +37,17 @@ namespace {
 constexpr int kW = 980, kH = 890, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma; Fase 65: +50 para a linha do contador / apelidos
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames, kPkg };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
 HWND g_icons; // Fase 62
 HWND g_mods;  // Fase 64
 HWND g_overlay, g_names_button; // Fase 65: contador de FPS / info, apelidos dos jogadores
+HWND g_pkg; // Fase 68: extrair PKGs
 
-// Fase 61: o que o Python em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar)
-enum class Task { kPrepare, kCheck, kUpdate } g_task = Task::kPrepare;
+// Fase 61: o que o processo em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar; Fase 68: extrair PKGs)
+enum class Task { kPrepare, kCheck, kUpdate, kPkg } g_task = Task::kPrepare;
 std::wstring g_version, g_new_version, g_notes;
 
 // Fase 61: tamanhos da janela do jogo (o jogo desenha em 1920x1080 e a imagem e escalada para a janela)
@@ -313,6 +314,7 @@ void UpdateStatus() {
     EnableWindow(g_play, !g_busy && game_ok);
     EnableWindow(g_prepare, !g_busy && game_ok);
     EnableWindow(g_update, !g_busy);
+    EnableWindow(g_pkg, !g_busy); // Fase 68
     InvalidateCard();
 }
 
@@ -464,12 +466,8 @@ void PickLanguage() {
 std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 
 // ---- preparacao: python tools\setup\preparar.py, saida lida por uma thread ----
-// Roda um script de tools\setup no Python portatil; a saida chega linha a linha em OnLine e o fim em WM_APP_DONE.
-bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
-    fs::path python = g_root / L"tools" / L"python" / L"python.exe";
-    std::error_code ec;
-    std::wstring command = fs::is_regular_file(python, ec) ? Quote(python.wstring()) : L"python";
-    command += L" -u " + Quote((g_root / L"tools" / L"setup" / script).wstring()) + args;
+// Roda um comando em segundo plano; a saida chega linha a linha em OnLine e o fim em WM_APP_DONE.
+bool RunCommand(std::wstring command, Task task, const wchar_t* fail_pt, const wchar_t* fail_en) {
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE read_pipe = nullptr, write_pipe = nullptr;
     CreatePipe(&read_pipe, &write_pipe, &sa, 0);
@@ -481,7 +479,7 @@ bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, g_root.c_str(),
                         &si, &pi)) {
-        AppendLog(ui::T(L"ERRO: nao consegui abrir o Python.", L"ERROR: could not start Python."));
+        AppendLog(ui::T(fail_pt, fail_en));
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
         return false;
@@ -517,6 +515,15 @@ bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
         PostMessageW(g_main, WM_APP_DONE, code, 0);
     }).detach();
     return true;
+}
+
+// Roda um script de tools\setup no Python portatil (RunCommand)
+bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
+    fs::path python = g_root / L"tools" / L"python" / L"python.exe";
+    std::error_code ec;
+    std::wstring command = fs::is_regular_file(python, ec) ? Quote(python.wstring()) : L"python";
+    command += L" -u " + Quote((g_root / L"tools" / L"setup" / script).wstring()) + args;
+    return RunCommand(command, task, L"ERRO: nao consegui abrir o Python.", L"ERROR: could not start Python.");
 }
 
 void RunPrepare() {
@@ -623,6 +630,24 @@ std::wstring ReadVersion() {
 }
 
 void OnLine(const std::wstring& line) {
+    if (g_task == Task::kPkg) { // Fase 68: pastas extraidas vao para os campos
+        if (line.rfind(L"JOGO ", 0) == 0) {
+            SetWindowTextW(g_game, line.substr(5).c_str());
+            LoadArt(line.substr(5));
+            if (GetText(g_patch).empty()) {
+                SetWindowTextW(g_patch, FindPatch(line.substr(5)).wstring().c_str());
+            }
+            return;
+        }
+        if (line.rfind(L"ATUALIZACAO ", 0) == 0) {
+            SetWindowTextW(g_patch, line.substr(12).c_str());
+            return;
+        }
+        if (line.rfind(L"DLCS ", 0) == 0) {
+            SetWindowTextW(g_dlc, line.substr(5).c_str());
+            return;
+        }
+    }
     if (line.rfind(L"VERSAO_NOVA ", 0) == 0) { // Fase 61
         g_new_version = line.substr(12, line.find(L' ', 12) - 12);
         return;
@@ -787,6 +812,92 @@ std::wstring BrowseModArchive() {
         dialog->Release();
     }
     return result;
+}
+
+// ---- Fase 68: extrair PKGs do PS4 (build\pkg_extractor.exe, a extracao do shadPS4 0.7.0) ----
+std::vector<std::wstring> BrowsePkgs() {
+    std::vector<std::wstring> result;
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM);
+        const COMDLG_FILTERSPEC filter[] = {{L"PKG (PS4)", L"*.pkg"}};
+        dialog->SetFileTypes(1, filter);
+        dialog->SetTitle(ui::T(L"PKGs para extrair (jogo, atualização, DLCs; pode escolher vários)",
+                               L"PKGs to extract (game, update, DLCs; you can pick several)"));
+        if (SUCCEEDED(dialog->Show(g_main))) {
+            IShellItemArray* items = nullptr;
+            if (SUCCEEDED(dialog->GetResults(&items))) {
+                DWORD count = 0;
+                items->GetCount(&count);
+                for (DWORD i = 0; i < count; i++) {
+                    IShellItem* item = nullptr;
+                    if (SUCCEEDED(items->GetItemAt(i, &item))) {
+                        PWSTR path = nullptr;
+                        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                            result.push_back(path);
+                            CoTaskMemFree(path);
+                        }
+                        item->Release();
+                    }
+                }
+                items->Release();
+            }
+        }
+        dialog->Release();
+    }
+    return result;
+}
+
+void ExtractPkgs() {
+    if (g_busy) {
+        return;
+    }
+    std::error_code ec;
+    const fs::path exe = g_root / L"build" / L"pkg_extractor.exe";
+    if (!fs::is_regular_file(exe, ec)) {
+        MessageBoxW(g_main, ui::T(L"Não achei o build\\pkg_extractor.exe na pasta do port.", L"build\\pkg_extractor.exe was not found in the port folder."),
+                    L"LEGO Dimensions PC", MB_ICONERROR);
+        return;
+    }
+    const std::vector<std::wstring> pkgs = BrowsePkgs();
+    if (pkgs.empty()) {
+        return;
+    }
+    // onde extrair: perto do jogo que ja esta no campo, senao na pasta dos PKGs
+    const std::wstring game = GetText(g_game);
+    const std::wstring start = !game.empty() ? fs::path(game).parent_path().wstring() : fs::path(pkgs[0]).parent_path().wstring();
+    const std::wstring destination = BrowseFolder(ui::T(L"Pasta onde extrair (o jogo fica em <pasta>\\CUSA01176)", L"Folder to extract into (the game goes to <folder>\\CUSA01176)"), start);
+    if (destination.empty()) {
+        return;
+    }
+    std::wstring args = L" --destino " + Quote(destination);
+    // DLCs: na pasta de DLCs ja escolhida quando ela e a pasta do jogo dentro do addcont (CUSA01176), senao <pasta>\addcont\CUSA01176
+    const std::wstring dlc = GetText(g_dlc);
+    const bool dlc_here = !dlc.empty() && _wcsnicmp(fs::path(dlc).filename().c_str(), L"CUSA", 4) == 0;
+    if (dlc_here) {
+        args += L" --dlcs " + Quote(dlc);
+    }
+    const fs::path dest(destination);
+    const std::wstring text =
+        std::to_wstring(pkgs.size()) + ui::T(L" PKG(s) serão extraídos:\n\n", L" PKG(s) will be extracted:\n\n") + ui::T(L"Jogo: ", L"Game: ") +
+        (dest / L"CUSA01176").wstring() + L"\n" + ui::T(L"Atualização: ", L"Update: ") + (dest / L"CUSA01176-patch").wstring() + L"\nDLCs: " +
+        (dlc_here ? dlc : (dest / L"addcont" / L"CUSA01176").wstring()) + L"\n\n" +
+        ui::T(L"Arquivos com o mesmo nome são substituídos. Os PKGs não são apagados. Continuar?",
+              L"Files with the same name are replaced. The PKGs are not deleted. Continue?");
+    if (MessageBoxW(g_main, text.c_str(), L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        return;
+    }
+    for (const std::wstring& pkg : pkgs) {
+        args += L" " + Quote(pkg);
+    }
+    args += ui::Pt() ? L" --lingua pt" : L" --lingua en";
+    if (RunCommand(Quote(exe.wstring()) + args, Task::kPkg, L"ERRO: nao consegui abrir o build\\pkg_extractor.exe.",
+                   L"ERROR: could not start build\\pkg_extractor.exe.")) {
+        g_step = ui::T(L"Extraindo os PKGs...", L"Extracting the PKGs...");
+        UpdateStatus();
+    }
 }
 
 // Menu do botao Mods: cada pasta de mods\ com marca (clicar liga / desliga), abrir a pasta, instalar um .zip / .rar / .7z.
@@ -1157,6 +1268,9 @@ void CreateControls() {
     // Fase 64: mods (menu com os instalados, instalar de um .zip / .rar / .7z, abrir a pasta)
     g_mods = ui::Button(g_main, L"Mods  ▾", ui::Style::kSecondary, S(kW - 362), S(30), S(116), S(40), kMods, g_button);
     SetWindowRgn(g_mods, CreateRoundRectRgn(0, 0, S(116) + 1, S(40) + 1, S(18), S(18)), TRUE);
+    // Fase 68: extrair PKGs do PS4 direto para as pastas do launcher
+    g_pkg = ui::Button(g_main, ui::T(L"Extrair PKG...", L"Extract PKG..."), ui::Style::kSecondary, S(kW - 534), S(30), S(164), S(40), kPkg, g_button);
+    SetWindowRgn(g_pkg, CreateRoundRectRgn(0, 0, S(164) + 1, S(40) + 1, S(18), S(18)), TRUE);
 }
 
 // Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
@@ -1317,6 +1431,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kMods:
             ModsMenu(reinterpret_cast<HWND>(lp));
             break;
+        case kPkg:
+            ExtractPkgs();
+            break;
         case kNames:
             OpenNamesDialog();
             break;
@@ -1364,6 +1481,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             } else {
                 AppendLog(ui::T(L"A atualiza\u00e7\u00e3o falhou (veja acima). Nada do que j\u00e1 estava funcionando foi apagado.",
                                 L"The update failed (see above). Nothing that was already working was removed."));
+            }
+            return 0;
+        }
+        if (g_task == Task::kPkg) { // Fase 68
+            SaveSettings();
+            g_pct = wp == 0 ? 100 : 0;
+            g_step.clear();
+            UpdateStatus();
+            if (wp == 0) {
+                AppendLog(ui::T(L"PKGs extraídos.", L"PKGs extracted."));
+                MessageBoxW(hwnd, (std::wstring(ui::T(L"Extração concluída! As pastas já estão nos campos do launcher.",
+                                                      L"Extraction finished! The folders are already in the launcher fields.")) +
+                                   (Prepared() ? L"" : ui::T(L"\n\nAgora clique em Preparar.", L"\n\nNow click Prepare.")))
+                                      .c_str(),
+                            L"LEGO Dimensions PC", MB_ICONINFORMATION);
+            } else {
+                AppendLog(ui::T(L"A extração dos PKGs terminou com erro (veja acima).", L"The PKG extraction failed (see above)."));
             }
             return 0;
         }

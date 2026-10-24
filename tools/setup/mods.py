@@ -952,6 +952,17 @@ def hidden_figure_pack(char, info, tocs, packs, all_names, cache, other_dats=())
         files.append(('\\stuff\\text\\text.csv', text))
     for extra in info['extras']:
         add(target + extra.lstrip('\\'), extra)
+    # arquivos do jogo no lugar de outros dentro do charcache: animacoes do proprio personagem no lugar de algumas do
+    # doador (mesmo esqueleto de minifigura; os conjuntos de animacao do doador continuam dizendo quando cada uma
+    # toca) e a capa com fisica de pano no lugar da movida pelos ossos (as animacoes do personagem nao mexem a capa)
+    for dest, source in info.get('trocar_arquivos', []):
+        got = game_file(tocs, packs, source.upper(), raw=True)
+        if got is None:
+            return None
+        data, usize, packed = got
+        name = target + dest.lstrip('\\')
+        files = [f for f in files if f[0].lower() != name.lower()]
+        files.append((name, data, usize, packed) if packed else (name, data))
     hdr_bytes, dat_bytes = build_pack(files)
     folder = os.path.join(cache, 'anomaly')
     os.makedirs(folder, exist_ok=True)

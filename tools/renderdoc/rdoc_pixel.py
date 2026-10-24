@@ -79,8 +79,10 @@ try:
                     x = int((REGION[0] + (REGION[2] - REGION[0]) * ix / 31.0) * (tex.width - 1))
                     y = int((REGION[1] + (REGION[3] - REGION[1]) * iy / 23.0) * (tex.height - 1))
                     v = controller.PickPixel(final_tex, x, y, sub, rd.CompType.Typeless).floatValue
-                    if v[0] + v[1] + v[2] > best:
-                        best, where = v[0] + v[1] + v[2], (x, y)
+                    # RDOC_PICK=branco: o pixel mais branco (maior minimo entre R, G e B), ex. fumaca
+                    score = min(v[0], v[1], v[2]) if os.environ.get('RDOC_PICK') == 'branco' else v[0] + v[1] + v[2]
+                    if score > best:
+                        best, where = score, (x, y)
             x, y = where
             fx, fy = x / float(tex.width), y / float(tex.height)
         x, y = min(int(fx * tex.width), tex.width - 1), min(int(fy * tex.height), tex.height - 1)

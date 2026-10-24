@@ -1410,6 +1410,13 @@ int main(int argc, char** argv) {
             elf_path = argv[i];
         }
     }
+    // LD_LOG_FILE=<arquivo>: a saida vai para esse arquivo (testes em que o jogo e aberto por outro programa, como
+    // o RenderDoc, e o console nao pode ser redirecionado)
+    if (const char* log_file = std::getenv("LD_LOG_FILE"); log_file && *log_file) {
+        if (std::freopen(log_file, "w", stdout)) {
+            std::freopen(log_file, "a", stderr);
+        }
+    }
     std::setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
     // Resolucao de 1 ms no agendador: sem isto Sleep/sleep_until arredondam para ~15,6 ms e a
     // saida de audio (5,33 ms por buffer) e os timeouts curtos do jogo perdem o ritmo.

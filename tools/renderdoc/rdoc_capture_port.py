@@ -11,8 +11,11 @@ OUT = os.path.join(ROOT, 'build', 'rdoc_port')
 LOG = os.path.join(OUT, 'rdoc_capture.log')
 EXE = os.path.join(ROOT, 'build', 'lego_dimensions.exe')
 ARGS = os.environ.get('RDOC_ARGS', '--no-keyboard --no-sdl-pad --fps60')
-TIMES = sorted(float(t) for t in os.environ.get('RDOC_TIMES', '60').split(','))
-END = TIMES[-1] + 25
+TIMES = sorted(float(t) for t in os.environ.get('RDOC_TIMES', '60').split(',') if t)
+# RDOC_TRIGGER=<arquivo>: captura cada vez que esse arquivo aparece (um script de teste o cria na hora certa) e o
+# apaga; RDOC_END = tempo maximo em segundos
+TRIGGER = os.environ.get('RDOC_TRIGGER', '')
+END = float(os.environ.get('RDOC_END', (TIMES[-1] if TIMES else 0) + 25))
 
 
 def log(text):
@@ -51,6 +54,10 @@ try:
         if pending and time.time() - start >= pending[0]:
             log('disparando captura em t=%.1f' % (time.time() - start))
             pending.pop(0)
+            target.TriggerCapture(1)
+        if TRIGGER and os.path.exists(TRIGGER):
+            os.remove(TRIGGER)
+            log('disparando captura pelo gatilho em t=%.1f' % (time.time() - start))
             target.TriggerCapture(1)
     log('fim do laco em t=%.1f' % (time.time() - start))
     target.Shutdown()

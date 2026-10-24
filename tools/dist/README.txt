@@ -34,6 +34,12 @@ WHAT YOU NEED
 
 HOW TO USE
   1. Open LegoDimensionsLauncher.exe.
+     If the game, the update or the DLCs are .pkg files, click "Extract PKG..." (at the top), pick the
+     .pkg files (several at once is fine) and the folder to extract into: the game goes to
+     <folder>\CUSA01176, the update to <folder>\CUSA01176-patch and the DLCs to
+     <folder>\addcont\CUSA01176 (or to the DLC folder already chosen), and the fields below are filled in
+     for you. The extraction is the one from shadPS4 0.7.0; it needs as much free space as the .pkg files.
+     The .pkg files are not deleted.
   2. Under "Game folder", choose the CUSA01176 folder. The game art shows up at the top.
   3. Under "Update", check the CUSA01176-patch folder (only if the update is separate; it stays empty
      when the dump already includes the update).

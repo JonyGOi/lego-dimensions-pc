@@ -34,6 +34,12 @@ O QUE VOCE PRECISA
 
 COMO USAR
   1. Abra o LegoDimensionsLauncher.exe.
+     Se o jogo, a atualizacao ou as DLCs estao em arquivos .pkg, clique em "Extrair PKG..." (no topo),
+     escolha os .pkg (pode escolher varios de uma vez) e a pasta onde extrair: o jogo vai para
+     <pasta>\CUSA01176, a atualizacao para <pasta>\CUSA01176-patch e as DLCs para
+     <pasta>\addcont\CUSA01176 (ou para a pasta de DLCs ja escolhida), e os campos abaixo sao preenchidos
+     sozinhos. A extracao e a do shadPS4 0.7.0; precisa de espaco livre do tamanho dos .pkg. Os .pkg nao
+     sao apagados.
   2. Em "Pasta do jogo", escolha a pasta CUSA01176. A arte do jogo aparece no topo.
   3. Em "Atualizacao", confira a pasta CUSA01176-patch (so se a atualizacao for separada; fica vazio
      quando o dump ja traz a atualizacao junto).

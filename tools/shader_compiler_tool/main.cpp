@@ -17,6 +17,7 @@
 // uso: shader_compiler_tool [pasta dumped_shaders] [pasta shaders_spv]
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -29,9 +30,15 @@
 #include <windows.h>
 
 #include "shader_recompiler/backend/bindings.h"
+#include <magic_enum/magic_enum.hpp>
+
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
+#include "shader_recompiler/frontend/decode.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/abstract_syntax_list.h"
+#include "shader_recompiler/ir/basic_block.h"
+#include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/runtime_info.h"
@@ -72,6 +79,77 @@ std::vector<std::string> Split(const std::string& line, char sep) {
         out.push_back(item);
     }
     return out;
+}
+
+// Operando GCN em texto: v12, s4, vcc_lo, 0x3f800000 (1.0), -2, 0.5...
+std::string OperandText(const Shader::Gcn::InstOperand& op) {
+    using Shader::Gcn::OperandField;
+    char buf[64];
+    const u32 c = op.code;
+    switch (op.field) {
+    case OperandField::VectorGPR:
+        std::snprintf(buf, sizeof(buf), "v%u", c);
+        break;
+    case OperandField::ScalarGPR:
+        std::snprintf(buf, sizeof(buf), "s%u", c);
+        break;
+    case OperandField::LiteralConst: {
+        float f;
+        std::memcpy(&f, &c, 4);
+        std::snprintf(buf, sizeof(buf), "0x%08x(%g)", c, f);
+        break;
+    }
+    case OperandField::SignedConstIntPos:
+        std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(c) - 128);
+        break;
+    case OperandField::SignedConstIntNeg:
+        std::snprintf(buf, sizeof(buf), "%d", -(static_cast<int>(c) - 192));
+        break;
+    case OperandField::Undefined:
+        return "";
+    default:
+        std::snprintf(buf, sizeof(buf), "%s", std::string(magic_enum::enum_name(op.field)).c_str());
+        break;
+    }
+    std::string s = buf;
+    if (op.input_modifier.abs) {
+        s = "|" + s + "|";
+    }
+    if (op.input_modifier.neg) {
+        s = "-" + s;
+    }
+    return s;
+}
+
+void DumpGcn(std::span<const u32> code, const fs::path& path) {
+    std::ofstream out(path);
+    Shader::Gcn::GcnCodeSlice slice(code.data(), code.data() + code.size());
+    Shader::Gcn::GcnDecodeContext decoder;
+    u32 pc = 0;
+    while (!slice.atEnd()) {
+        const Shader::Gcn::GcnInst inst = decoder.decodeInstruction(slice);
+        out << std::hex << pc << std::dec << ": " << magic_enum::enum_name(inst.opcode);
+        for (u32 i = 0; i < inst.dst_count; ++i) {
+            out << (i ? ", " : " ") << OperandText(inst.dst[i]);
+        }
+        for (u32 i = 0; i < inst.src_count; ++i) {
+            out << ((i || inst.dst_count) ? ", " : " ") << OperandText(inst.src[i]);
+        }
+        if (inst.inst_class == Shader::Gcn::InstClass::ScalarMemRd) {
+            out << " off=" << inst.control.smrd.offset << (inst.control.smrd.imm ? " imm" : "");
+        }
+        if (inst.encoding == Shader::Gcn::InstEncoding::VOP3 && inst.dst[0].output_modifier.clamp) {
+            out << " clamp";
+        }
+        if (inst.encoding == Shader::Gcn::InstEncoding::SOPP) {
+            out << " simm=" << inst.control.sopp.simm << " -> " << std::hex << inst.BranchTarget(pc) << std::dec;
+        }
+        out << '\n';
+        pc += inst.length;
+        if (inst.opcode == Shader::Gcn::Opcode::S_ENDPGM) {
+            break;
+        }
+    }
 }
 
 // Le um binario para um buffer de dwords com folga zerada no fim (o decodificador pode olhar um
@@ -391,7 +469,29 @@ void Recompile(const Job& job) {
     Shader::Backend::Bindings& bindings = job.shared_bindings ? *job.shared_bindings : local_bindings;
     const Shader::Backend::Bindings start = bindings;
     try {
+        // LD_DUMP_GCN=<hash>: listagem das instrucoes GCN desse shader em gcn_<hash>.txt (operandos v/s, literais)
+        if (const char* want = std::getenv("LD_DUMP_GCN"); want && entry.hash == want) {
+            DumpGcn(code, job.shader_dir / ("gcn_" + entry.hash + ".txt"));
+        }
         const auto program = Shader::TranslateProgram(code, pools, info, rt, profile);
+        // LD_DUMP_IR=<hash>: grava o IR final (blocos + lista estruturada) desse shader em ir_<hash>.txt na pasta
+        // dos shaders extraidos (depuracao de traducao, ex. lacos que viram Phi/Select)
+        if (const char* want = std::getenv("LD_DUMP_IR"); want && entry.hash == want) {
+            std::map<const Shader::IR::Block*, size_t> block_to_index;
+            std::map<const Shader::IR::Inst*, size_t> inst_to_index;
+            size_t index = 0;
+            for (const Shader::IR::Block* block : program.blocks) {
+                block_to_index.emplace(block, index++);
+            }
+            std::ofstream dump(job.shader_dir / ("ir_" + entry.hash + ".txt"));
+            for (const Shader::IR::Block* block : program.blocks) {
+                dump << Shader::IR::DumpBlock(*block, block_to_index, inst_to_index, index) << '\n';
+            }
+            dump << "\n===== lista estruturada =====\n";
+            for (const auto& node : program.syntax_list) {
+                dump << Shader::IR::DumpASLNode(node, block_to_index, inst_to_index) << '\n';
+            }
+        }
         result.spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, program, bindings);
         if (bindings == start) {
             info.AddBindings(bindings); // garante que o proximo estagio comece depois deste

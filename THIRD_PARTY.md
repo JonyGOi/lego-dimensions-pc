@@ -4,6 +4,8 @@
 |---|---|---|
 | [shadPS4](https://github.com/shadps4-emu/shadPS4): shader recompiler, commit `eeecd10` | built in `tools/shader_compiler_tool` | GPL-2.0-or-later |
 | shadPS4: NID names (`aerolib`) | `tools/data/aerolib.csv` | GPL-2.0-or-later |
+| shadPS4 v0.7.0: PKG extraction (`pkg.cpp`, `pfs.h`, `pkg_type`, `keys.h`, the crypto functions it uses, rewritten on Windows CNG) | `tools/pkg_extractor` (`build/pkg_extractor.exe`) | GPL-2.0-or-later |
+| [miniz](https://github.com/richgel999/miniz): inflate (`tinfl`) only | `tools/pkg_extractor/miniz` | MIT |
 | [Zydis](https://github.com/zyantific/zydis) and Zycore | `externals/zydis` | MIT |
 | [SDL 3](https://github.com/libsdl-org/SDL) | `externals/sdl3` (static library) | zlib |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | `externals/vulkan-headers` | Apache-2.0 / MIT |

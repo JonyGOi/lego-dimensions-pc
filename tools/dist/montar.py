@@ -72,6 +72,7 @@ def stage():
     game = max((R(d, 'lego_dimensions.exe') for d in ('build', 'build_dist') if os.path.exists(R(d, 'lego_dimensions.exe'))), key=os.path.getmtime)
     print('port: ' + game)
     copy(game, S('build', 'lego_dimensions.exe'))
+    copy(R('build', 'pkg_extractor.exe'), S('build', 'pkg_extractor.exe'))  # Fase 68: botao Extrair PKG do launcher
     copy(R('tools', 'shader_compiler_tool', 'build', 'shader_compiler_tool.exe'), S('tools', 'shader_compiler_tool', 'build', 'shader_compiler_tool.exe'))
     for d in (S('build'), S('tools', 'shader_compiler_tool', 'build')):
         for dll in VC_DLLS:
