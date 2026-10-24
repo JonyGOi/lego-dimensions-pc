@@ -168,8 +168,12 @@ HLE_SYSV_ABI int LoadCsv(char* path, s64* p2, u64 p3, u8* label, int p5, int p6,
         layerable->is_active = true;
         bool cleared = false;
         int result = 0;
+        static const bool log_layers = std::getenv("LD_ANOMALY_TEXTO") != nullptr; // diagnostico do issue #4
         while (!layerable->is_loaded) {
             result = g_load_csv(path, p2, p3, label, p5, p6, p7, p8, p9);
+            if (log_layers) {
+                std::printf("[ANOMALY] text.csv camada %d -> %d\n", layerable->last_collisions_index, result);
+            }
             if (!cleared) {
                 PATCH(0x004ef7b4, "\x90\x90\x90\x90\x90"); // nao limpa a tabela antes do proximo
                 cleared = true;

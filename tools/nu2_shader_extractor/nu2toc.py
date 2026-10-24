@@ -42,8 +42,10 @@ def cstr(block, at):
     return block[at:block.index(b'\0', at)].decode('latin-1')
 
 
-def link_names(block, crc_at, file_count, names, entries):
-    """Liga cada nome ("\\pasta\\arquivo") ao arquivo pelo hash; escolhe a variante que mais acerta."""
+def link_names(block, crc_at, file_count, names, entries, tree=None, fixed=None):
+    """Liga cada nome ("\\pasta\\arquivo") ao arquivo pelo hash; escolhe a variante que mais acerta. tree: nome ->
+    indice do arquivo no no da arvore (tabelas .CC4), que vale para os arquivos de hash 0; fixed recebe os nomes em
+    que a lista por extenso discordava da arvore."""
     best = None
     sample = names[:400]
     for bits, big, prime in VARIANTS:
@@ -74,8 +76,18 @@ def link_names(block, crc_at, file_count, names, entries):
             while p < len(block) and block[p] == 0:
                 p += 1
             explicit[path.lstrip('\\').upper()] = j
+    # Issue #4: pacotes de mod (ex. o LORDVORTECH de connorh315) trazem essa lista na ordem do jogo, mas com os
+    # arquivos de hash 0 em outra ordem; o jogo segue a arvore de nomes, entao ela vence quando aponta para um deles.
+    zero = set()
+    if explicit and tree:
+        fmt = ('>' if big else '<') + ('Q' if bits == 64 else 'I')
+        zero = {i for i in range(min(file_count, len(explicit) + 8)) if struct.unpack_from(fmt, block, crc_at + (bits // 8) * i)[0] == 0}
     for name in names:
         index = explicit.get(name[1:].upper())
+        if index is not None and tree and tree.get(name.upper()) in zero and tree[name.upper()] != index:
+            index = tree[name.upper()]
+            if fixed is not None:
+                fixed.append(name)
         if index is None:
             index = table.get(fnv(name[1:], bits, prime))
         if index is not None:
@@ -85,15 +97,17 @@ def link_names(block, crc_at, file_count, names, entries):
 
 
 
-def read_new(block):
+def read_new(block, fixed=None):
     archive_id, version, _, name_count, names_size = struct.unpack_from('>iiIII', block, 12)
     folders = [''] * name_count
     names = []
+    tree = {}  # nome -> indice do arquivo (+6 do no; so na versao 2)
     p = 36 + names_size
     entry = 12 if version >= 2 else 10
     for i in range(name_count):
         name_off, parent = struct.unpack_from('>IH', block, p)
         is_file = struct.unpack_from('>H', block, p + entry - 2)[0]
+        file_index = struct.unpack_from('>H', block, p + 6)[0] if version >= 2 else None
         p += entry
         if name_off == 0xFFFFFFFF:
             continue
@@ -102,6 +116,8 @@ def read_new(block):
             is_file = len(names)
         if is_file:
             names.append(text)
+            if file_index is not None:
+                tree[text.upper()] = file_index
         else:
             folders[i] = text
     p += 4
@@ -130,7 +146,7 @@ def read_new(block):
             p += 4
             offset = (offset << 8) | low
         entries.append((offset, zsize, usize, packed))
-    return link_names(block, p, file_count, names, entries)
+    return link_names(block, p, file_count, names, entries, tree, fixed)
 
 
 def read_old(block):
@@ -176,15 +192,16 @@ def read_old(block):
     return link_names(block, crc_at, file_count, names, entries)
 
 
-def read_toc(path):
-    """Lista de (nome, tamanho, tamanho_no_pacote, offset, metodo), como as linhas de dat_index/*.tsv."""
+def read_toc(path, fixed=None):
+    """Lista de (nome, tamanho, tamanho_no_pacote, offset, metodo), como as linhas de dat_index/*.tsv. fixed: lista
+    que recebe os arquivos de hash 0 cuja lista por extenso discordava da arvore de nomes (ver link_names)."""
     size = os.path.getsize(path)
     with open(path, 'rb') as f:  # so leitura
         first, hdr_size = struct.unpack('<II', f.read(8))
         f.seek(header_offset(first, size))
         block = f.read(hdr_size)
     if block[4:8] == b'.CC4':
-        return read_new(block)
+        return read_new(block, fixed)
     return read_old(block)
 
 
