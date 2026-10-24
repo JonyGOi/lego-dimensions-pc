@@ -1,5 +1,5 @@
 {
- "_sobre": "Fase 67: figuras que o jogo tem mas deixa desligadas (linha comentada no chars\\collection.txt e sem charcache). O mods.py libera a figura quando a pasta de mods tem a gravacao .bin dela: linha Collect, charcache feito do de um doador (animacoes e habilidades de figura) e o .cd do personagem. conjuntos_de_animacao: a lista do .cd (a que tem \"atual\") vira \"novos\"; txt: o .txt do personagem ganha as habilidades_do_doador e as marcas e perde as linhas tirar_do_txt; item: item novo copiado de \"base\" com o modelo \"obj\", que pode ser guardado nas costas. extras = recursos que o jogo pede dentro do charcache (so caminhos; os arquivos vem do jogo do jogador).",
+ "_sobre": "Fase 67: figuras que o jogo tem mas deixa desligadas (linha comentada no chars\\collection.txt e sem charcache). O mods.py libera a figura quando a pasta de mods tem a gravacao .bin dela: linha Collect, charcache feito do de um doador (animacoes e habilidades de figura) e o .cd do personagem. conjuntos_de_animacao: a lista do .cd (a que tem \"atual\") vira \"novos\"; txt: o .txt do personagem ganha as habilidades_do_doador e as marcas e perde as linhas tirar_do_txt; item: item novo copiado de \"base\" com o modelo \"obj\", que pode ser guardado nas costas. reacoes_de: falas de figura com as reacoes de voz compiladas de outro personagem de nome do mesmo tamanho, renomeadas; descomentar_no_txt: linhas comentadas do .txt que voltam; textos: rotulos novos do text.csv [rotulo, tipo, texto]. extras = recursos que o jogo pede dentro do charcache (so caminhos; os arquivos vem do jogo do jogador).",
  "lordvortech": {
   "id": 73,
   "collect": "LordVortech",
@@ -42,6 +42,7 @@
    "hit_points=1"
   ],
   "marcas": [
+   "name LORDVORTECH",
    "magic",
    "streak blue"
   ],
@@ -52,6 +53,17 @@
    "nome": "VortechStaff_Figura",
    "obj": "VortechStaff"
   },
+  "descomentar_no_txt": [
+   "Ability \"AudioReactionDataLordVortech\""
+  ],
+  "reacoes_de": "wonderwoman",
+  "textos": [
+   [
+    "LORDVORTECH",
+    "Char",
+    "Lord Vortech"
+   ]
+  ],
   "extras": [
    "\\charcache\\gandalfthegrey\\chars\\levels\\levels_minifig\\11_scoobydoo\\11_scoobydooc2\\11_scoobydooc2_minifig.as",
    "\\charcache\\gandalfthegrey\\chars\\levels\\levels_minifig\\11_scoobydoo\\11_scoobydooc2\\11_scoobydooc2_minifig_as\\minecarthanging_minifig_def_dx11.an4",
