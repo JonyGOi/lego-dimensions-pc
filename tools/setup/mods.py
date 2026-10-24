@@ -1432,6 +1432,19 @@ def install(archive, mods_dir):
         say('ERRO ' + T('nao consegui abrir %s (%s). Extraia com o 7-Zip / WinRAR e ponha a pasta em mods\\' % (base, '; '.join(errors)),
                         'could not open %s (%s). Extract it with 7-Zip / WinRAR and put the folder in mods\\' % (base, '; '.join(errors))))
         return 1
+    if not overlay_root(dest) and figure_dump(dest) and os.path.isfile(FIGURES_FILE):
+        # Fase 67: a gravacao de uma figura desligada no jogo (ex. Lord Vortech) fica na pasta de mods: e ela que faz o
+        # port liberar a figura
+        with open(FIGURES_FILE, encoding='utf-8') as f:
+            hidden = {v['id']: v['nome'] for k, v in json.load(f).items() if not k.startswith('_')}
+        names = [hidden[i] for i in sorted(figure_tags(dest)) if i in hidden]
+        if names:
+            say('AVISO ' + T('%s: gravacao de %s instalada. A figura e liberada ao clicar JOGAR; depois abra o .bin no app do '
+                              'portal (no LegoToypad: pasta Special\\<nome>\\ ao lado do app)' % (base, ', '.join(names)),
+                              '%s: %s figure dump installed. The figure is enabled when you click PLAY; then open the .bin in '
+                              'the portal app (LegoToypad: Special\\<name>\\ folder next to the app)' % (base, ', '.join(names))))
+            say('INSTALADO ' + os.path.basename(dest))
+            return 0
     if not overlay_root(dest) and figure_dump(dest):
         shutil.rmtree(dest, ignore_errors=True)
         say('ERRO ' + T('%s e a gravacao de uma figura (tag .bin do Toy Pad), nao um mod: nada foi instalado. Abra o .bin no app '
