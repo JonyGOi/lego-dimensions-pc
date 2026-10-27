@@ -1176,7 +1176,35 @@ std::filesystem::path WideArg(int i, const char* fallback) {
 }
 
 int main(int argc, char** argv) {
+    // DPI Awareness: evita virtualização de DPI pelo Windows e distorção bilinear para 720p em telas de alta escala
+    using SetCtx = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
+    if (auto set = reinterpret_cast<SetCtx>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"))) {
+        set(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    } else {
+        using SetAware = BOOL(WINAPI*)();
+        if (auto set_aware = reinterpret_cast<SetAware>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDPIAware"))) {
+            set_aware();
+        }
+    }
+
     const std::filesystem::path root = FindRoot(argc, argv);
+
+    // Carrega resolucao e tela cheia do launcher.ini como padrao se nao informados na linha de comando
+    {
+        wchar_t ini_res[64] = {};
+        GetPrivateProfileStringW(L"launcher", L"resolucao", L"", ini_res, 64, (root / "launcher.ini").wstring().c_str());
+        if (ini_res[0]) {
+            unsigned rw = 0, rh = 0;
+            if (std::swscanf(ini_res, L"%ux%u", &rw, &rh) == 2 && rw && rh) {
+                hle::videoout::SetWindowSize(rw, rh);
+            }
+        }
+        wchar_t ini_full[16] = {};
+        GetPrivateProfileStringW(L"launcher", L"telacheia", L"", ini_full, 16, (root / "launcher.ini").wstring().c_str());
+        if (ini_full[0] == L'1') {
+            hle::videoout::SetStartFullscreen(true);
+        }
+    }
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
     std::filesystem::path app0 = DefaultApp0(root);
     std::filesystem::path app0_patch; // Fase 58

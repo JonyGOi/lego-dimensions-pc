@@ -1192,6 +1192,8 @@ void RunGame() {
     }
     command += L" --resolution " + g_res_value; // Fase 61: tamanho da janela
     command += L" --button-icons " + g_icons_value; // Fase 62
+    AppendLog(ui::Pt() ? (L"Iniciando em " + g_res_value + (ui::Checked(g_fullscreen) ? L" (Tela Cheia)..." : L" (Janela)..."))
+                       : (L"Starting at " + g_res_value + (ui::Checked(g_fullscreen) ? L" (Fullscreen)..." : L" (Windowed)...")));
     if (g_lang_value != L"auto") {
         command += L" --lang " + g_lang_value; // Fase 61: idioma do jogo (e do port)
     }

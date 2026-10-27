@@ -43,6 +43,8 @@ void SetCheckModules(bool enabled);
 void SetStartFullscreen(bool enabled);
 // Fase 61: tamanho inicial da area util da janela (padrao 1280x720)
 void SetWindowSize(u32 width, u32 height);
+u32 WindowWidth();
+u32 WindowHeight();
 
 FlipStatus GetFlipStatus(int handle);
 u64 FlipCount();

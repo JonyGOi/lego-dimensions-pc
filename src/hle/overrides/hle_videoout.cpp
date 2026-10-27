@@ -128,6 +128,7 @@ void SetFullscreen(HWND hwnd, bool enabled) {
     }
     g_fullscreen = enabled;
     log::Tagged("JANELA", "%s", enabled ? "tela cheia" : "janela");
+    render::VulkanRenderer::Instance().RequestSwapchainRebuild();
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -145,6 +146,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         return 0;
     }
+    case WM_SIZE:
+        if (wparam != SIZE_MINIMIZED && render::VulkanRenderer::Instance().Active()) {
+            render::VulkanRenderer::Instance().RequestSwapchainRebuild();
+        }
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
@@ -199,21 +205,37 @@ void WindowThread() {
     wc.hIcon = LoadIconA(wc.hInstance, MAKEINTRESOURCEA(1)); // Fase 50: icone do port (recurso 1)
     wc.hCursor = LoadCursorA(nullptr, IDC_ARROW);
     RegisterClassA(&wc);
-    RECT rect{0, 0, static_cast<LONG>(g_window_width.load()), static_cast<LONG>(g_window_height.load())};
+    const u32 target_w = g_window_width.load();
+    const u32 target_h = g_window_height.load();
+    RECT rect{0, 0, static_cast<LONG>(target_w), static_cast<LONG>(target_h)};
     RECT work{};
+    bool borderless_fit = false;
     if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0) && work.right > work.left) {
-        // Maior que a area de trabalho: encolhe mantendo a proporcao pedida
-        const RECT frame = [] { RECT r{0, 0, 0, 0}; AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE); return r; }();
-        const double room_w = (work.right - work.left) - (frame.right - frame.left);
-        const double room_h = (work.bottom - work.top) - (frame.bottom - frame.top);
-        const double scale = std::min({1.0, room_w / rect.right, room_h / rect.bottom});
-        rect.right = static_cast<LONG>(rect.right * scale);
-        rect.bottom = static_cast<LONG>(rect.bottom * scale);
+        const u32 work_w = static_cast<u32>(work.right - work.left);
+        const u32 work_h = static_cast<u32>(work.bottom - work.top);
+        if (target_w >= work_w && target_h >= work_h) {
+            borderless_fit = true;
+        } else {
+            const RECT frame = [] { RECT r{0, 0, 0, 0}; AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE); return r; }();
+            const double room_w = (work.right - work.left) - (frame.right - frame.left);
+            const double room_h = (work.bottom - work.top) - (frame.bottom - frame.top);
+            if (rect.right > room_w || rect.bottom > room_h) {
+                const double scale = std::min({1.0, room_w / rect.right, room_h / rect.bottom});
+                rect.right = static_cast<LONG>(rect.right * scale);
+                rect.bottom = static_cast<LONG>(rect.bottom * scale);
+            }
+        }
     }
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-    HWND hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                              CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
-                              nullptr, wc.hInstance, nullptr);
+    HWND hwnd = nullptr;
+    if (borderless_fit && !g_start_fullscreen.load()) {
+        hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_POPUP | WS_VISIBLE,
+                             0, 0, target_w, target_h, nullptr, nullptr, wc.hInstance, nullptr);
+    } else {
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                             CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
+                             nullptr, wc.hInstance, nullptr);
+    }
     if (!hwnd) {
         std::printf("AVISO: nao foi possivel criar a janela (erro %lu)\n", GetLastError());
         return;
@@ -414,6 +436,14 @@ void SetStartFullscreen(bool enabled) {
 void SetWindowSize(u32 width, u32 height) {
     g_window_width = std::clamp(width, 320u, 7680u);
     g_window_height = std::clamp(height, 180u, 4320u);
+}
+
+u32 WindowWidth() {
+    return g_window_width.load();
+}
+
+u32 WindowHeight() {
+    return g_window_height.load();
 }
 
 void SetForce60Hz(bool enabled) {

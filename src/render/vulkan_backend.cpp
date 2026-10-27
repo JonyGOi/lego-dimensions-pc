@@ -147,6 +147,7 @@ struct State {
     std::atomic<u64> presented{0};
     std::atomic<u64> skipped{0};
     u32 swapchain_rebuilds = 0;
+    std::atomic<bool> swapchain_dirty{false};
 
     // ---- geometria do jogo (Fase 17) ----
     struct HostBuffer {
@@ -782,9 +783,17 @@ bool CreateSwapchain() {
     }
     VkExtent2D extent = caps.currentExtent;
     if (extent.width == 0xFFFFFFFFu) {
-        extent.width = std::clamp<u32>(1280, caps.minImageExtent.width, caps.maxImageExtent.width);
-        extent.height = std::clamp<u32>(720, caps.minImageExtent.height, caps.maxImageExtent.height);
+        RECT client_rc{};
+        if (g.hwnd && GetClientRect(static_cast<HWND>(g.hwnd), &client_rc) && (client_rc.right > client_rc.left) && (client_rc.bottom > client_rc.top)) {
+            extent.width = static_cast<u32>(client_rc.right - client_rc.left);
+            extent.height = static_cast<u32>(client_rc.bottom - client_rc.top);
+        } else {
+            extent.width = hle::videoout::WindowWidth();
+            extent.height = hle::videoout::WindowHeight();
+        }
     }
+    extent.width = std::clamp<u32>(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+    extent.height = std::clamp<u32>(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
     if (!extent.width || !extent.height) {
         return Fail("janela minimizada (area de 0 pixels): swapchain adiado");
     }
@@ -3375,6 +3384,9 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     if (!g.active) {
         return false;
     }
+    if (g.swapchain_dirty.exchange(false)) {
+        return skip(true);
+    }
     auto skip = [&](bool rebuild) {
         ++g.skipped;
         if (rebuild) {
@@ -5113,6 +5125,10 @@ bool VulkanRenderer::Active() const {
 
 const std::string& VulkanRenderer::LastError() const {
     return g.error;
+}
+
+void VulkanRenderer::RequestSwapchainRebuild() {
+    g.swapchain_dirty.store(true, std::memory_order_relaxed);
 }
 
 std::string VulkanRenderer::Describe() const {
