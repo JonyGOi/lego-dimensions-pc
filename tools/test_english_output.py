@@ -20,6 +20,11 @@ def load_setup(name):
 
 
 class EnglishOutputTests(unittest.TestCase):
+    def test_utf8_labels_survive_source_edits(self):
+        for name in ('README.md','tools/dist/launcher.cpp'):
+            text=(ROOT/name).read_text(encoding='utf-8')
+            self.assertNotRegex(text,r'[\u00c2\u00c3][\u00a0-\u00bf]|\u00e2\u20ac',name)
+
     def test_default_is_english_and_explicit_portuguese_remains_available(self):
         module=load_setup('preparar.py')
         with patch.dict(os.environ,{},clear=True):self.assertFalse(module._portuguese())

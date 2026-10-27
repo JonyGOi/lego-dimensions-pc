@@ -1,6 +1,6 @@
 # LEGO Dimensions PC
 
-**English** | [PortuguÃªs](README.pt-BR.md)
+**English** | [Português](README.pt-BR.md)
 
 An **unofficial** native port of the PS4 LEGO Dimensions (CUSA01176 / CUSA00935, version 01.24) to Windows x64.
 

@@ -556,8 +556,8 @@ void CheckUpdate() {
     }
     if (g_dev_tree) { // Fase 66: a release do GitHub trocaria o build e as ferramentas da pasta de desenvolvimento
         MessageBoxW(g_main,
-                    ui::T(L"Este launcher estÃ¡ na pasta de desenvolvimento: ele usa o build\\lego_dimensions.exe compilado aqui, com os seus shaders e "
-                          L"pipelines. Atualize compilando (build.bat); o Atualizar do GitHub sÃ³ vale na versÃ£o instalada.",
+                    ui::T(L"Este launcher está na pasta de desenvolvimento: ele usa o build\\lego_dimensions.exe compilado aqui, com os seus shaders e "
+                          L"pipelines. Atualize compilando (build.bat); o Atualizar do GitHub só vale na versão instalada.",
                           L"This launcher is in the development folder: it uses the build\\lego_dimensions.exe built here, with your shaders and pipelines. "
                           L"Update by building (build.bat); Check updates from GitHub only applies to the installed version."),
                     L"LEGO Dimensions PC", MB_ICONINFORMATION);
@@ -807,7 +807,7 @@ std::vector<std::wstring> BrowsePkgs() {
         dialog->SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM);
         const COMDLG_FILTERSPEC filter[] = {{L"PKG (PS4)", L"*.pkg"}};
         dialog->SetFileTypes(1, filter);
-        dialog->SetTitle(ui::T(L"PKGs para extrair (jogo, atualizaÃ§Ã£o, DLCs; pode escolher vÃ¡rios)",
+        dialog->SetTitle(ui::T(L"PKGs para extrair (jogo, atualização, DLCs; pode escolher vários)",
                                L"PKGs to extract (game, update, DLCs; you can pick several)"));
         if (SUCCEEDED(dialog->Show(g_main))) {
             IShellItemArray* items = nullptr;
@@ -840,7 +840,7 @@ void ExtractPkgs() {
     std::error_code ec;
     const fs::path exe = g_root / L"build" / L"pkg_extractor.exe";
     if (!fs::is_regular_file(exe, ec)) {
-        MessageBoxW(g_main, ui::T(L"NÃ£o achei o build\\pkg_extractor.exe na pasta do port.", L"build\\pkg_extractor.exe was not found in the port folder."),
+        MessageBoxW(g_main, ui::T(L"Não achei o build\\pkg_extractor.exe na pasta do port.", L"build\\pkg_extractor.exe was not found in the port folder."),
                     L"LEGO Dimensions PC", MB_ICONERROR);
         return;
     }
@@ -864,10 +864,10 @@ void ExtractPkgs() {
     }
     const fs::path dest(destination);
     const std::wstring text =
-        std::to_wstring(pkgs.size()) + ui::T(L" PKG(s) serÃ£o extraÃ­dos:\n\n", L" PKG(s) will be extracted:\n\n") + ui::T(L"Jogo: ", L"Game: ") +
-        (dest / L"<TITLE_ID>").wstring() + L"\n" + ui::T(L"AtualizaÃ§Ã£o: ", L"Update: ") + (dest / L"<TITLE_ID>-patch").wstring() + L"\nDLCs: " +
+        std::to_wstring(pkgs.size()) + ui::T(L" PKG(s) serão extraídos:\n\n", L" PKG(s) will be extracted:\n\n") + ui::T(L"Jogo: ", L"Game: ") +
+        (dest / L"<TITLE_ID>").wstring() + L"\n" + ui::T(L"Atualização: ", L"Update: ") + (dest / L"<TITLE_ID>-patch").wstring() + L"\nDLCs: " +
         (dlc_here ? dlc : (dest / L"addcont" / L"<TITLE_ID>").wstring()) + L"\n\n" +
-        ui::T(L"Arquivos com o mesmo nome sÃ£o substituÃ­dos. Os PKGs nÃ£o sÃ£o apagados. Continuar?",
+        ui::T(L"Arquivos com o mesmo nome são substituídos. Os PKGs não são apagados. Continuar?",
               L"Files with the same name are replaced. The PKGs are not deleted. Continue?");
     if (MessageBoxW(g_main, text.c_str(), L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
@@ -945,7 +945,7 @@ void ModsMenu(HWND button) {
     fs::path shad = game;
     shad += L"-mods";
     if (!game.empty() && (fs::is_directory(game / L"Mods", ec) || fs::is_directory(shad, ec))) {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"(tambÃ©m os da pasta do jogo: Mods / -mods)", L"(also the ones in the game folder: Mods / -mods)"));
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"(também os da pasta do jogo: Mods / -mods)", L"(also the ones in the game folder: Mods / -mods)"));
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     // Fase 67: o carregador de mods Anomaly, de connorh315 (github.com/connorh315/anomaly), refeito dentro do port
@@ -1064,7 +1064,7 @@ LRESULT CALLBACK NamesProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             RECT title{S(28), S(18), S(kNamesW - 28), S(46)};
             ui::Text(buffer.dc, ui::T(L"Apelidos dos jogadores", L"Player nicknames"), title, g_button, ui::kText);
             RECT hint{S(28), S(48), S(kNamesW - 28), S(92)};
-            ui::Text(buffer.dc, ui::T(L"O nome que o jogo mostra no lugar de Player1, Player2... (atÃ© 16 letras; vazio = padrÃ£o)",
+            ui::Text(buffer.dc, ui::T(L"O nome que o jogo mostra no lugar de Player1, Player2... (até 16 letras; vazio = padrão)",
                                       L"The name the game shows instead of Player1, Player2... (up to 16 letters; empty = default)"),
                      hint, g_small, ui::kMuted, DT_LEFT | DT_TOP | DT_WORDBREAK);
             for (int i = 0; i < kPlayers; ++i) {
@@ -1318,7 +1318,7 @@ void OpenTransfer() {
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!fs::is_regular_file(exe, ec) || !CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, g_root.c_str(), &si, &pi)) {
-        MessageBoxW(g_main, ui::T(L"NÃ£o achei o LD_PC_Transfer.exe na pasta do port.", L"LD_PC_Transfer.exe was not found in the port folder."), L"LEGO Dimensions PC", MB_ICONERROR);
+        MessageBoxW(g_main, ui::T(L"Não achei o LD_PC_Transfer.exe na pasta do port.", L"LD_PC_Transfer.exe was not found in the port folder."), L"LEGO Dimensions PC", MB_ICONERROR);
         return;
     }
     CloseHandle(pi.hThread);
@@ -1568,14 +1568,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_step.clear();
             UpdateStatus();
             if (wp == 0) {
-                AppendLog(ui::T(L"PKGs extraÃ­dos.", L"PKGs extracted."));
-                MessageBoxW(hwnd, (std::wstring(ui::T(L"ExtraÃ§Ã£o concluÃ­da! As pastas jÃ¡ estÃ£o nos campos do launcher.",
+                AppendLog(ui::T(L"PKGs extraídos.", L"PKGs extracted."));
+                MessageBoxW(hwnd, (std::wstring(ui::T(L"Extração concluída! As pastas já estão nos campos do launcher.",
                                                       L"Extraction finished! The folders are already in the launcher fields.")) +
                                    (Prepared() ? L"" : ui::T(L"\n\nAgora clique em Preparar.", L"\n\nNow click Prepare.")))
                                       .c_str(),
                             L"LEGO Dimensions PC", MB_ICONINFORMATION);
             } else {
-                AppendLog(ui::T(L"A extraÃ§Ã£o dos PKGs terminou com erro (veja acima).", L"The PKG extraction failed (see above)."));
+                AppendLog(ui::T(L"A extração dos PKGs terminou com erro (veja acima).", L"The PKG extraction failed (see above)."));
             }
             return 0;
         }
