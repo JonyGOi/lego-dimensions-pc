@@ -1342,7 +1342,7 @@ fs::path FindLegoToypadExe() {
     return {};
 }
 
-void LaunchLegoToypad(bool notify_if_running = false) {
+void LaunchLegoToypad(bool notify_if_running) {
     if (IsProcessRunning(L"LegoToypad.exe") || IsProcessRunning(L"LegoToypad.v1.9.Web.App.Extended.exe")) {
         if (notify_if_running) {
             MessageBoxW(g_main, ui::T(L"O LegoToypad já está em execução.", L"LegoToypad is already running."), L"LEGO Dimensions PC", MB_ICONINFORMATION);
