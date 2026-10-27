@@ -409,8 +409,8 @@ void PickResolution() {
         g_res_value = kResolutions[picked];
         UpdateChoiceLabels();
         SaveSettings();
-        AppendLog(ui::T(L"Resolução alterada para " + g_res_value + L" (salva! Não precisa Preparar novamente).",
-                        L"Resolution changed to " + g_res_value + L" (saved! No need to click Prepare again)."));
+        AppendLog(ui::Pt() ? (L"Resolução alterada para " + g_res_value + L" (salva! Não precisa Preparar novamente).")
+                           : (L"Resolution changed to " + g_res_value + L" (saved! No need to click Prepare again)."));
     }
 }
 
@@ -429,8 +429,9 @@ void PickIcons() { // Fase 62
         g_icons_value = kIconChoices[picked].code;
         UpdateChoiceLabels();
         SaveSettings();
-        AppendLog(ui::T(L"Ícones alterados para " + std::wstring(ui::T(CurrentIcons().pt, CurrentIcons().en)) + L" (salvo! Não precisa Preparar novamente).",
-                        L"Icons changed to " + std::wstring(ui::T(CurrentIcons().pt, CurrentIcons().en)) + L" (saved! No need to click Prepare again)."));
+        const std::wstring icon_name = ui::T(CurrentIcons().pt, CurrentIcons().en);
+        AppendLog(ui::Pt() ? (L"Ícones alterados para " + icon_name + L" (salvo! Não precisa Preparar novamente).")
+                           : (L"Icons changed to " + icon_name + L" (saved! No need to click Prepare again)."));
     }
 }
 
@@ -1133,6 +1134,8 @@ void OpenNamesDialog() {
     ShowWindow(g_names_window, SW_SHOW);
     SetFocus(g_name_edits[0]);
 }
+
+void LaunchLegoToypad(bool notify_if_running = false);
 
 // ---- jogar ----
 void RunGame() {
