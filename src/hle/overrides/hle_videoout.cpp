@@ -105,7 +105,7 @@ constexpr UINT_PTR kTitleTimer = 1;
 std::atomic<bool> g_start_fullscreen{false};
 // Fase 61: tamanho da area util da janela (--resolution LxA). O jogo continua desenhando em 1920x1080 e a
 // imagem e escalada para a janela, como no tamanho padrao.
-std::atomic<u32> g_window_width{1280}, g_window_height{720};
+std::atomic<u32> g_window_width{1920}, g_window_height{1080};
 bool g_fullscreen = false;
 std::atomic<bool> g_stats_overlay{false}; // Fase 65: contador de FPS / info (--stats-overlay, F10)
 WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};

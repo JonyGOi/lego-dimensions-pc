@@ -77,6 +77,8 @@ def stage():
     for d in (S('build'), S('tools', 'shader_compiler_tool', 'build')):
         for dll in VC_DLLS:
             copy(os.path.join(REDIST, dll), os.path.join(d, dll))
+    if os.path.isfile(R('tools', 'LegoToypad.exe')):
+        copy(R('tools', 'LegoToypad.exe'), S('tools', 'LegoToypad.exe'))
     # ferramentas de preparacao
     for f in ('nu2_shader_extractor.py', 'gcn.py', 'nu2dat.py', 'nu2toc.py', 'winpack.py'):  # Fase 60: nu2toc le a tabela do .DAT
         copy(R('tools', 'nu2_shader_extractor', f), S('tools', 'nu2_shader_extractor', f))

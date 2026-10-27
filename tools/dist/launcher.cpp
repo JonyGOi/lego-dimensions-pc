@@ -37,7 +37,7 @@ namespace {
 constexpr int kW = 980, kH = 890, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma; Fase 65: +50 para a linha do contador / apelidos
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames, kPkg };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames, kPkg, kToypad, kShortcut, kOpenToypad };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
@@ -45,13 +45,14 @@ HWND g_icons; // Fase 62
 HWND g_mods;  // Fase 64
 HWND g_overlay, g_names_button; // Fase 65: contador de FPS / info, apelidos dos jogadores
 HWND g_pkg; // Fase 68: extrair PKGs
+HWND g_toypad; // Abrir com LegoToypad
 
 // Fase 61: o que o processo em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar; Fase 68: extrair PKGs)
 enum class Task { kPrepare, kCheck, kUpdate, kPkg } g_task = Task::kPrepare;
 std::wstring g_version, g_new_version, g_notes;
 
 // Fase 61: tamanhos da janela do jogo (o jogo desenha em 1920x1080 e a imagem e escalada para a janela)
-const wchar_t* const kResolutions[] = {L"1280x720", L"1600x900", L"1920x1080", L"2560x1440", L"3840x2160"};
+const wchar_t* const kResolutions[] = {L"1920x1080", L"1280x720", L"1600x900", L"2560x1440", L"3840x2160"};
 // Idioma do jogo e do port: codigo do --lang, nome no menu (pt / en). Fora pt / en, o port fala ingles.
 struct Language {
     const wchar_t *code, *pt, *en;
@@ -67,7 +68,7 @@ const Language kLanguages[] = {
     {L"nl", L"Nederlands", L"Nederlands"},
     {L"da", L"Dansk", L"Dansk"},
 };
-std::wstring g_res_value = L"1280x720", g_lang_value = L"auto";
+std::wstring g_res_value = L"1920x1080", g_lang_value = L"auto";
 // Fase 62: icones dos botoes (--button-icons): pelo controle ligado ou fixos numa plataforma
 struct IconChoice {
     const wchar_t *code, *pt, *en;
@@ -308,7 +309,7 @@ void UpdateStatus() {
     g_status.shaders = !Prepared() ? ui::T(L"Preparar pendente", L"Prepare pending") : AotReady() ? ui::T(L"Shaders AOT prontos", L"AOT shaders ready") : ui::T(L"Sem shaders AOT", L"No AOT shaders");
     g_status.shaders_c = !Prepared() ? ui::kAmber : AotReady() ? ui::kGreen : ui::kAmber;
     if (!g_busy && (g_step.empty() || g_step.rfind(L"Clique", 0) == 0 || g_step.rfind(L"Tudo", 0) == 0 || g_step.rfind(L"Click", 0) == 0 || g_step.rfind(L"All set", 0) == 0)) { // dica do proximo passo
-        g_step = !game_ok ? ui::T(L"Clique em Procurar e escolha a pasta do jogo.", L"Click Browse and choose the game folder.") : !Prepared() || !AotReady()
+        g_step = !game_ok ? ui::T(L"Clique em Procurar e escolha a pasta do jogo.", L"Click Browse and choose the game folder.") : !Prepared()
                      ? ui::T(L"Clique em Preparar: gera os arquivos e traduz os shaders a partir do seu jogo (s\u00f3 na primeira vez).", L"Click Prepare: it builds the files and translates the shaders from your game (first time only).")
                      : ui::T(L"Tudo pronto. Clique em JOGAR!", L"All set. Click PLAY!");
     }
@@ -360,6 +361,7 @@ void SaveSettings() {
     WriteIni(L"idioma", g_lang_value);
     WriteIni(L"pularcenas", ui::Checked(g_skip) ? L"1" : L"0");
     WriteIni(L"contador", ui::Checked(g_overlay) ? L"1" : L"0"); // Fase 65
+    WriteIni(L"toypad_auto", ui::Checked(g_toypad) ? L"1" : L"0");
 }
 
 const Language& CurrentLanguage() {
@@ -400,13 +402,15 @@ void PickResolution() {
         if (g_res_value == res) {
             current = static_cast<int>(items.size());
         }
-        items.push_back(std::wstring(res) + (std::wstring(res) == L"1280x720" ? ui::T(L"   (padr\u00e3o)", L"   (default)") : L""));
+        items.push_back(std::wstring(res) + (std::wstring(res) == L"1920x1080" ? ui::T(L"   (padr\u00e3o)", L"   (default)") : L""));
     }
     const int picked = PopupChoice(g_resolution, items, current);
     if (picked >= 0) {
         g_res_value = kResolutions[picked];
         UpdateChoiceLabels();
         SaveSettings();
+        AppendLog(ui::T(L"Resolução alterada para " + g_res_value + L" (salva! Não precisa Preparar novamente).",
+                        L"Resolution changed to " + g_res_value + L" (saved! No need to click Prepare again)."));
     }
 }
 
@@ -425,6 +429,8 @@ void PickIcons() { // Fase 62
         g_icons_value = kIconChoices[picked].code;
         UpdateChoiceLabels();
         SaveSettings();
+        AppendLog(ui::T(L"Ícones alterados para " + std::wstring(ui::T(CurrentIcons().pt, CurrentIcons().en)) + L" (salvo! Não precisa Preparar novamente).",
+                        L"Icons changed to " + std::wstring(ui::T(CurrentIcons().pt, CurrentIcons().en)) + L" (saved! No need to click Prepare again)."));
     }
 }
 
@@ -1165,6 +1171,9 @@ void RunGame() {
         g_step.clear();
         UpdateStatus();
     }
+    if (ui::Checked(g_toypad)) {
+        LaunchLegoToypad();
+    }
     PrepareMods(); // Fase 64
     std::wstring command = Quote((g_root / L"build" / L"lego_dimensions.exe").wstring()) + L" --app0 " + Quote(GetText(g_game));
     const std::wstring dlc = GetText(g_dlc);
@@ -1234,6 +1243,129 @@ void RunGame() {
     }
 }
 
+
+fs::path KnownFolder(REFKNOWNFOLDERID id) {
+    PWSTR path = nullptr;
+    fs::path out;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &path))) {
+        out = path;
+        CoTaskMemFree(path);
+    }
+    return out;
+}
+
+bool CreateShortcut(const fs::path& link, const fs::path& target, const fs::path& dir, const wchar_t* desc) {
+    IShellLinkW* shell_link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&shell_link)))) {
+        return false;
+    }
+    shell_link->SetPath(target.c_str());
+    shell_link->SetWorkingDirectory(dir.c_str());
+    shell_link->SetDescription(desc);
+    IPersistFile* file = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(shell_link->QueryInterface(IID_PPV_ARGS(&file)))) {
+        ok = SUCCEEDED(file->Save(link.c_str(), TRUE));
+        file->Release();
+    }
+    shell_link->Release();
+    return ok;
+}
+
+void CreateDesktopShortcut() {
+    wchar_t self[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, self, MAX_PATH * 4);
+    const fs::path launcher(self);
+    const fs::path root = launcher.parent_path();
+    std::error_code ec;
+    const fs::path desktop = KnownFolder(FOLDERID_Desktop);
+    const fs::path programs = KnownFolder(FOLDERID_Programs) / L"LEGO Dimensions PC";
+    fs::create_directories(programs, ec);
+    const bool ok1 = CreateShortcut(desktop / L"LEGO Dimensions PC.lnk", launcher, root, L"LEGO Dimensions PC");
+    const bool ok2 = CreateShortcut(programs / L"LEGO Dimensions PC.lnk", launcher, root, L"LEGO Dimensions PC");
+    if (ok1 || ok2) {
+        MessageBoxW(g_main,
+                    ui::T(L"Atalho criado na Área de Trabalho e no Menu Iniciar com sucesso!",
+                          L"Shortcut created on Desktop and Start Menu successfully!"),
+                    L"LEGO Dimensions PC", MB_ICONINFORMATION);
+    } else {
+        MessageBoxW(g_main,
+                    ui::T(L"Não foi possível criar o atalho.",
+                          L"Could not create shortcut."),
+                    L"LEGO Dimensions PC", MB_ICONERROR);
+    }
+}
+
+bool IsProcessRunning(const wchar_t* process_name) {
+    bool running = false;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    PROCESSENTRY32W entry{sizeof(entry)};
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, process_name) == 0) {
+                running = true;
+                break;
+            }
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    return running;
+}
+
+fs::path FindLegoToypadExe() {
+    std::error_code ec;
+    const fs::path candidates[] = {
+        g_root / L"tools" / L"LegoToypad.exe",
+        g_root / L"tools" / L"LegoToypad" / L"LegoToypad.exe",
+        g_root / L"LegoToypad.exe",
+        g_root / L"tools" / L"LegoToypad.v1.9.Web.App.Extended.exe"
+    };
+    for (const auto& path : candidates) {
+        if (fs::is_regular_file(path, ec)) {
+            return path;
+        }
+    }
+    for (fs::directory_iterator it(g_root / L"tools", ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->is_regular_file(ec)) {
+            const std::wstring name = it->path().filename().wstring();
+            if (name.rfind(L"LegoToypad", 0) == 0 && name.size() >= 4 && name.substr(name.size() - 4) == L".exe") {
+                return it->path();
+            }
+        }
+    }
+    return {};
+}
+
+void LaunchLegoToypad(bool notify_if_running = false) {
+    if (IsProcessRunning(L"LegoToypad.exe") || IsProcessRunning(L"LegoToypad.v1.9.Web.App.Extended.exe")) {
+        if (notify_if_running) {
+            MessageBoxW(g_main, ui::T(L"O LegoToypad já está em execução.", L"LegoToypad is already running."), L"LEGO Dimensions PC", MB_ICONINFORMATION);
+        }
+        return;
+    }
+    const fs::path exe = FindLegoToypadExe();
+    if (exe.empty()) {
+        if (MessageBoxW(g_main,
+                        ui::T(L"O executável do LegoToypad não foi encontrado em tools\\LegoToypad.exe.\n\nDeseja abrir a página do LegoToypad v1.9 para baixar?",
+                              L"LegoToypad executable not found in tools\\LegoToypad.exe.\n\nDo you want to open the LegoToypad v1.9 download page?"),
+                        L"LEGO Dimensions PC", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            ShellExecuteW(nullptr, L"open", L"https://github.com/harrysof/LegoToypad/releases/tag/v1.9_web_app_extended", nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        return;
+    }
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    std::wstring cmd = Quote(exe.wstring());
+    if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, exe.parent_path().c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        AppendLog(ui::T(L"LegoToypad v1.9 iniciado em segundo plano.", L"LegoToypad v1.9 started in background."));
+    }
+}
+
 void CreateControls() {
     const int field_h = S(24);
     g_game = ui::Edit(g_main, S(58), S(kHero - 12), S(kW - 300), field_h, kGameEdit, g_font);
@@ -1254,10 +1386,12 @@ void CreateControls() {
     g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(704), S(kHero + 234), S(250), S(40),
                         kSkipCutscenes, g_small, ui::kPanel);
     // Fase 65: contador de FPS / info no jogo e apelidos dos jogadores
-    g_overlay = ui::Button(g_main, ui::T(L"Contador de FPS e info  (F10 no jogo)", L"FPS and info counter  (F10 in game)"), ui::Style::kToggle, S(48),
-                           S(kHero + 284), S(380), S(40), kOverlay, g_small, ui::kPanel);
-    g_names_button = ui::Button(g_main, ui::T(L"Apelidos dos jogadores...", L"Player nicknames..."), ui::Style::kSecondary, S(506), S(kHero + 284),
-                                S(250), S(40), kNames, g_small, ui::kPanel);
+    g_overlay = ui::Button(g_main, ui::T(L"Contador FPS (F10)", L"FPS counter (F10)"), ui::Style::kToggle, S(48),
+                           S(kHero + 284), S(224), S(40), kOverlay, g_small, ui::kPanel);
+    g_toypad = ui::Button(g_main, ui::T(L"Abrir com LegoToypad", L"Open with LegoToypad"), ui::Style::kToggle, S(280),
+                          S(kHero + 284), S(240), S(40), kToypad, g_small, ui::kPanel);
+    g_names_button = ui::Button(g_main, ui::T(L"Apelidos dos jogadores...", L"Player nicknames..."), ui::Style::kSecondary, S(528), S(kHero + 284),
+                                S(240), S(40), kNames, g_small, ui::kPanel);
     g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
     g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
     g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
@@ -1272,6 +1406,10 @@ void CreateControls() {
     // Fase 68: extrair PKGs do PS4 direto para as pastas do launcher
     g_pkg = ui::Button(g_main, ui::T(L"Extrair PKG...", L"Extract PKG..."), ui::Style::kSecondary, S(kW - 534), S(30), S(164), S(40), kPkg, g_button);
     SetWindowRgn(g_pkg, CreateRoundRectRgn(0, 0, S(164) + 1, S(40) + 1, S(18), S(18)), TRUE);
+    HWND btn_toypad = ui::Button(g_main, ui::T(L"Abrir ToyPad", L"Open ToyPad"), ui::Style::kSecondary, S(kW - 880), S(30), S(160), S(40), kOpenToypad, g_button);
+    SetWindowRgn(btn_toypad, CreateRoundRectRgn(0, 0, S(160) + 1, S(40) + 1, S(18), S(18)), TRUE);
+    HWND btn_shortcut = ui::Button(g_main, ui::T(L"Criar Atalho", L"Create Shortcut"), ui::Style::kSecondary, S(kW - 710), S(30), S(168), S(40), kShortcut, g_button);
+    SetWindowRgn(btn_shortcut, CreateRoundRectRgn(0, 0, S(168) + 1, S(40) + 1, S(18), S(18)), TRUE);
 }
 
 // Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
@@ -1325,11 +1463,12 @@ void LoadSettings() {
     ui::SetChecked(g_fullscreen, ReadIni(L"telacheia", L"0") == L"1");
     ui::SetChecked(g_skip, ReadIni(L"pularcenas", L"0") == L"1");
     ui::SetChecked(g_overlay, ReadIni(L"contador", L"0") == L"1"); // Fase 65
+    ui::SetChecked(g_toypad, ReadIni(L"toypad_auto", L"0") == L"1");
     g_icons_value = ReadIni(L"icones", L"auto"); // Fase 62
     g_icons_value = CurrentIcons().code;
-    g_res_value = ReadIni(L"resolucao", L"1280x720");
+    g_res_value = ReadIni(L"resolucao", L"1920x1080");
     if (std::find(std::begin(kResolutions), std::end(kResolutions), g_res_value) == std::end(kResolutions)) {
-        g_res_value = L"1280x720";
+        g_res_value = L"1920x1080";
     }
     g_lang_value = ReadIni(L"idioma", L"auto");
     g_lang_value = CurrentLanguage().code;
@@ -1448,8 +1587,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case kFullscreen:
         case kSkipCutscenes:
         case kOverlay:
+        case kToypad:
             ui::Toggle(reinterpret_cast<HWND>(lp));
             SaveSettings();
+            break;
+        case kShortcut:
+            CreateDesktopShortcut();
+            break;
+        case kOpenToypad:
+            LaunchLegoToypad(true);
             break;
         }
         return 0;

@@ -74,8 +74,13 @@ TIPS
   - Real Toy Pad: plugged into USB before the game starts, it is used on its own, with no extra driver
     (portal.json and the app are left out). If you installed the WinUSB driver with Zadig (Cemu /
     RPCS3), switch the portal back to the default Windows driver. --no-real-toypad uses the virtual one.
-  - With the LegoToypad app 1.6 or newer ("Toypad LEDs" setting on), the portal lights show in the app
-    the way the game lights them: colour, flashes and fades.
+  - With the LegoToypad app (version 1.9 Web App Extended included in tools/LegoToypad.exe): the launcher
+    has an "Open with LegoToypad" option to launch the portal emulator automatically when clicking PLAY,
+    as well as an "Open ToyPad" button at the top.
+  - The "Create Shortcut" button at the top of the launcher creates shortcuts on the Desktop and Start Menu.
+  - The default windowed resolution is now 1080p (1920x1080).
+  - Changing resolution, button icons or language saves immediately and takes effect when clicking PLAY;
+    there is no need to click Prepare again.
   - The first time you visit each area the graphics driver still compiles new pipelines (it may hitch
     a little); they are stored and prepared on the loading screen the next times.
   - If you notice stutters, send the session log (build\logs\): the [ENGASGO], [QUADRO-LENTO] and
