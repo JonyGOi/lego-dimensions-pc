@@ -22,7 +22,7 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 EXTRACTOR = os.path.join(ROOT, 'tools', 'nu2_shader_extractor', 'nu2_shader_extractor.py')
-TITLE_ID = 'CUSA01176'
+from game_regions import read_sfo, title_id, SUPPORTED_TITLE_IDS
 
 
 def _portuguese():
@@ -54,21 +54,6 @@ def fail(text):
     sys.exit(1)
 
 
-def read_sfo(path):
-    """Campos de um param.sfo (formato PSF)."""
-    data = open(path, 'rb').read()
-    if data[:4] != b'\0PSF':
-        return {}
-    keys, values, count = struct.unpack_from('<III', data, 8)
-    out = {}
-    for i in range(count):
-        key_off, fmt, length, _, value_off = struct.unpack_from('<HHIII', data, 20 + 16 * i)
-        key = data[keys + key_off:data.index(b'\0', keys + key_off)].decode('latin-1')
-        raw = data[values + value_off:values + value_off + length]
-        out[key] = struct.unpack('<I', raw[:4])[0] if fmt == 0x0404 else raw.rstrip(b'\0').decode('utf-8', 'replace')
-    return out
-
-
 def game_file(app0, patch, *parts):
     """Fase 58: o arquivo da atualizacao (pasta separada) vence o do jogo base."""
     if patch and os.path.isfile(os.path.join(patch, *parts)):
@@ -79,12 +64,18 @@ def game_file(app0, patch, *parts):
 def check_game(app0, patch=''):
     sfo = game_file(app0, patch, 'sce_sys', 'param.sfo')
     if not os.path.isfile(game_file(app0, patch, 'eboot.bin')) or not os.path.isfile(sfo):
-        fail(T('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions, CUSA01176)',
-               'the game folder must contain eboot.bin and sce_sys\\param.sfo (PS4 dump of LEGO Dimensions, CUSA01176)'))
-    info = read_sfo(sfo)
-    if info.get('TITLE_ID') != TITLE_ID:
+        fail(T('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions, CUSA01176 / CUSA00935)',
+               'the game folder must contain eboot.bin and sce_sys\\param.sfo (PS4 dump of LEGO Dimensions, CUSA01176 / CUSA00935)'))
+    try:
+        info = read_sfo(sfo)
+    except (OSError, ValueError, UnicodeError, struct.error) as error:
+        fail('Invalid game metadata: ' + str(error))
+    if info.get('TITLE_ID') not in SUPPORTED_TITLE_IDS:
         fail(T('o dump e de outro jogo ou regiao (%s); este port e do LEGO Dimensions %s',
-               'the dump is from another game or region (%s); this port is for LEGO Dimensions %s') % (info.get('TITLE_ID'), TITLE_ID))
+               'the dump is from another game or region (%s); this port is for LEGO Dimensions %s') % (info.get('TITLE_ID'), ', '.join(SUPPORTED_TITLE_IDS)))
+    base_title = title_id(app0)
+    if not base_title or (patch and title_id(patch) != base_title):
+        fail('The base game and update must have the same supported title ID')
     dats = set()
     for base in [app0] + ([patch] if patch else []):
         if os.path.isdir(os.path.join(base, 'data')):
@@ -173,7 +164,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--app0', required=True)
     ap.add_argument('--addcont', default='')
-    ap.add_argument('--patch', default='', help='separate update folder (default: auto-detect CUSA01176-patch)')
+    ap.add_argument('--patch', default='', help='separate update folder (default: auto-detect matching CUSA01176-patch / CUSA00935-patch)')
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument('--sem-aot', action='store_true', help='eboot only (shaders deferred to live compiler)')
     ap.add_argument('--limite', type=int, default=0, help='only first N translation batches (test)')

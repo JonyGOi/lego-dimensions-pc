@@ -28,6 +28,8 @@
 #include "hle_stub.h"
 #include "hle_symbol_table.h"
 #include "loader/elf_pie_loader.h"
+#include "common/game_region.h"
+#include "common/cutscene_patch.h"
 #include "patcher/fs_tls_patcher.h"
 #include "runtime/lang.h"
 #include "runtime/crash_handler.h"
@@ -104,29 +106,17 @@ namespace {
 // ja vista / jogo completo). Troca essa ultima leitura por "mov al, 1", mantendo as checagens de antes.
 bool g_skip_cutscenes = false;
 
-bool PatchCutsceneSkip(u8* base) {
-    constexpr u64 kSite = 0x173fe10;
-    static const u8 kOriginal[] = {0x8A, 0x83, 0xE8, 0x00, 0x00, 0x00, 0x24, 0x01}; // mov al, [rbx+0xe8]; and al, 1
-    static const u8 kPatched[] = {0xB0, 0x01, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // mov al, 1; nop x6
-    if (std::memcmp(base + kSite, kOriginal, sizeof(kOriginal)) != 0) {
-        return false; // outro eboot: nao mexe
+bool PatchCutsceneSkip(const loader::ElfPieLoader& elf) {
+    std::vector<std::span<uint8_t>> code;
+    for (const auto& segment : elf.segments()) {
+        if ((segment.flags & 1) && segment.vaddr <= elf.image_size() && segment.filesz <= elf.image_size() - segment.vaddr)
+            code.emplace_back(elf.base() + segment.vaddr, static_cast<size_t>(segment.filesz));
     }
-    std::memcpy(base + kSite, kPatched, sizeof(kPatched));
-    return true;
+    return cutscene_patch::Apply(code);
 }
 
-// Fase 58: pasta da atualizacao separada (CUSA01176-patch), dentro da pasta do jogo ou ao lado dela.
 std::filesystem::path FindPatchDir(const std::filesystem::path& app0) {
-    std::error_code ec;
-    const std::string name = hle::fs::PathText(app0.filename());
-    const std::filesystem::path candidates[] = {app0 / (name + "-patch"), app0.parent_path() / (name + "-patch"),
-                                                app0 / "CUSA01176-patch", app0.parent_path() / "CUSA01176-patch"};
-    for (const auto& dir : candidates) {
-        if (std::filesystem::exists(dir / "eboot.bin", ec) || std::filesystem::exists(dir / "sce_sys" / "param.sfo", ec)) {
-            return dir;
-        }
-    }
-    return {};
+    return game_region::FindPatch(app0);
 }
 
 // Dump do jogo usado como /app0 quando --app0 nao e informado: a pasta do jogo escolhida no launcher
@@ -415,7 +405,14 @@ int SelfTest() {
         std::filesystem::create_directories(base / "data", ec);
         std::filesystem::create_directories(over / "data", ec);
         std::filesystem::create_directories(over / "sce_sys", ec);
-        std::ofstream(over / "sce_sys" / "param.sfo") << "x";
+        std::filesystem::create_directories(base / "sce_sys", ec);
+        std::array<unsigned char, 55> sfo{};
+        const auto put = [&](size_t at, u32 value) { std::memcpy(sfo.data()+at, &value, 4); };
+        std::memcpy(sfo.data(), "\0PSF", 4); put(4, 0x101); put(8, 36); put(12, 45); put(16, 1);
+        sfo[22] = 4; sfo[23] = 2; put(24, 10); put(28, 10);
+        std::memcpy(sfo.data()+36, "TITLE_ID", 9); std::memcpy(sfo.data()+45, "CUSA01176", 10);
+        for (const auto& folder : {base, over})
+            std::ofstream(folder / "sce_sys" / "param.sfo", std::ios::binary).write(reinterpret_cast<const char*>(sfo.data()), sfo.size());
         for (const auto& [file, text] : {std::pair{base / "data" / "a.txt", "base"}, std::pair{base / "data" / "b.txt", "base"},
                                          std::pair{over / "data" / "b.txt", "patch"}, std::pair{over / "data" / "c.txt", "patch"}}) {
             std::ofstream(file) << text;
@@ -1448,7 +1445,7 @@ int main(int argc, char** argv) {
         if (std::filesystem::is_directory(root / "assets" / "addcont", ec)) {
             addcont_dir = root / "assets" / "addcont";
         } else if (const char* appdata = std::getenv("APPDATA")) {
-            addcont_dir = std::filesystem::path(appdata) / "shadPS4" / "addcont" / "CUSA01176";
+            addcont_dir = game_region::Addcont(app0, appdata);
         }
     }
     hle::SetAddcontDirectory(selftest ? std::filesystem::path{} : addcont_dir);
@@ -1545,7 +1542,7 @@ int main(int argc, char** argv) {
     }
 
     if (g_skip_cutscenes) {
-        std::printf("Cutscenes : %s\n", PatchCutsceneSkip(elf.base()) ? "all can be skipped (--skip-cutscenes)"
+        std::printf("Cutscenes : %s\n", PatchCutsceneSkip(elf) ? "all can be skipped (--skip-cutscenes)"
                                                                        : "WARNING: different eboot, skip mod not applied");
     }
     if (!selftest) {
