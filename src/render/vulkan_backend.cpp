@@ -788,8 +788,8 @@ bool CreateSwapchain() {
             extent.width = static_cast<u32>(client_rc.right - client_rc.left);
             extent.height = static_cast<u32>(client_rc.bottom - client_rc.top);
         } else {
-            extent.width = hle::videoout::WindowWidth();
-            extent.height = hle::videoout::WindowHeight();
+            extent.width = 1920;
+            extent.height = 1080;
         }
     }
     extent.width = std::clamp<u32>(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
@@ -3384,9 +3384,6 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     if (!g.active) {
         return false;
     }
-    if (g.swapchain_dirty.exchange(false)) {
-        return skip(true);
-    }
     auto skip = [&](bool rebuild) {
         ++g.skipped;
         if (rebuild) {
@@ -3396,6 +3393,9 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         }
         return false;
     };
+    if (g.swapchain_dirty.exchange(false)) {
+        return skip(true);
+    }
     if (g.views.empty()) {
         return skip(true);
     }
