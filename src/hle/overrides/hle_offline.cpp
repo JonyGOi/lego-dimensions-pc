@@ -67,7 +67,7 @@ HLE_IMPL(int, sceNpTrophyCreateContext, s32* context, s32 user_id, u32 service_l
         return kTrophyErrorInvalidArgument;
     }
     *context = NewId();
-    HLE_TRACE("user=%d label=%u -> contexto %d", user_id, service_label, *context);
+    HLE_TRACE("user=%d label=%u -> context %d", user_id, service_label, *context);
     return err::OK;
 }
 HLE_OVERRIDE(sceNpTrophyCreateContext);
@@ -83,13 +83,13 @@ HLE_IMPL(int, sceNpTrophyCreateHandle, s32* handle) {
 HLE_OVERRIDE(sceNpTrophyCreateHandle);
 
 HLE_IMPL(int, sceNpTrophyRegisterContext, s32 context, s32 handle, u64 options) {
-    HLE_TRACE("contexto=%d handle=%d", context, handle);
+    HLE_TRACE("context=%d handle=%d", context, handle);
     return err::OK;
 }
 HLE_OVERRIDE(sceNpTrophyRegisterContext);
 
 HLE_IMPL(int, sceNpTrophyUnlockTrophy, s32 context, s32 handle, s32 trophy_id, s32* platinum_id) {
-    HLE_TRACE("TROFEU %d desbloqueado (contexto=%d)", trophy_id, context);
+    HLE_TRACE("TROPHY %d unlocked (context=%d)", trophy_id, context);
     if (platinum_id) {
         *platinum_id = -1; // nenhuma platina concedida junto
     }
@@ -129,13 +129,13 @@ HLE_IMPL(int, sceNetCtlRegisterCallback, void* callback, void* arg, int* callbac
     if (callback_id) {
         *callback_id = NewId();
     }
-    HLE_TRACE("callback=%p -> registrado (nunca sera chamado: a rede nao muda de estado)", callback);
+    HLE_TRACE("callback=%p -> registered (will never be called: network state does not change)", callback);
     return err::OK;
 }
 HLE_OVERRIDE(sceNetCtlRegisterCallback);
 
 HLE_IMPL(int, sceNetCtlGetState, int* state) {
-    HLE_QUIET("-> desconectado");
+    HLE_QUIET("-> disconnected");
     if (state) {
         *state = 0; // SCE_NET_CTL_STATE_DISCONNECTED
     }
@@ -144,7 +144,7 @@ HLE_IMPL(int, sceNetCtlGetState, int* state) {
 HLE_OVERRIDE(sceNetCtlGetState);
 
 HLE_IMPL(int, sceNetCtlGetResult, int event_type, int* error_code) {
-    HLE_TRACE("evento=%d", event_type);
+    HLE_TRACE("event=%d", event_type);
     if (error_code) {
         *error_code = kNetCtlErrorNotConnected;
     }
@@ -212,14 +212,14 @@ HLE_FIXED(sceHttpAddRequestHeader, 0);
 
 HLE_IMPL(int, sceHttpCreateConnectionWithURL, int template_id, const char* url, int keep_alive) {
     const int id = NewId();
-    HLE_TRACE("\"%.200s\" -> conexao %d", url ? url : "", id);
+    HLE_TRACE("\"%.200s\" -> connection %d", url ? url : "", id);
     return id;
 }
 HLE_OVERRIDE(sceHttpCreateConnectionWithURL);
 
 HLE_IMPL(int, sceHttpCreateRequestWithURL, int connection_id, int method, const char* url, u64 content_length) {
     const int id = NewId();
-    HLE_TRACE("metodo=%d \"%.200s\" -> request %d", method, url ? url : "", id);
+    HLE_TRACE("method=%d \"%.200s\" -> request %d", method, url ? url : "", id);
     return id;
 }
 HLE_OVERRIDE(sceHttpCreateRequestWithURL);

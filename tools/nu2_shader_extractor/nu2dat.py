@@ -50,7 +50,7 @@ def unpack(raw, size):
         packed, real = struct.unpack_from('<II', raw, pos + 4)
         body = raw[pos + 12:pos + 12 + packed]
         if magic != b'DFLT':
-            raise ValueError('bloco desconhecido %r' % magic)
+            raise ValueError('unknown block %r' % magic)
         if packed == real:
             out += body
         else:
@@ -105,7 +105,7 @@ def entries(pack, suffix='.ps4_shaders', dat_path=None):
         try:
             own = read_tsv(local_index(pack, dat_path), suffix)
         except Exception as e:  # formato inesperado: fica o indice que vem com o port, como antes
-            print('AVISO: tabela de %s nao lida (%s): usando o indice que vem com o port' % (pack, e), flush=True)
+            print('WARNING: could not read %s table (%s): using index bundled with port' % (pack, e), flush=True)
     seen = {row[0] for row in own}
     yield from own
     yield from (row for row in shipped if row[0] not in seen)
@@ -121,7 +121,7 @@ def iter_files(app0, suffix='.ps4_shaders', addcont=None, errors=None, patch=Non
             for name, size, packed, offset, method in entries(pack, suffix, dats[pack]):
                 if offset + packed > size_on_disk:
                     if errors is None:
-                        raise ValueError('%s: %s fora do pacote' % (pack, name))
+                        raise ValueError('%s: %s outside pack' % (pack, name))
                     errors[pack] += 1
                     continue
                 f.seek(offset)

@@ -400,7 +400,7 @@ std::optional<Packet> LoadTag(int pad, int index, const TagData& tag, const std:
         std::memcpy(data.data(), rebuilt.data(), 16);                         // UID e paginas 0-3
         std::memcpy(&data[0x24 * 4], &rebuilt[0x24 * 4], id < 1000 ? 8 : 4); // id (cifrado com a chave nova)
         std::memcpy(&data[0x2B * 4], &rebuilt[0x2B * 4], 4);                  // senha
-        log::Tagged("PORTAL", "segunda copia do personagem %u no portal: UID novo %02x %02x %02x %02x %02x %02x %02x", id, fresh[0],
+        log::Tagged("PORTAL", "second copy of character %u on portal: new UID %02x %02x %02x %02x %02x %02x %02x", id, fresh[0],
                     fresh[1], fresh[2], fresh[3], fresh[4], fresh[5], fresh[6]);
         if (!path.empty()) { // como no Cemu: o arquivo da copia guarda o UID novo
             std::ofstream out(std::filesystem::u8path(path), std::ios::binary | std::ios::in | std::ios::out);
@@ -608,7 +608,7 @@ std::optional<Packet> HandleCommand(const u8* command, u32 length) {
         break;
     }
     default: // 0xD0 lista de tags, 0xE1 senha, 0xE5 ativo, 0xFF consulta de LEDs...
-        name = "NAO IMPLEMENTADO";
+        name = "NOT IMPLEMENTED";
         ++g_stats.unknown;
         reply = Reply(sequence, nullptr, 0);
         break;
@@ -616,7 +616,7 @@ std::optional<Packet> HandleCommand(const u8* command, u32 length) {
 
     if (!quiet) {
         log::Tagged("PORTAL", "cmd 0x%02X %s seq=%u%s: %s-> %s", cmd, name, sequence,
-                    checksum_ok ? "" : " (checksum invalido)", Hex(command, 3u + len).c_str(),
+                    checksum_ok ? "" : " (invalid checksum)", Hex(command, 3u + len).c_str(),
                     Hex(reply.data(), 3u + reply[1]).c_str());
     }
     return reply;

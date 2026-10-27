@@ -4,13 +4,14 @@
 //   jogo        -> <destino>\<TITLE_ID>
 //   atualizacao -> <destino>\<TITLE_ID>-patch   (a pasta separada que o port e o launcher ja aceitam)
 //   DLC         -> <dlcs>\<TITLE_ID>\<entitlement> (sem --dlcs: <destino>\addcont\<TITLE_ID>\<entitlement>)
-// uso: pkg_extractor.exe --destino PASTA [--dlcs PASTA] [--lingua pt|en] arquivo.pkg [arquivo.pkg ...]
+// uso: pkg_extractor.exe --destino PASTA [--dlcs PASTA] [--lingua pt|en] [--jobs 1..8] arquivo.pkg ...
 // Saida para o launcher (UTF-8): PROGRESSO n texto / EXTRAIDO ... / AVISO ... / ERRO ... e no fim JOGO, ATUALIZACAO e
 // DLCS com as pastas para os campos do launcher. Codigo de saida 0 so se todos os pacotes foram extraidos.
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -94,6 +95,7 @@ int wmain(int argc, wchar_t** argv) {
     SetUnhandledExceptionFilter(CrashFilter);
     fs::path destination, dlcs;
     std::vector<fs::path> files;
+    int requested_threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 1, 8);
     for (int i = 1; i < argc; i++) {
         const std::wstring arg = argv[i];
         if (arg == L"--destino" && i + 1 < argc) {
@@ -102,13 +104,24 @@ int wmain(int argc, wchar_t** argv) {
             dlcs = argv[++i];
         } else if (arg == L"--lingua" && i + 1 < argc) {
             g_pt = std::wstring(argv[++i]) == L"pt";
+        } else if (arg == L"--jobs") {
+            if (i + 1 >= argc) {
+                Line("ERROR --jobs requires a worker count from 1 to 8.");
+                return 2;
+            }
+            const std::string text = Utf8(argv[++i]);
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), requested_threads);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || requested_threads < 1 || requested_threads > 8) {
+                Line("ERROR --jobs requires a worker count from 1 to 8.");
+                return 2;
+            }
         } else {
             files.push_back(arg);
         }
     }
     if (destination.empty() || files.empty()) {
-        Line(T("ERRO uso: pkg_extractor.exe --destino PASTA [--dlcs PASTA] [--lingua pt|en] arquivo.pkg ...",
-               "ERRO usage: pkg_extractor.exe --destino FOLDER [--dlcs FOLDER] [--lingua pt|en] file.pkg ..."));
+        Line(T("ERRO uso: pkg_extractor.exe --destino PASTA [--dlcs PASTA] [--lingua pt|en] [--jobs 1..8] arquivo.pkg ...",
+               "ERRO usage: pkg_extractor.exe --destino FOLDER [--dlcs FOLDER] [--lingua pt|en] [--jobs 1..8] file.pkg ..."));
         return 2;
     }
 
@@ -221,7 +234,7 @@ int wmain(int argc, wchar_t** argv) {
         std::atomic<bool> failed{false};
         std::string error;
         std::vector<std::thread> workers;
-        const int threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 1, 8);
+        const int threads = requested_threads;
         for (int t = 0; t < threads; t++) {
             workers.emplace_back([&] {
                 for (int i; !failed && (i = next++) < count;) {

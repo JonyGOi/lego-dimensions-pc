@@ -177,7 +177,7 @@ HLE_IMPL(void*, _Znwm, u64 size) {
     void* p = HeapAlloc_(size);
     HLE_QUIET("%" PRIu64 " -> %p", size, p);
     if (!p) {
-        log::Fatal("operator new(%" PRIu64 ") sem memoria", size);
+        log::Fatal("operator new(%" PRIu64 ") out of memory", size);
     }
     return p;
 }
@@ -187,7 +187,7 @@ HLE_IMPL(void*, _Znam, u64 size) {
     void* p = HeapAlloc_(size);
     HLE_QUIET("%" PRIu64 " -> %p", size, p);
     if (!p) {
-        log::Fatal("operator new[](%" PRIu64 ") sem memoria", size);
+        log::Fatal("operator new[](%" PRIu64 ") out of memory", size);
     }
     return p;
 }
@@ -279,31 +279,31 @@ HLE_IMPL(void, _init_env, void* params) {
 HLE_OVERRIDE(_init_env);
 
 HLE_IMPL(void, catchReturnFromMain, int status) {
-    HLE_TRACE("main retornou %d", status);
+    HLE_TRACE("main returned %d", status);
 }
 HLE_OVERRIDE(catchReturnFromMain);
 
 HLE_IMPL(void, exit, int status) {
     HLE_TRACE("%d", status);
-    std::printf("\nO jogo chamou exit(%d).\n", status);
+    std::printf("\nThe game called exit(%d).\n", status);
     log::Shutdown(0);
 }
 HLE_OVERRIDE(exit);
 
 HLE_IMPL(void, _Exit, int status) {
     HLE_TRACE("%d", status);
-    std::printf("\nO jogo chamou _Exit(%d).\n", status);
+    std::printf("\nThe game called _Exit(%d).\n", status);
     log::Shutdown(0);
 }
 HLE_OVERRIDE(_Exit);
 
 HLE_IMPL(void, abort) {
-    log::Fatal("o jogo chamou abort()");
+    log::Fatal("the game called abort()");
 }
 HLE_OVERRIDE(abort);
 
 HLE_IMPL(void, __cxa_pure_virtual) {
-    log::Fatal("chamada de metodo virtual puro (__cxa_pure_virtual)");
+    log::Fatal("pure virtual method call (__cxa_pure_virtual)");
 }
 HLE_OVERRIDE(__cxa_pure_virtual);
 
@@ -337,17 +337,17 @@ HLE_OVERRIDE(_ZSt14_Xout_of_rangePKc);
 
 // Excecoes C++ do jogo precisariam do unwinder do Orbis sobre o .eh_frame do eboot.
 HLE_IMPL(void, _Unwind_Resume, void* exception) {
-    log::Fatal("_Unwind_Resume(%p): unwinding de excecao C++ nao suportado", exception);
+    log::Fatal("_Unwind_Resume(%p): C++ exception unwinding not supported", exception);
 }
 HLE_OVERRIDE(_Unwind_Resume);
 
 HLE_IMPL(void*, __cxa_begin_catch, void* exception) {
-    log::Fatal("__cxa_begin_catch(%p): excecao C++ nao suportada", exception);
+    log::Fatal("__cxa_begin_catch(%p): C++ exception not supported", exception);
 }
 HLE_OVERRIDE(__cxa_begin_catch);
 
 HLE_IMPL(int, __gxx_personality_v0) {
-    log::Fatal("__gxx_personality_v0: unwinding de excecao C++ nao suportado");
+    log::Fatal("__gxx_personality_v0: C++ exception unwinding not supported");
 }
 HLE_OVERRIDE(__gxx_personality_v0);
 
@@ -660,7 +660,7 @@ void NoteLogBase(int base) { // DIAGNOSTICO Fase 60: quais bases o jogo usa (uma
     static std::atomic<u32> seen{0};
     const u32 bit = base < 0 ? 1u : base > 0 ? 2u : 4u;
     if (!(seen.fetch_or(bit) & bit)) {
-        std::printf("[LIBM] _Log/_FLog chamado com base %d (%s)\n", base, base < 0 ? "log2" : base > 0 ? "log10" : "ln");
+        std::printf("[LIBM] _Log/_FLog called with base %d (%s)\n", base, base < 0 ? "log2" : base > 0 ? "log10" : "ln");
     }
 }
 
@@ -705,10 +705,10 @@ void PrintRandStats() {
     if (calls < 100000) {
         return;
     }
-    std::printf("rand(): %" PRIu64 " chamadas; chamadores (amostra de 1 a cada 65536):\n", calls);
+    std::printf("rand(): %" PRIu64 " calls; callers (sampled 1 in 65536):\n", calls);
     for (int i = 0; i < kRandSlots; ++i) {
         if (g_rand_caller[i].load()) {
-            std::printf("  ~%" PRIu64 " chamadas de %s\n", g_rand_caller_hits[i].load() * 65536,
+            std::printf("  ~%" PRIu64 " calls from %s\n", g_rand_caller_hits[i].load() * 65536,
                         runtime::DescribeAddress(g_rand_caller[i].load()).c_str());
         }
     }

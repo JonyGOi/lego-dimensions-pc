@@ -95,7 +95,7 @@ HLE_IMPL(void*, __tls_get_addr, TlsIndex* index) {
     // So existe o modulo 1 (o eboot): dtv[0]=geracao, dtv[1]=contagem, dtv[2]=bloco do modulo 1.
     runtime::OrbisTcb* tcb = runtime::CurrentTcb();
     if (!tcb || index->module != 1) {
-        log::Fatal("__tls_get_addr: modulo TLS %" PRIu64 " inexistente (tcb=%p)", index->module,
+        log::Fatal("__tls_get_addr: TLS module %" PRIu64 " does not exist (tcb=%p)", index->module,
                    static_cast<void*>(tcb));
     }
     return tcb->tcb_dtv[2].pointer + index->offset;
@@ -119,7 +119,7 @@ HLE_IMPL(int, sceKernelUuidCreate, u8* uuid) {
 HLE_OVERRIDE(sceKernelUuidCreate);
 
 HLE_IMPL(void, __stack_chk_fail) {
-    log::Fatal("__stack_chk_fail: canario de pilha corrompido (chamado de 0x%" PRIx64 ")",
+    log::Fatal("__stack_chk_fail: stack canary corrupted (called from 0x%" PRIx64 ")",
                (u64)HLE_RETURN_ADDRESS());
 }
 HLE_OVERRIDE(__stack_chk_fail);

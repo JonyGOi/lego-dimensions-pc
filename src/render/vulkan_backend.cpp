@@ -92,7 +92,7 @@ const char* ResultName(VkResult result) {
     case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
     case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
     case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
-    default: return "erro do Vulkan";
+    default: return "Vulkan error";
     }
 }
 
@@ -433,16 +433,16 @@ bool Fail(const char* what, VkResult result = VK_SUCCESS) {
 bool LoadLibraryAndGlobals() {
     g.library = LoadLibraryA("vulkan-1.dll");
     if (!g.library) {
-        return Fail("vulkan-1.dll nao encontrada (driver de video sem suporte a Vulkan?)");
+        return Fail("vulkan-1.dll not found (graphics driver lacks Vulkan support?)");
     }
     vk.vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(g.library, "vkGetInstanceProcAddr"));
     if (!vk.vkGetInstanceProcAddr) {
-        return Fail("vkGetInstanceProcAddr ausente em vulkan-1.dll");
+        return Fail("vkGetInstanceProcAddr missing from vulkan-1.dll");
     }
 #define LOAD(name) vk.name = reinterpret_cast<PFN_##name>(vk.vkGetInstanceProcAddr(nullptr, #name));
     VK_GLOBAL_FUNCTIONS(LOAD)
 #undef LOAD
-    return vk.vkCreateInstance ? true : Fail("vkCreateInstance ausente");
+    return vk.vkCreateInstance ? true : Fail("vkCreateInstance missing");
 }
 
 // Mensagens das camadas de validacao: as 3 primeiras de cada tipo vao para o log, o resto so conta.
@@ -457,17 +457,17 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
     if (error && g_validation_abort) {
         // Erro de validacao e tratado como fatal: a mensagem vai para o log e o processo termina
         // ali mesmo, para o erro nao se perder no meio de milhares de linhas.
-        std::printf("[VK-VALIDACAO] ERRO FATAL %s: %s\n[VK-VALIDACAO] execucao abortada (use --vulkan-validation-continue para "
-                    "so registrar)\n",
+        std::printf("[VK-VALIDATION] FATAL ERROR %s: %s\n[VK-VALIDATION] execution aborted (use --vulkan-validation-continue to "
+                    "only log)\n",
                     data->pMessageIdName ? data->pMessageIdName : "?", data->pMessage ? data->pMessage : "");
         std::fflush(stdout);
         TerminateProcess(GetCurrentProcess(), 70);
     }
     if (count <= 3) {
-        std::printf("[VK-VALIDACAO] %s %s: %.1400s\n", error ? "ERRO" : "aviso", data->pMessageIdName ? data->pMessageIdName : "?",
+        std::printf("[VK-VALIDATION] %s %s: %.1400s\n", error ? "ERROR" : "aviso", data->pMessageIdName ? data->pMessageIdName : "?",
                     data->pMessage ? data->pMessage : "");
         if (count == 3) {
-            std::printf("[VK-VALIDACAO]   (repeticoes seguintes deste tipo so entram na contagem)\n");
+            std::printf("[VK-VALIDATION]   (further repeats of this type are only counted)\n");
         }
         std::fflush(stdout);
     }
@@ -500,7 +500,7 @@ bool CreateInstance() {
             info.ppEnabledLayerNames = &kValidationLayer;
             info.enabledExtensionCount = 3;
         } else {
-            std::printf("[VULKAN] camada %s nao encontrada (Vulkan SDK instalado?): seguindo sem validacao\n", kValidationLayer);
+            std::printf("[VULKAN] layer %s not found (Vulkan SDK installed?): continuing without validation\n", kValidationLayer);
         }
     }
     const VkResult result = vk.vkCreateInstance(&info, nullptr, &g.instance);
@@ -525,7 +525,7 @@ bool CreateInstance() {
             create(g.instance, &messenger, nullptr, &g.messenger);
         }
     }
-    return complete ? true : Fail("funcao de instancia do Vulkan ausente");
+    return complete ? true : Fail("Vulkan instance function missing");
 }
 
 bool CreateSurface(HWND hwnd) {
@@ -583,7 +583,7 @@ bool PickPhysicalDevice() {
             g.queue_family = static_cast<u32>(family);
         }
     }
-    return best_score >= 0 ? true : Fail("nenhuma GPU com VK_KHR_swapchain e fila grafica que apresente nesta janela");
+    return best_score >= 0 ? true : Fail("no GPU with VK_KHR_swapchain and graphics queue that presents to this window");
 }
 
 // --gpl. Fase 41: desligado por padrao. No driver AMD 26.6.1 (RX 6600) so LIGAR o recurso
@@ -660,7 +660,7 @@ bool CreateDevice() {
                      have11.storageBuffer16BitAccess && have11.shaderDrawParameters && have12.shaderInt8 &&
                      have12.storageBuffer8BitAccess && have13.shaderDemoteToHelperInvocation;
     if (!v13 || !have13.dynamicRendering) {
-        return Fail("a GPU nao oferece dynamic rendering (Vulkan 1.3)");
+        return Fail("GPU does not support dynamic rendering (Vulkan 1.3)");
     }
     g.independent_blend = have.features.independentBlend;
     want13.dynamicRendering = VK_TRUE; // nucleo do 1.3; e o VK_KHR_dynamic_rendering promovido
@@ -708,11 +708,11 @@ bool CreateDevice() {
             want_blend.pNext = want13.pNext;
             want13.pNext = &want_blend;
         }
-        std::printf("[VULKAN] DIAGNOSTICO: recurso '%s' ligado no dispositivo (sem uso)\n", test);
+        std::printf("[VULKAN] DIAGNOSTIC: feature '%s' enabled on device (unused)\n", test);
     }
-    std::printf("[VULKAN] bibliotecas de pipeline (GPL): %s (extensao %s, recurso %s, link rapido %s, depth clamp dinamico %s)\n",
-                g.gpl ? "LIGADAS" : "desligadas", has_gpl ? "sim" : "nao", have_gpl.graphicsPipelineLibrary ? "sim" : "nao",
-                fast_linking ? "sim" : "nao", have_eds3.extendedDynamicState3DepthClampEnable ? "sim" : "nao");
+    std::printf("[VULKAN] pipeline libraries (GPL): %s (extension %s, feature %s, fast link %s, dynamic depth clamp %s)\n",
+                g.gpl ? "LIGADAS" : "desligadas", has_gpl ? "yes" : "no", have_gpl.graphicsPipelineLibrary ? "yes" : "no",
+                fast_linking ? "yes" : "no", have_eds3.extendedDynamicState3DepthClampEnable ? "yes" : "no");
     // Fase 54: marcadores de draw e relatorio de falha do dispositivo (diagnostico de GPU travada)
     if (has_marker && !std::getenv("LD_NO_GPU_MARKERS")) {
         extensions[info.enabledExtensionCount++] = VK_AMD_BUFFER_MARKER_EXTENSION_NAME;
@@ -741,8 +741,8 @@ bool CreateDevice() {
     if (has_fault) {
         g.get_fault_info = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(vk.vkGetDeviceProcAddr(g.device, "vkGetDeviceFaultInfoEXT"));
     }
-    std::printf("[VULKAN] detector de GPU travada: marcadores por draw %s, relatorio de falha do driver %s\n",
-                g.write_marker ? "sim" : "nao", g.get_fault_info ? "sim" : "nao");
+    std::printf("[VULKAN] GPU hang detector: per-draw markers %s, driver fault report %s\n",
+                g.write_marker ? "yes" : "no", g.get_fault_info ? "yes" : "no");
     bool complete = true;
 #define LOAD(name)                                                                                 \
     vk.name = reinterpret_cast<PFN_##name>(vk.vkGetDeviceProcAddr(g.device, #name));               \
@@ -750,7 +750,7 @@ bool CreateDevice() {
     VK_DEVICE_FUNCTIONS(LOAD)
 #undef LOAD
     if (!complete) {
-        return Fail("funcao de dispositivo do Vulkan ausente");
+        return Fail("Vulkan device function missing");
     }
     vk.vkGetDeviceQueue(g.device, g.queue_family, 0, &g.queue);
     if (g.gpl) {
@@ -786,14 +786,14 @@ bool CreateSwapchain() {
         extent.height = std::clamp<u32>(720, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
     if (!extent.width || !extent.height) {
-        return Fail("janela minimizada (area de 0 pixels): swapchain adiado");
+        return Fail("window minimized (0-pixel area): swapchain deferred");
     }
     u32 format_count = 0;
     vk.vkGetPhysicalDeviceSurfaceFormatsKHR(g.physical, g.surface, &format_count, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vk.vkGetPhysicalDeviceSurfaceFormatsKHR(g.physical, g.surface, &format_count, formats.data());
     if (formats.empty()) {
-        return Fail("a superficie nao oferece nenhum formato");
+        return Fail("surface offers no formats");
     }
     g.format = formats[0];
     for (const VkSurfaceFormatKHR& candidate : formats) {
@@ -844,7 +844,7 @@ bool CreateSwapchain() {
     for (VkSemaphore& semaphore : g.render_finished) {
         const VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         if (vk.vkCreateSemaphore(g.device, &semaphore_info, nullptr, &semaphore) != VK_SUCCESS) {
-            return Fail("vkCreateSemaphore (por imagem do swapchain)");
+            return Fail("vkCreateSemaphore (per swapchain image)");
         }
     }
     for (VkImage image : g.images) {
@@ -884,7 +884,7 @@ bool CreateFrameObjects() {
     fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     if (vk.vkCreateSemaphore(g.device, &semaphore, nullptr, &g.image_available) != VK_SUCCESS ||
         vk.vkCreateFence(g.device, &fence, nullptr, &g.in_flight) != VK_SUCCESS) {
-        return Fail("criacao de semaforos / fence");
+        return Fail("semaphore / fence creation");
     }
     return true;
 }
@@ -1061,7 +1061,7 @@ bool CreateHostBuffer(State::HostBuffer& out, u64 size, VkBufferUsageFlags usage
         }
     }
     if (type == ~0u) {
-        return Fail("nenhum tipo de memoria HOST_VISIBLE | HOST_COHERENT para o buffer");
+        return Fail("no HOST_VISIBLE | HOST_COHERENT memory type for buffer");
     }
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     allocate.allocationSize = requirements.size;
@@ -1087,7 +1087,7 @@ bool CreateGeometryObjects() {
         !CreateHostBuffer(g.indices, kIndexRingBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, "vkCreateBuffer (indices, 16 MiB)")) {
         return false;
     }
-    if (g.write_marker && !CreateHostBuffer(g.markers, 256, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "vkCreateBuffer (marcadores)")) {
+    if (g.write_marker && !CreateHostBuffer(g.markers, 256, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "vkCreateBuffer (markers)")) {
         g.write_marker = nullptr; // Fase 54: sem o detector, o resto segue
         g.error.clear();
     }
@@ -1105,13 +1105,13 @@ bool CreateGeometryObjects() {
     module.pCode = vertex.data();
     VkResult result = vk.vkCreateShaderModule(g.device, &module, nullptr, &g.vertex_shader);
     if (result != VK_SUCCESS) {
-        return Fail("vkCreateShaderModule (vertice)", result);
+        return Fail("vkCreateShaderModule (vertex)", result);
     }
     module.codeSize = fragment.size() * 4;
     module.pCode = fragment.data();
     result = vk.vkCreateShaderModule(g.device, &module, nullptr, &g.fragment_shader);
     if (result != VK_SUCCESS) {
-        return Fail("vkCreateShaderModule (fragmento)", result);
+        return Fail("vkCreateShaderModule (fragment)", result);
     }
     // Descriptor set 0, binding 0: a textura do draw (imagem + sampler linear), no fragmento.
     VkDescriptorSetLayoutBinding binding{};
@@ -1145,14 +1145,14 @@ bool CreateGeometryObjects() {
     if (result != VK_SUCCESS) {
         return Fail("vkCreateSampler", result);
     }
-    if (!CreateHostBuffer(g.staging, kStagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "vkCreateBuffer (staging de texturas, 40 MiB)")) {
+    if (!CreateHostBuffer(g.staging, kStagingBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "vkCreateBuffer (texture staging, 40 MiB)")) {
         return false;
     }
     if (!CreateHostBuffer(g.frame_staging, 2 * kFrameStagingHalf, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          "vkCreateBuffer (staging de texturas do frame, 96 MiB)")) {
+                          "vkCreateBuffer (frame texture staging, 96 MiB)")) {
         return false;
     }
-    if (!CreateHostBuffer(g.readback, 8 * 256, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "vkCreateBuffer (leitura de volta de alvos)")) {
+    if (!CreateHostBuffer(g.readback, 8 * 256, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "vkCreateBuffer (target readback)")) {
         return false;
     }
     VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1177,7 +1177,7 @@ bool CreateGeometryObjects() {
     // Shaders do jogo: anel de storage buffers e um pool de descriptor sets refeito a cada frame.
     if (!CreateHostBuffer(g.storage, kStorageRingBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "vkCreateBuffer (storage)") ||
         !CreateHostBuffer(g.statics, kStaticBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                          "vkCreateBuffer (geometria estatica, 768 MiB)")) {
+                          "vkCreateBuffer (static geometry, 768 MiB)")) {
         return false;
     }
     std::memset(g.storage.mapped, 0, kZeroBytes);
@@ -1611,11 +1611,11 @@ void CheckImmediateUpload(VkResult waited, const char* where, u64 key, u32 width
     if (waited == VK_SUCCESS) {
         return;
     }
-    std::printf("[GPU TRAVADA] envio imediato de textura (%s) voltou %s: chave 0x%llx %ux%ux%u, %u camadas, %u niveis, formato %u, %llu bytes%s",
+    std::printf("[GPU HANG] immediate texture upload (%s) returned %s: key 0x%llx %ux%ux%u, %u layers, %u levels, format %u, %llu bytes%s",
                 where, ResultName(waited), static_cast<unsigned long long>(key), width, height, depth, layers, levels, format,
                 static_cast<unsigned long long>(bytes), "\n");
     for (u32 i = 0; i < levels && i < 16; ++i) {
-        std::printf("[GPU TRAVADA]   nivel %u: offset %llu, %ux%ux%u%s", i, static_cast<unsigned long long>(regions[i].bufferOffset),
+        std::printf("[GPU HANG]   level %u: offset %llu, %ux%ux%u%s", i, static_cast<unsigned long long>(regions[i].bufferOffset),
                     regions[i].imageExtent.width, regions[i].imageExtent.height, regions[i].imageExtent.depth, "\n");
     }
     std::fflush(stdout);
@@ -1679,7 +1679,7 @@ bool FinishTexture(u64 key, const TextureData& data, State::Texture& texture) {
     // dos Simpsons deixou de derrubar o driver) e confere se o que ja estava na fila terminou bem.
     const VkResult before = vk.vkQueueWaitIdle(g.queue);
     if (before != VK_SUCCESS) {
-        std::printf("[GPU TRAVADA] a fila ja voltou %s ANTES do envio imediato da textura 0x%llx%s", ResultName(before),
+        std::printf("[GPU HANG] queue already returned %s BEFORE immediate texture upload 0x%llx%s", ResultName(before),
                     static_cast<unsigned long long>(key), "\n");
     }
     vk.vkQueueSubmit(g.queue, 1, &submit, VK_NULL_HANDLE);
@@ -1976,7 +1976,7 @@ void PrewarmTargetPool() {
         g_texture_pool.chunks.push_back(std::move(chunk));
         ++made;
     }
-    std::printf("[VULKAN] pool de texturas e alvos: %u blocos de %llu MiB reservados na abertura em %.0f ms\n", made,
+    std::printf("[VULKAN] texture and target pool: %u blocks of %llu MiB reserved at startup in %.0f ms\n", made,
                 static_cast<unsigned long long>(kTexturePoolChunk >> 20),
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 }
@@ -2143,7 +2143,7 @@ bool CreateFallbackViews() {
         image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vk.vkCreateImage(g.device, &image, nullptr, &g.fallback_images[i]) != VK_SUCCESS) {
-            return Fail("vkCreateImage (textura branca de reserva)");
+            return Fail("vkCreateImage (fallback white texture)");
         }
         VkMemoryRequirements requirements;
         vk.vkGetImageMemoryRequirements(g.device, g.fallback_images[i], &requirements);
@@ -2151,7 +2151,7 @@ bool CreateFallbackViews() {
         allocate.allocationSize = requirements.size;
         allocate.memoryTypeIndex = FindMemoryType(requirements);
         if (allocate.memoryTypeIndex == ~0u || vk.vkAllocateMemory(g.device, &allocate, nullptr, &g.fallback_memory[i]) != VK_SUCCESS) {
-            return Fail("vkAllocateMemory (textura branca de reserva)");
+            return Fail("vkAllocateMemory (fallback white texture)");
         }
         vk.vkBindImageMemory(g.device, g.fallback_images[i], g.fallback_memory[i], 0);
     }
@@ -2187,7 +2187,7 @@ bool CreateFallbackViews() {
         view.format = VK_FORMAT_R8G8B8A8_UNORM;
         view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kViews[i].layers};
         if (vk.vkCreateImageView(g.device, &view, nullptr, &g.fallback_views[i]) != VK_SUCCESS) {
-            return Fail("vkCreateImageView (textura branca de reserva)");
+            return Fail("vkCreateImageView (fallback white texture)");
         }
     }
     return true;
@@ -2213,7 +2213,7 @@ VkBlendFactor BlendFactor(u32 factor) {
     default: {
         static std::atomic<u32> logged{0};
         if (logged.fetch_add(1) < 12) {
-            std::printf("[BLEND] fator de blend nao tratado: %u (15..18 = segunda fonte); usado ONE\n", factor);
+            std::printf("[BLEND] unsupported blend factor: %u (15..18 = second source); using ONE\n", factor);
         }
         return VK_BLEND_FACTOR_ONE; // fatores de segunda fonte (15..18): nao tratados
     }
@@ -2534,7 +2534,7 @@ VkPipeline BuildGamePipeline(const GameDraw& draw, VkShaderModule vs, VkShaderMo
             g_gpl_stats.link_ms += ms;
             g_gpl_stats.link_worst_ms = std::max(g_gpl_stats.link_worst_ms, ms);
             if (g_gpl_stats.links <= 12) {
-                std::printf("[GPL] pipeline ligado de bibliotecas em %.3f ms\n", ms);
+                std::printf("[GPL] pipeline linked from libraries in %.3f ms\n", ms);
             }
             return pipeline;
         }
@@ -2542,7 +2542,7 @@ VkPipeline BuildGamePipeline(const GameDraw& draw, VkShaderModule vs, VkShaderMo
     }
     const VkResult result = vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
     if (result != VK_SUCCESS) {
-        Fail("vkCreateGraphicsPipelines (shaders do jogo)", result);
+        Fail("vkCreateGraphicsPipelines (game shaders)", result);
         pipeline = VK_NULL_HANDLE;
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -2707,7 +2707,7 @@ void PipelineWorker() {
                 // "transparentes" quando so a pele falhava). Agora vai para o log e e tentada de novo.
                 g_pipeline_failed_at[job.hash] = g.frame_serial;
                 if (++g_pipeline_failures <= 30) {
-                    std::printf("[PIPELINE] criacao FALHOU: par %016llx pipeline %016llx (%s) - nova tentativa em ~300 frames%s",
+                    std::printf("[PIPELINE] creation FAILED: pair %016llx pipeline %016llx (%s) - retry in ~300 frames%s",
                                 static_cast<unsigned long long>(job.draw.pair), static_cast<unsigned long long>(job.hash), g.error.c_str(),
                                 "\n");
                 }
@@ -2901,7 +2901,7 @@ bool ResolveTextureView(u64 key, u32 view_type, VkImageView* view) {
     } else {
         static std::atomic<u32> logged{0};
         if (logged.fetch_add(1) < 20) {
-            std::printf("[VULKAN] textura com tipo de view diferente do que o shader declara (textura %u, shader %u): sai branca\n",
+            std::printf("[VULKAN] texture view type differs from shader declaration (texture %u, shader %u): renders white\n",
                         texture->second.view_type, view_type);
         }
     }
@@ -3139,7 +3139,7 @@ bool VulkanRenderer::Initialize(void* hwnd) {
         return true;
     }
     if (!g_enabled) {
-        return Fail("Vulkan desligado (--no-vulkan)");
+        return Fail("Vulkan disabled (--no-vulkan)");
     }
     g.hwnd = static_cast<HWND>(hwnd);
     g.error.clear();
@@ -3167,10 +3167,10 @@ void TailMarker(u32 phase) {
 
 const char* TailPhaseName(u32 value) {
     switch (value) {
-    case 0xFFFF1: return "fim dos passes do jogo";
-    case 0xFFFF2: return "leitura de volta dos alvos minusculos";
-    case 0xFFFF3: return "quad da janela";
-    case 0xFFFF4: return "fim do frame";
+    case 0xFFFF1: return "end of game passes";
+    case 0xFFFF2: return "tiny target readback";
+    case 0xFFFF3: return "window quad";
+    case 0xFFFF4: return "end of frame";
     default: return nullptr;
     }
 }
@@ -3185,13 +3185,13 @@ void NoteGpuTimeout() {
     }
     g.hang_reported = true;
     const VkResult status = vk.vkGetFenceStatus(g.device, g.in_flight);
-    std::printf("[GPU TRAVADA] o frame %u nao terminou em %.1f s (%s); %zu draws do jogo gravados nele\n", g.frame_serial,
-                g.hang_timeouts * 0.25, status == VK_ERROR_DEVICE_LOST ? "dispositivo PERDIDO" : "a GPU ainda esta nele",
+    std::printf("[GPU HANG] frame %u did not finish within %.1f s (%s); %zu game draws recorded in it\n", g.frame_serial,
+                g.hang_timeouts * 0.25, status == VK_ERROR_DEVICE_LOST ? "device LOST" : "GPU is still inside it",
                 g.frame_draws.size());
-    std::printf("[GPU TRAVADA] aneis: maior frame ate aqui vertices %.1f MiB, indices %.1f MiB, constantes %.1f MiB | frame em montagem %.1f / %.1f / %.1f MiB%s",
+    std::printf("[GPU HANG] rings: largest frame so far vertices %.1f MiB, indices %.1f MiB, constants %.1f MiB | frame being built %.1f / %.1f / %.1f MiB%s",
                 g.peak_vertex_bytes / 1048576.0, g.peak_index_bytes / 1048576.0, g.peak_storage_bytes / 1048576.0, g.frame_vertex_bytes / 1048576.0,
                 g.frame_index_bytes / 1048576.0, g.frame_storage_bytes / 1048576.0, "\n");
-    std::printf("[GPU TRAVADA] envios de textura: %u gravados no comeco do ultimo frame (%llu bytes de staging), %u com submissao propria depois dele%s",
+    std::printf("[GPU HANG] texture uploads: %u recorded at start of last frame (%llu staging bytes), %u with own submission afterward%s",
                 g.staged_last_frame, static_cast<unsigned long long>(g.staged_bytes_last_frame), g.immediate_since_frame, "\n");
     if (g.write_marker && g.markers.mapped) {
         u32 started = 0, finished = 0;
@@ -3202,33 +3202,33 @@ void NoteGpuTimeout() {
         if ((started >> 20) == ((g.frame_serial - 1) & 0xFFFu)) { // Fase 54c: os marcadores sao do frame anterior
             serial = (g.frame_serial - 1) & 0xFFFu;
             draws = &g.previous_draws;
-            std::printf("[GPU TRAVADA] os marcadores sao do frame ANTERIOR (%u, %zu draws do jogo): foi ele que travou%s", g.frame_serial - 1,
+            std::printf("[GPU HANG] markers belong to PREVIOUS frame (%u, %zu game draws): that frame hung%s", g.frame_serial - 1,
                         draws->size(), "\n");
         }
         u32 first = (started >> 20) == serial ? started & 0xFFFFF : 0;
         u32 last_done = (finished >> 20) == serial ? finished & 0xFFFFF : 0;
         const State::TailInfo& t = g.tail;
-        std::printf("[GPU TRAVADA] fim do frame: %u passes, %u copias de realimentacao, %u leituras de volta, alvo exibido %ux%u formato %u (0x%llx), "
-                    "%u alvos de render (%u criados neste frame)%s",
+        std::printf("[GPU HANG] end of frame: %u passes, %u feedback copies, %u readbacks, displayed target %ux%u format %u (0x%llx), "
+                    "%u render targets (%u created this frame)%s",
                     t.passes, t.feedback_copies, t.readbacks, t.shown_w, t.shown_h, t.shown_format,
                     static_cast<unsigned long long>(t.shown_address), t.targets_total, t.targets_new, "\n");
         if (TailPhaseName(first) || TailPhaseName(last_done)) {
-            std::printf("[GPU TRAVADA] etapas: a ultima que COMECOU foi \"%s\", a ultima que TERMINOU foi \"%s\"%s",
-                        TailPhaseName(first) ? TailPhaseName(first) : "(draw do jogo)",
-                        TailPhaseName(last_done) ? TailPhaseName(last_done) : "(draw do jogo)", "\n");
+            std::printf("[GPU HANG] stages: last STARTED was \"%s\", last FINISHED was \"%s\"%s",
+                        TailPhaseName(first) ? TailPhaseName(first) : "(game draw)",
+                        TailPhaseName(last_done) ? TailPhaseName(last_done) : "(game draw)", "\n");
             first = TailPhaseName(first) ? static_cast<u32>(draws->size()) : first;
             last_done = TailPhaseName(last_done) ? static_cast<u32>(draws->size()) : last_done;
         }
-        std::printf("[GPU TRAVADA] marcadores: o ultimo draw que COMECOU foi o #%u, o ultimo que TERMINOU foi o #%u%s\n", first, last_done,
-                    first == 0 ? " (nenhum draw do jogo comecou: travou antes, nas copias/envios do inicio do frame)"
-                    : last_done >= draws->size() ? " (todos os draws do jogo terminaram: travou depois deles)" : "");
+        std::printf("[GPU HANG] markers: last draw STARTED was #%u, last FINISHED was #%u%s\n", first, last_done,
+                    first == 0 ? " (no game draw started: hung earlier in start-of-frame copies/uploads)"
+                    : last_done >= draws->size() ? " (all game draws finished: hung afterward)" : "");
         const u32 from = last_done + 1, to = std::max(first, from);
         for (u32 n = from; n <= to && n <= draws->size() && n < from + 8; ++n) {
             const State::DrawInfo& d = (*draws)[n - 1];
-            std::printf("[GPU TRAVADA]   draw #%u (fila %u): par %016llx pipeline %016llx | %s %u %s x %u instancias, base %d | "
-                        "alvo %ux%u (%u cores, formato %u) prof %ux%u | viewport %.0fx%.0f | %u imagens (%u alvos de render), %u buffers (%llu bytes)\n",
+            std::printf("[GPU HANG]   draw #%u (queue %u): pair %016llx pipeline %016llx | %s %u %s x %u instances, base %d | "
+                        "target %ux%u (%u colors, format %u) depth %ux%u | viewport %.0fx%.0f | %u images (%u render targets), %u buffers (%llu bytes)\n",
                         n, d.queue_index, static_cast<unsigned long long>(d.pair_key), static_cast<unsigned long long>(d.pipeline_key),
-                        d.indexed ? "indexado" : "sem indices", d.count, d.indexed ? (d.index_type == 32 ? "indices u32" : "indices u16") : "vertices",
+                        d.indexed ? "indexado" : "no indices", d.count, d.indexed ? (d.index_type == 32 ? "u32 indices" : "u16 indices") : "vertices",
                         d.instance_count, d.base_vertex, d.color_w, d.color_h, d.color_count, d.color_format, d.depth_w, d.depth_h, d.viewport_w,
                         d.viewport_h, d.image_count, d.target_images, d.buffer_count, static_cast<unsigned long long>(d.buffer_bytes));
             for (u32 i = 0; i < d.image_count && i < 4; ++i) {
@@ -3243,13 +3243,13 @@ void NoteGpuTimeout() {
                         im.w = im.h = 0; // textura branca / reserva
                     }
                 }
-                std::printf("[GPU TRAVADA]     imagem binding %u: %s 0x%llx %ux%u formato %u profundidade %u niveis %u | o shader declara tipo %u%s%s", im.binding,
-                            im.is_target ? "ALVO" : "textura", static_cast<unsigned long long>(im.key), im.w, im.h, im.format, im.depth, im.levels,
-                            im.view_type, im.array ? " (view de array)" : "", "\n");
+                std::printf("[GPU HANG]     image binding %u: %s 0x%llx %ux%u format %u depth %u levels %u | shader declares type %u%s%s", im.binding,
+                            im.is_target ? "ALVO" : "texture", static_cast<unsigned long long>(im.key), im.w, im.h, im.format, im.depth, im.levels,
+                            im.view_type, im.array ? " (array view)" : "", "\n");
             }
             for (u32 i = 0; i < d.sampler_count && i < 4; ++i) {
                 const auto& sm = d.samplers[i];
-                std::printf("[GPU TRAVADA]     sampler binding %u: wrap %u/%u ponto %u comparacao %u borda %u lod 0x%x filtro 0x%x%s", sm.binding, sm.wrap_u,
+                std::printf("[GPU HANG]     sampler binding %u: wrap %u/%u point %u comparison %u border %u lod 0x%x filter 0x%x%s", sm.binding, sm.wrap_u,
                             sm.wrap_v, sm.point, sm.compare, sm.border, sm.lod, sm.filter, "\n");
             }
         }
@@ -3265,13 +3265,13 @@ void NoteGpuTimeout() {
             counts.vendorBinarySize = 0;
             const VkResult got = g.get_fault_info(g.device, &counts, &fault);
             if (got == VK_SUCCESS || got == VK_INCOMPLETE) {
-                std::printf("[GPU TRAVADA] relatorio do driver: %s\n", fault.description);
+                std::printf("[GPU HANG] driver report: %s\n", fault.description);
                 for (const auto& a : addresses) {
-                    std::printf("[GPU TRAVADA]   endereco: tipo %d, 0x%llx (precisao 0x%llx)\n", static_cast<int>(a.addressType),
+                    std::printf("[GPU HANG]   address: type %d, 0x%llx (precision 0x%llx)\n", static_cast<int>(a.addressType),
                                 static_cast<unsigned long long>(a.reportedAddress), static_cast<unsigned long long>(a.addressPrecision));
                 }
                 for (const auto& v : vendor) {
-                    std::printf("[GPU TRAVADA]   driver: %s (codigo 0x%llx, dado 0x%llx)\n", v.description,
+                    std::printf("[GPU HANG]   driver: %s (code 0x%llx, data 0x%llx)\n", v.description,
                                 static_cast<unsigned long long>(v.vendorFaultCode), static_cast<unsigned long long>(v.vendorFaultData));
                 }
             }
@@ -3423,7 +3423,7 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         u32 started = 0, finished = 0;
         std::memcpy(&started, g.markers.mapped, 4);
         std::memcpy(&finished, g.markers.mapped + 4, 4);
-        std::printf("[GPU TESTE] frame %u: comecou #%u (frame %u), terminou #%u (frame %u), %zu draws gravados\n", g.frame_serial,
+        std::printf("[GPU TEST] frame %u: started #%u (frame %u), finished #%u (frame %u), %zu draws recorded\n", g.frame_serial,
                     started & 0xFFFFF, started >> 20, finished & 0xFFFFF, finished >> 20, g.frame_draws.size());
     }
     u32 image_index = 0;
@@ -4020,7 +4020,7 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     }
     if (result != VK_SUCCESS) {
         Fail("vkQueueSubmit", result);
-        std::printf("[VULKAN] ERRO: vkQueueSubmit do frame %u falhou: %s\n", g.frame_serial, g.error.c_str()); // Fase 54b
+        std::printf("[VULKAN] ERROR: vkQueueSubmit for frame %u failed: %s\n", g.frame_serial, g.error.c_str()); // Fase 54b
         if (result == VK_ERROR_DEVICE_LOST && !g.device_lost) { // Fase 54c: relatorio na hora
             g.device_lost = true;
             g.hang_timeouts = 4;
@@ -4767,7 +4767,7 @@ bool VulkanRenderer::UpdateTexture(u64 key, const TextureData& data) {
     ++g_upload_stats.immediate;
     const VkResult before = vk.vkQueueWaitIdle(g.queue); // o frame anterior ainda pode estar amostrando a imagem
     if (before != VK_SUCCESS) {
-        std::printf("[GPU TRAVADA] a fila ja voltou %s ANTES do reenvio imediato da textura 0x%llx%s", ResultName(before),
+        std::printf("[GPU HANG] queue already returned %s BEFORE immediate texture reupload 0x%llx%s", ResultName(before),
                     static_cast<unsigned long long>(key), "\n");
     }
     std::memcpy(g.staging.mapped, data.data, data.bytes);
@@ -5118,16 +5118,16 @@ const std::string& VulkanRenderer::LastError() const {
 std::string VulkanRenderer::Describe() const {
     std::lock_guard lock(g.mutex);
     if (!g.active) {
-        return "Vulkan inativo: " + (g.error.empty() ? std::string("nao inicializado") : g.error);
+        return "Vulkan inactive: " + (g.error.empty() ? std::string("not initialized") : g.error);
     }
     static const char* const kTypes[] = {"outro", "integrada", "discreta", "virtual", "CPU"};
     char text[384];
     std::snprintf(text, sizeof(text),
-                  "GPU \"%s\" (%s), Vulkan %u.%u.%u, fila %u; swapchain %ux%u %s, %zu imagens, modo %s; limpeza (%.1f, %.1f, %.1f, %.1f)",
+                  "GPU \"%s\" (%s), Vulkan %u.%u.%u, queue %u; swapchain %ux%u %s, %zu images, mode %s; clear (%.1f, %.1f, %.1f, %.1f)",
                   g.properties.deviceName, g.properties.deviceType <= 4 ? kTypes[g.properties.deviceType] : "?",
                   VK_API_VERSION_MAJOR(g.properties.apiVersion), VK_API_VERSION_MINOR(g.properties.apiVersion),
                   VK_API_VERSION_PATCH(g.properties.apiVersion), g.queue_family, g.extent.width, g.extent.height,
-                  g.format.format == VK_FORMAT_B8G8R8A8_UNORM ? "B8G8R8A8_UNORM" : "outro formato", g.images.size(),
+                  g.format.format == VK_FORMAT_B8G8R8A8_UNORM ? "B8G8R8A8_UNORM" : "other format", g.images.size(),
                   g.present_mode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO (VSync)" : "?", g.clear.float32[0], g.clear.float32[1],
                   g.clear.float32[2], g.clear.float32[3]);
     return text;
@@ -5381,11 +5381,11 @@ void VulkanRenderer::BenchPipelines(const std::string& path) {
             sums[variant] += ms[variant];
         }
         ++n;
-        std::printf("[BENCH] par %016llx: sem otimizacao %.1f ms | estado novo %.1f ms | so blend %.1f | so profundidade/cull %.1f | so formato %.1f | so vertices %.1f\n",
+        std::printf("[BENCH] pair %016llx: unoptimized %.1f ms | new state %.1f ms | blend only %.1f | depth/cull only %.1f | format only %.1f | vertices only %.1f\n",
                     static_cast<unsigned long long>(d.pair), ms[5], ms[0], ms[1], ms[2], ms[3], ms[4]);
     }
     if (n) {
-        std::printf("[BENCH] media de %d: sem otimizacao %.1f ms | estado novo %.1f ms | so blend %.1f | so profundidade/cull %.1f | so formato %.1f | so vertices %.1f\n", n,
+        std::printf("[BENCH] average of %d: unoptimized %.1f ms | new state %.1f ms | blend only %.1f | depth/cull only %.1f | format only %.1f | vertices only %.1f\n", n,
                     sums[5] / n, sums[0] / n, sums[1] / n, sums[2] / n, sums[3] / n, sums[4] / n);
     }
     std::fflush(stdout);

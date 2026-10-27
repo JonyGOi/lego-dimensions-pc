@@ -52,7 +52,7 @@ void Reader(PacketCallback callback) {
             callback(packet, 32);
         }
     }
-    std::printf("[TOYPAD-USB] o portal real parou de responder (desconectado?) depois de %llu leituras\n",
+    std::printf("[TOYPAD-USB] physical portal stopped responding (disconnected?) after %llu reads\n",
                 static_cast<unsigned long long>(g_read.load()));
     g_open = false;
     CloseHandle(overlapped.hEvent);
@@ -65,7 +65,7 @@ bool Open(std::string* description) {
     HidD_GetHidGuid(&hid_guid);
     HDEVINFO devices = SetupDiGetClassDevsW(&hid_guid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (devices == INVALID_HANDLE_VALUE) {
-        *description = "lista de aparelhos HID indisponivel";
+        *description = "HID device list unavailable";
         return false;
     }
     bool found = false;
@@ -94,7 +94,7 @@ bool Open(std::string* description) {
                                     OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         if (device == INVALID_HANDLE_VALUE) {
             char text[160];
-            std::snprintf(text, sizeof(text), "Toy Pad real achado, mas nao abriu (erro %lu: outro programa usando o portal?)", GetLastError());
+            std::snprintf(text, sizeof(text), "Physical Toy Pad found but could not open (error %lu: another program using portal?)", GetLastError());
             *description = text;
             continue;
         }
@@ -111,13 +111,13 @@ bool Open(std::string* description) {
         g_open = true;
         found = true;
         char text[200];
-        std::snprintf(text, sizeof(text), "Toy Pad real aberto (relatorios de %u / %u bytes)", g_input_bytes, g_output_bytes);
+        std::snprintf(text, sizeof(text), "Physical Toy Pad opened (%u / %u byte reports)", g_input_bytes, g_output_bytes);
         *description = text;
     }
     SetupDiDestroyDeviceInfoList(devices);
     if (!found && description->empty()) {
-        *description = "nenhum Toy Pad real ligado (se ele estiver ligado e o driver WinUSB do Zadig estiver instalado, "
-                       "o portal nao aparece como HID: volte o driver para o padrao do Windows)";
+        *description = "no physical Toy Pad connected (if connected with Zadig WinUSB driver installed, "
+                       "the portal does not appear as HID: restore the standard Windows driver)";
     }
     return found;
 }

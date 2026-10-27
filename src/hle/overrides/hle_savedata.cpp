@@ -214,7 +214,7 @@ HLE_IMPL(int, sceSaveDataInitialize, const void* param) {
     g_initialized = true;
     std::error_code ec;
     std::filesystem::create_directories(SavesRoot(), ec);
-    HLE_TRACE("saves em %s", SavesRoot().string().c_str());
+    HLE_TRACE("saves at %s", SavesRoot().string().c_str());
     return err::OK;
 }
 HLE_OVERRIDE(sceSaveDataInitialize);
@@ -252,9 +252,9 @@ HLE_IMPL(int, sceSaveDataDirNameSearch, const SearchCond* cond, SearchResult* re
         }
         ++result->set_num;
     }
-    HLE_TRACE("user=%d capacidade=%u -> %u save(s) encontrado(s)", cond->user_id, result->dir_names_num,
+    HLE_TRACE("user=%d capacity=%u -> %u save(s) found", cond->user_id, result->dir_names_num,
               result->hit_num);
-    log::Tagged("GAME STATE", "busca de saves: %u encontrado(s)", result->hit_num);
+    log::Tagged("GAME STATE", "save search: %u found", result->hit_num);
     return err::OK;
 }
 HLE_OVERRIDE(sceSaveDataDirNameSearch);
@@ -286,9 +286,9 @@ HLE_IMPL(int, sceSaveDataMount, const Mount* mount, MountResult* result) {
                 std::filesystem::rename(dir, backup / name, ec);
                 if (!ec) {
                     exists = false;
-                    log::Tagged("GAME STATE", "Novo Jogo sobre o slot %s: o save antigo foi MOVIDO para %s", name, (backup / name).string().c_str());
+                    log::Tagged("GAME STATE", "New Game in slot %s: previous save MOVED to %s", name, (backup / name).string().c_str());
                 } else {
-                    log::Tagged("GAME STATE", "nao foi possivel mover o save antigo de %s (%s); o slot continua como estava", name,
+                    log::Tagged("GAME STATE", "could not move previous save from %s (%s); slot remains unchanged", name,
                                 ec.message().c_str());
                 }
                 g_overwrite_slot.clear();
@@ -330,15 +330,15 @@ HLE_IMPL(int, sceSaveDataMount, const Mount* mount, MountResult* result) {
             }
         }
     }
-    HLE_TRACE("\"%s\" modo=0x%x blocos=%" PRIu64 " -> 0x%x %s%s", name, mount ? mount->mount_mode : 0,
-              mount ? mount->blocks : 0, error, point.c_str(), created ? " (criado)" : "");
+    HLE_TRACE("\"%s\" mode=0x%x blocks=%" PRIu64 " -> 0x%x %s%s", name, mount ? mount->mount_mode : 0,
+              mount ? mount->blocks : 0, error, point.c_str(), created ? " (created)" : "");
     if (!error) {
-        log::Tagged("GAME STATE", "SAVE %s: \"%s\" montado em %s  [%s]", created ? "CRIADO" : "aberto", name,
+        log::Tagged("GAME STATE", "SAVE %s: \"%s\" mounted at %s  [%s]", created ? "CREATED" : "opened", name,
                     point.c_str(), (SavesRoot() / name).string().c_str());
     } else {
-        log::Tagged("GAME STATE", "sceSaveDataMount(\"%s\", modo 0x%x) falhou: 0x%x%s", name,
+        log::Tagged("GAME STATE", "sceSaveDataMount(\"%s\", mode 0x%x) failed: 0x%x%s", name,
                     mount ? mount->mount_mode : 0, error,
-                    error == kErrorNotFound ? " (save nao existe)" : error == kErrorExists ? " (ja existe)" : "");
+                    error == kErrorNotFound ? " (save does not exist)" : error == kErrorExists ? " (already exists)" : "");
     }
     return error;
 }
@@ -369,7 +369,7 @@ HLE_IMPL(int, sceSaveDataUmount, const MountPoint* point) {
     }
     HLE_TRACE("\"%s\" -> 0x%x", point ? point->data : "", error);
     if (!error) {
-        log::Tagged("GAME STATE", "SAVE desmontado: %s (%" PRIu64 " arquivo(s) na pasta)", point->data, files);
+        log::Tagged("GAME STATE", "SAVE unmounted: %s (%" PRIu64 " file(s) in folder)", point->data, files);
     }
     return error;
 }
@@ -388,7 +388,7 @@ HLE_IMPL(int, sceSaveDataGetMountInfo, const MountPoint* point, MountInfo* info)
     std::memset(info, 0, sizeof(*info));
     info->blocks = kTotalBlocks;
     info->free_blocks = used < kTotalBlocks ? kTotalBlocks - used : 0;
-    HLE_TRACE("\"%s\" -> %" PRIu64 " blocos, %" PRIu64 " livres", point->data, info->blocks, info->free_blocks);
+    HLE_TRACE("\"%s\" -> %" PRIu64 " blocks, %" PRIu64 " free", point->data, info->blocks, info->free_blocks);
     return err::OK;
 }
 HLE_OVERRIDE(sceSaveDataGetMountInfo);
@@ -410,7 +410,7 @@ HLE_IMPL(int, sceSaveDataGetParam, const MountPoint* point, u32 param_type, void
          u64* got_size) {
     std::lock_guard lock(g_mutex);
     const std::filesystem::path dir = MountedDir(point);
-    HLE_TRACE("\"%s\" tipo=%u", point ? point->data : "", param_type);
+    HLE_TRACE("\"%s\" type=%u", point ? point->data : "", param_type);
     if (dir.empty()) {
         return kErrorNotMounted;
     }
@@ -443,7 +443,7 @@ HLE_IMPL(int, sceSaveDataSetParam, const MountPoint* point, u32 param_type, cons
     std::memcpy(field, buffer, buffer_size);
     param.mtime = std::time(nullptr);
     param.title[sizeof(param.title) - 1] = param.sub_title[sizeof(param.sub_title) - 1] = 0;
-    HLE_TRACE("\"%s\" tipo=%u titulo=\"%s\" subtitulo=\"%s\"", point->data, param_type, param.title,
+    HLE_TRACE("\"%s\" type=%u title=\"%s\" subtitle=\"%s\"", point->data, param_type, param.title,
               param.sub_title);
     return StoreParam(dir, param) ? err::OK : kErrorInternal;
 }
@@ -463,7 +463,7 @@ HLE_IMPL(int, sceSaveDataSaveIcon, const MountPoint* point, const Icon* icon) {
     std::filesystem::create_directories(dir / "sce_sys", ec);
     std::ofstream out(dir / "sce_sys" / "icon0.png", std::ios::binary | std::ios::trunc);
     out.write(static_cast<const char*>(icon->buf), static_cast<std::streamsize>(icon->data_size));
-    log::Tagged("GAME STATE", "SAVE icone gravado: %s/sce_sys/icon0.png (%" PRIu64 " bytes)", point->data,
+    log::Tagged("GAME STATE", "SAVE icon written: %s/sce_sys/icon0.png (%" PRIu64 " bytes)", point->data,
                 icon->data_size);
     return out.good() ? err::OK : kErrorInternal;
 }
@@ -553,8 +553,8 @@ HLE_IMPL(int, sceMsgDialogOpen, const MsgDialogParam* param) {
     const char* text = (param->mode == 1 && param->user_msg && ReadableString(param->user_msg->msg))
                            ? param->user_msg->msg
                            : "";
-    HLE_TRACE("modo=%d \"%.300s\" -> fechado automaticamente com OK", param->mode, text);
-    log::Tagged("GAME STATE", "dialogo de mensagem (modo %d): \"%.300s\"", param->mode, text);
+    HLE_TRACE("mode=%d \"%.300s\" -> closed automatically with OK", param->mode, text);
+    log::Tagged("GAME STATE", "message dialog (mode %d): \"%.300s\"", param->mode, text);
     g_msg_status = kStatusFinished;
     return err::OK;
 }
@@ -898,22 +898,22 @@ void SaveDialogThread(DialogUi ui) {
             std::filesystem::create_directories(backup, ec);
             std::filesystem::rename(SavesRoot() / g_dialog_choice, backup / g_dialog_choice, ec);
             if (ec) {
-                log::Tagged("GAME STATE", "Novo Jogo: nao foi possivel mover %s para o backup (%s); nada foi alterado", g_dialog_choice.c_str(),
+                log::Tagged("GAME STATE", "New Game: could not move %s to backup (%s); nothing changed", g_dialog_choice.c_str(),
                             ec.message().c_str());
                 g_dialog_canceled = true;
             } else {
-                log::Tagged("GAME STATE", "Novo Jogo: o save %s foi MOVIDO para %s", g_dialog_choice.c_str(), (backup / g_dialog_choice).string().c_str());
+                log::Tagged("GAME STATE", "New Game: save %s MOVED to %s", g_dialog_choice.c_str(), (backup / g_dialog_choice).string().c_str());
                 if (!has_new && first != g_dialog_choice) {
                     std::filesystem::rename(SavesRoot() / first, SavesRoot() / g_dialog_choice, ec);
-                    log::Tagged("GAME STATE", "Novo Jogo: o save %s passou a se chamar %s (%s); o jogo novo fica em %s", first.c_str(),
+                    log::Tagged("GAME STATE", "New Game: save %s renamed to %s (%s); new game goes in %s", first.c_str(),
                                 g_dialog_choice.c_str(), ec ? ec.message().c_str() : "ok", first.c_str());
                 }
             }
         }
     }
-    log::Tagged("GAME STATE", "lista de saves: %s", g_dialog_canceled ? "cancelada pelo jogador"
-                                                     : g_dialog_choice.empty() ? "escolhido NOVO salvamento"
-                                                                               : ("escolhido " + g_dialog_choice).c_str());
+    log::Tagged("GAME STATE", "save list: %s", g_dialog_canceled ? "cancelled by player"
+                                                     : g_dialog_choice.empty() ? "NEW save selected"
+                                                                               : ("selected " + g_dialog_choice).c_str());
     if (owner) {
         SetForegroundWindow(owner);
     }
@@ -1000,16 +1000,16 @@ HLE_IMPL(int, sceSaveDataDialogOpen, const SaveDataDialogParam* param) {
     }
     DialogUi ui;
     if (param->mode == 1 && g_save_ui_enabled && videoout::WindowHandle() && BuildSaveList(param, &ui)) {
-        HLE_TRACE("modo=1 (lista) tipo=%d: %zu item(ns)%s -> janela de escolha aberta", param->disp_type, ui.entries.size(),
-                  param->items->new_item ? ", com \"novo salvamento\"" : "");
+        HLE_TRACE("mode=1 (list) type=%d: %zu item(s)%s -> selection window opened", param->disp_type, ui.entries.size(),
+                  param->items->new_item ? ", with \"new save\"" : "");
         g_save_dialog_status = kStatusRunning;
         g_dialog_was_list = true;
         std::thread(SaveDialogThread, std::move(ui)).detach();
         return err::OK;
     }
     const u32 system_message = param->mode == 3 && param->sys_msg_param ? *static_cast<const u32*>(param->sys_msg_param) : 0;
-    HLE_TRACE("modo=%d tipo=%d (mensagem do sistema %u) -> fechado automaticamente com OK", param->mode, param->disp_type, system_message);
-    log::Tagged("GAME STATE", "dialogo de save (modo %d, tipo %d) respondido com OK", param->mode, param->disp_type);
+    HLE_TRACE("mode=%d type=%d (system message %u) -> closed automatically with OK", param->mode, param->disp_type, system_message);
+    log::Tagged("GAME STATE", "save dialog (mode %d, type %d) answered with OK", param->mode, param->disp_type);
     g_save_dialog_status = kStatusFinished;
     return err::OK;
 }
@@ -1102,11 +1102,11 @@ int TestSaveUi() {
     param.items = &items;
     DialogUi ui;
     BuildSaveList(&param, &ui);
-    std::printf("lista de saves: %zu item(ns)\n", ui.entries.size());
+    std::printf("save list: %zu item(s)\n", ui.entries.size());
     std::fflush(stdout);
     g_save_dialog_status = kStatusRunning;
     std::thread(SaveDialogThread, std::move(ui)).join();
-    std::printf("resultado: %s\n", g_dialog_canceled ? "cancelado" : g_dialog_choice.empty() ? "novo salvamento" : g_dialog_choice.c_str());
+    std::printf("result: %s\n", g_dialog_canceled ? "cancelled" : g_dialog_choice.empty() ? "new save" : g_dialog_choice.c_str());
     return 0;
 }
 } // namespace hle

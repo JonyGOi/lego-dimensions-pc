@@ -127,7 +127,7 @@ void SetFullscreen(HWND hwnd, bool enabled) {
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     }
     g_fullscreen = enabled;
-    log::Tagged("JANELA", "%s", enabled ? "tela cheia" : "janela");
+    log::Tagged("WINDOW", "%s", enabled ? "fullscreen" : "window");
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -136,7 +136,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         char title[224], warm[64];
         gnm::WarmupStatus(warm, sizeof(warm)); // Fase 36: "Compilando shaders: X / Y" enquanto aquece
         std::snprintf(title, sizeof(title),
-                      lang::Pt() ? "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT abertos: %" PRIu64 " | Threads: %d%s"
+                      lang::Pt() ? "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT open: %" PRIu64 " | Threads: %d%s"
                                  : "[LEGO Dimensions PC] Frames (Flips): %" PRIu64 " | .DAT open: %" PRIu64 " | Threads: %d%s",
                       g_flip_count.load(), fs::DatFilesOpened(), runtime::AliveGuestThreads(), warm);
         SetWindowTextA(hwnd, title);
@@ -157,8 +157,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         FillRect(dc, &rc, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         char text[160];
         std::snprintf(text, sizeof(text),
-                      "Nada e desenhado ainda.  Enter=OPTIONS  Espaco=X  Esc=O  X=quadrado  Y=triangulo  "
-                      "setas=D-pad  WASD=analogico   Flips: %" PRIu64, g_flip_count.load());
+                      "Nothing rendered yet.  Enter=OPTIONS  Space=X  Esc=O  X=square  Y=triangle  "
+                      "arrows=D-pad  WASD=stick   Flips: %" PRIu64, g_flip_count.load());
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(200, 200, 200));
         DrawTextA(dc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -182,7 +182,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         return DefWindowProcA(hwnd, msg, wparam, lparam);
     case WM_CLOSE:
-        std::printf("\nJanela fechada pelo usuario.\n");
+        std::printf("\nWindow closed by user.\n");
         log::Shutdown(0);
     default:
         return DefWindowProcA(hwnd, msg, wparam, lparam);
@@ -215,7 +215,7 @@ void WindowThread() {
                               CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
                               nullptr, wc.hInstance, nullptr);
     if (!hwnd) {
-        std::printf("AVISO: nao foi possivel criar a janela (erro %lu)\n", GetLastError());
+        std::printf("WARNING: could not create window (error %lu)\n", GetLastError());
         return;
     }
     g_hwnd.store(hwnd);
@@ -226,22 +226,22 @@ void WindowThread() {
     // como antes (preta, com o texto por GDI).
     auto& renderer = render::VulkanRenderer::Instance();
     if (renderer.Initialize(hwnd)) {
-        log::Tagged("VULKAN", "inicializado: %s", renderer.Describe().c_str());
-        log::Tagged("VULKAN", "shaders do jogo: %s; validacao: %s",
-                    renderer.GameShadersSupported() ? "dispositivo com os recursos que os modulos pedem (pares em shaders_spv/pairs)"
-                                                    : "dispositivo SEM os recursos necessarios - so os shaders base",
-                    renderer.ValidationActive() ? "VK_LAYER_KHRONOS_validation ligada" : "desligada");
+        log::Tagged("VULKAN", "initialized: %s", renderer.Describe().c_str());
+        log::Tagged("VULKAN", "game shaders: %s; validation: %s",
+                    renderer.GameShadersSupported() ? "device supports features required by modules (pairs in shaders_spv/pairs)"
+                                                    : "device MISSING required features - base shaders only",
+                    renderer.ValidationActive() ? "VK_LAYER_KHRONOS_validation enabled" : "desligada");
         // Fase 38: so com --check-modules. A conferencia segura o lock do backend enquanto le do disco
         // e cria um modulo para cada .spv solto (5 a 15 s): a thread de render e as cargas de par
         // ficavam paradas esse tempo todo na abertura.
         if (g_check_modules && !render::GameSpirvDirectory().empty() && !renderer.ValidationActive()) {
             u32 total = 0;
             const u32 accepted = renderer.CheckGameShaderModules(render::GameSpirvDirectory(), &total);
-            log::Tagged("VULKAN", "modulos SPIR-V do jogo em %s: %u de %u aceitos por vkCreateShaderModule",
+            log::Tagged("VULKAN", "game SPIR-V modules in %s: %u of %u accepted by vkCreateShaderModule",
                         render::GameSpirvDirectory().c_str(), accepted, total);
         }
     } else {
-        log::Tagged("VULKAN", "NAO inicializado: %s", renderer.LastError().c_str());
+        log::Tagged("VULKAN", "NOT initialized: %s", renderer.LastError().c_str());
     }
     SetTimer(hwnd, kTitleTimer, 1000, nullptr);
     MSG msg;
@@ -307,8 +307,8 @@ HLE_IMPL(int, sceVideoOutOpen, int user_id, int bus_type, int index, const void*
     if (start_window) {
         std::thread(WindowThread).detach();
     }
-    HLE_TRACE("user=%d bus=%d indice=%d -> handle %d%s", user_id, bus_type, index, kHandle,
-              start_window ? " (janela criada)" : "");
+    HLE_TRACE("user=%d bus=%d index=%d -> handle %d%s", user_id, bus_type, index, kHandle,
+              start_window ? " (window created)" : "");
     return kHandle;
 }
 HLE_OVERRIDE(sceVideoOutOpen);
@@ -330,7 +330,7 @@ HLE_OVERRIDE(sceVideoOutAddFlipEvent);
 // O setimo argumento (pitch) chega pela pilha.
 HLE_IMPL(void, sceVideoOutSetBufferAttribute, BufferAttribute* attribute, u32 pixel_format, u32 tiling_mode,
          u32 aspect_ratio, u32 width, u32 height, u32 pitch_in_pixel) {
-    HLE_TRACE("formato=0x%x tiling=%u %ux%u pitch=%u", pixel_format, tiling_mode, width, height, pitch_in_pixel);
+    HLE_TRACE("format=0x%x tiling=%u %ux%u pitch=%u", pixel_format, tiling_mode, width, height, pitch_in_pixel);
     if (!attribute) {
         return;
     }
@@ -361,7 +361,7 @@ HLE_IMPL(int, sceVideoOutRegisterBuffers, int handle, int start_index, void* con
             g_buffers[start_index + i] = addresses[i];
         }
     }
-    HLE_TRACE("handle=%d inicio=%d buffers=%d %ux%u primeiro=%p -> %d", handle, start_index, buffer_count,
+    HLE_TRACE("handle=%d start=%d buffers=%d %ux%u first=%p -> %d", handle, start_index, buffer_count,
               attribute ? attribute->width : 0, attribute ? attribute->height : 0,
               (addresses && buffer_count > 0) ? addresses[0] : nullptr, result);
     return result;
@@ -744,9 +744,9 @@ void RunLoadingScreen(u32 max_seconds) {
         Text(vertices, hint, 640.0f - TextWidth(hint, 2.0f) / 2, 600.0f, 2.0f, kGray);
         DrawLoading(vertices);
         if (done || seconds > max_seconds) {
-            std::printf("[CARREGAMENTO] tela de carregamento: %.1f s (pacote %s, %u pares, %u de %u pipelines, %u de %u shaders do pacote)%s\n", seconds,
-                        st.pack_finished ? "lido" : "INCOMPLETO", st.pairs_done, st.pipelines_done, st.pipelines_total, st.aot_done, st.aot_total,
-                        done ? "" : " - tempo maximo atingido, o jogo comeca assim mesmo");
+            std::printf("[LOADING] loading screen: %.1f s (pack %s, %u pairs, %u of %u pipelines, %u of %u pack shaders)%s\n", seconds,
+                        st.pack_finished ? "read" : "INCOMPLETO", st.pairs_done, st.pipelines_done, st.pipelines_total, st.aot_done, st.aot_total,
+                        done ? "" : " - time limit reached, starting game anyway");
             return;
         }
         Sleep(33);

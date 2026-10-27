@@ -34,16 +34,24 @@ using ui::S;
 
 namespace {
 
-constexpr int kW = 980, kH = 890, kHero = 330; // Fase 61: arte 50 mais baixa para a linha de resolucao / idioma; Fase 65: +50 para a linha do contador / apelidos
+constexpr int kW = 760, kH = 730, kHero = 140;
 constexpr UINT WM_APP_LINE = WM_APP + 1, WM_APP_DONE = WM_APP + 2;
 enum Id { kGameEdit = 100, kGameBrowse, kDlcEdit, kDlcBrowse, kPrepare, kPlay, kFps, kConsole, kLog, kPatchEdit, kPatchBrowse, kFullscreen,
-          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames, kPkg };
+          kResolution, kLanguage, kSkipCutscenes, kUpdate, kIcons, kTransfer, kMods, kOverlay, kNames, kPkg, kSettings, kTools, kDetails };
 
 HWND g_main, g_game, g_patch, g_dlc, g_log, g_prepare, g_play, g_fps, g_console, g_fullscreen, g_focus;
 HWND g_resolution, g_language, g_skip, g_update; // Fase 61
 HWND g_icons; // Fase 62
 HWND g_mods;  // Fase 64
 HWND g_overlay, g_names_button; // Fase 65: contador de FPS / info, apelidos dos jogadores
+HWND g_settings, g_tools, g_details;
+bool g_settings_page=false, g_show_details=false;
+bool g_self_test=false;
+void LayoutPage(bool resize=true);
+bool Prepared();
+bool AotReady();
+std::wstring Utf8ToWide(const std::string& text);
+
 HWND g_pkg; // Fase 68: extrair PKGs
 
 // Fase 61: o que o processo em segundo plano esta fazendo (preparar, procurar atualizacao, atualizar; Fase 68: extrair PKGs)
@@ -67,7 +75,7 @@ const Language kLanguages[] = {
     {L"nl", L"Nederlands", L"Nederlands"},
     {L"da", L"Dansk", L"Dansk"},
 };
-std::wstring g_res_value = L"1280x720", g_lang_value = L"auto";
+std::wstring g_res_value = L"1280x720", g_lang_value = L"en";
 // Fase 62: icones dos botoes (--button-icons): pelo controle ligado ou fixos numa plataforma
 struct IconChoice {
     const wchar_t *code, *pt, *en;
@@ -130,7 +138,7 @@ void AppendLog(const std::wstring& text) {
     }
     const int end = GetWindowTextLengthW(g_log);
     SendMessageW(g_log, EM_SETSEL, end, end);
-    SendMessageW(g_log, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>((text + L"\r\n").c_str()));
+    SendMessageW(g_log, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>((ui::LogText(text) + L"\r\n").c_str()));
 }
 
 void InvalidateCard() {
@@ -141,6 +149,17 @@ void InvalidateCard() {
 // ---- arte do jogo: PNG do proprio dump ----
 void LoadArt(const fs::path& game) {
     g_art.reset();
+    const fs::path icon_file=game/L"sce_sys"/L"icon0.png";
+    std::error_code icon_error;
+    if(!game.empty() && fs::is_regular_file(icon_file,icon_error)) {
+        Gdiplus::Bitmap bitmap(icon_file.c_str()); HICON icon=nullptr;
+        if(bitmap.GetLastStatus()==Gdiplus::Ok && bitmap.GetHICON(&icon)==Gdiplus::Ok) {
+            HICON previous=g_icon;g_icon=icon;
+            SendMessageW(g_main,WM_SETICON,ICON_BIG,reinterpret_cast<LPARAM>(icon));
+            SendMessageW(g_main,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(icon));
+            if(previous)DestroyIcon(previous);
+        }
+    }
     for (const wchar_t* name : {L"pic1.png", L"pic0.png", L"icon0.png"}) {
         std::error_code ec;
         const fs::path file = game / L"sce_sys" / name;
@@ -156,81 +175,66 @@ void LoadArt(const fs::path& game) {
     InvalidateRect(g_main, &r, FALSE);
 }
 
-void PaintHero(HDC dc, Gdiplus::Graphics& g) {
-    const int w = S(kW), h = S(kHero);
-    if (g_art) {
-        // "cobrir": escala para preencher e corta o excesso no meio
-        const float scale = std::max(static_cast<float>(w) / g_art->GetWidth(), static_cast<float>(h) / g_art->GetHeight());
-        const float sw = w / scale, sh = h / scale;
+int PageHeight() { return g_settings_page?kH:(g_show_details?700:490); }
+
+void PaintHero(HDC dc,Gdiplus::Graphics& g) {
+    const int width=S(kW),height=S(kHero);
+    if(g_art) {
+        const float scale=std::max(float(width)/g_art->GetWidth(),float(height)/g_art->GetHeight());
+        const float sw=width/scale,sh=height/scale;
         g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-        g.DrawImage(g_art.get(), Gdiplus::RectF(0, 0, static_cast<float>(w), static_cast<float>(h)), (g_art->GetWidth() - sw) / 2,
-                    (g_art->GetHeight() - sh) / 2, sw, sh, Gdiplus::UnitPixel);
-    } else {
-        Gdiplus::LinearGradientBrush bg(Gdiplus::Point(0, 0), Gdiplus::Point(w, h), ui::C(RGB(14, 24, 64)), ui::C(RGB(70, 22, 110)));
-        g.FillRectangle(&bg, 0, 0, w, h);
-        for (int k = 0; k < 6; ++k) { // aneis do portal, de enfeite
-            Gdiplus::Pen pen(ui::C(k % 2 ? ui::kBlue : RGB(120, 220, 255), static_cast<BYTE>(70 - k * 9)), static_cast<float>(S(10 - k)));
-            const int r = S(110.0f + k * 38);
-            g.DrawEllipse(&pen, w - S(260) - r, S(170) - r, 2 * r, 2 * r);
-        }
+        g.DrawImage(g_art.get(),Gdiplus::Rect(0,0,width,height),(g_art->GetWidth()-sw)/2,(g_art->GetHeight()-sh)/2,sw,sh,Gdiplus::UnitPixel);
     }
-    // degrade: escurece embaixo (funde com o cartao) e na esquerda (titulo legivel)
-    Gdiplus::LinearGradientBrush down(Gdiplus::Point(0, h / 3), Gdiplus::Point(0, h + 1), ui::C(ui::kBg, 0), ui::C(ui::kBg, 255));
-    g.FillRectangle(&down, 0, h / 3, w, h - h / 3 + 1);
-    Gdiplus::LinearGradientBrush left(Gdiplus::Point(0, 0), Gdiplus::Point(w * 2 / 3, 0), ui::C(ui::kBg, 200), ui::C(ui::kBg, 0));
-    g.FillRectangle(&left, 0, 0, w * 2 / 3, h);
+    Gdiplus::SolidBrush shade(ui::C(ui::kBg,225));g.FillRectangle(&shade,0,0,width,height);
     g.Flush();
-    DrawIconEx(dc, S(40), S(34), g_icon, S(56), S(56), 0, nullptr, DI_NORMAL);
-    RECT title{S(40), S(118), w, S(186)}, sub{S(42), S(184), w, S(214)};
-    ui::Text(dc, L"LEGO® DIMENSIONS", title, g_title, RGB(255, 255, 255));
-    ui::Text(dc, ui::T(L"Port para PC   •   60 FPS   •   DLCs   •   shaders prontos antes de jogar", L"PC port   •   60 FPS   •   DLCs   •   shaders ready before you play"), sub, g_subtitle, ui::kMuted);
-    if (!g_art) {
-        RECT hint{S(42), S(222), S(620), S(262)};
-        ui::Text(dc, ui::T(L"Escolha a pasta do jogo abaixo para ver a arte do LEGO Dimensions aqui.", L"Choose the game folder below to see the LEGO Dimensions art here."), hint, g_small, ui::kMuted);
-    }
+    if(g_icon)DrawIconEx(dc,S(26),S(34),g_icon,S(56),S(56),0,nullptr,DI_NORMAL);
+    ui::Text(dc,L"LEGO Dimensions",RECT{S(104),S(32),S(kW-24),S(74)},g_title,ui::kText);
+    ui::Text(dc,g_settings_page?L"Settings":L"PC port  \u00b7  "+g_version+L" beta",RECT{S(106),S(79),S(kW-24),S(106)},g_small,ui::kMuted);
 }
 
-void PaintCard(HDC dc, Gdiplus::Graphics& g) {
-    RECT card{S(24), S(kHero - 64), S(kW - 24), S(kH - 104)};
-    Gdiplus::SolidBrush panel(ui::C(ui::kPanel, 245));
-    ui::FillRound(g, card, static_cast<float>(S(16)), panel);
-    ui::StrokeRound(g, card, static_cast<float>(S(16)), ui::kBorder, 1.0f, 160);
-    ui::FieldBox(g, g_main, g_game, g_focus == g_game);
-    ui::FieldBox(g, g_main, g_patch, g_focus == g_patch);
-    ui::FieldBox(g, g_main, g_dlc, g_focus == g_dlc);
-    ui::FieldBox(g, g_main, g_log, false);
-    RECT bar{S(48), S(kH - 196), S(kW - 120), S(kH - 188)};
-    ui::Progress(g, bar, g_pct);
-    g.Flush();
-    RECT l1{S(48), S(kHero - 46), S(900), S(kHero - 24)}, lp{S(48), S(kHero + 34), S(900), S(kHero + 56)},
-        l2{S(48), S(kHero + 114), S(900), S(kHero + 136)};
-    ui::Text(dc, ui::T(L"PASTA DO JOGO  —  dump do PS4 (CUSA01176), a pasta com eboot.bin", L"GAME FOLDER  —  PS4 dump (CUSA01176), the folder with eboot.bin"), l1, g_label, ui::kMuted);
-    ui::Text(dc, ui::T(L"ATUALIZA\u00c7\u00c3O  —  s\u00f3 se ela estiver numa pasta separada (CUSA01176-patch); achada sozinha", L"UPDATE  —  only if it is in a separate folder (CUSA01176-patch); found automatically"), lp, g_label,
-             ui::kMuted);
-    ui::Text(dc, ui::T(L"PASTA DAS DLCs  —  opcional, uma subpasta por DLC (como a addcont do shadPS4)", L"DLC FOLDER  —  optional, one subfolder per DLC (like the shadPS4 addcont)"), l2, g_label, ui::kMuted);
-    int x = S(48);
-    const int y = S(kHero + 198);
-    x += ui::Pill(dc, g, x, y, g_status.game, g_status.game_c, g_small) + S(10);
-    x += ui::Pill(dc, g, x, y, g_status.patch, g_status.patch_c, g_small) + S(10);
-    x += ui::Pill(dc, g, x, y, g_status.dlcs, g_status.dlcs_c, g_small) + S(10);
-    ui::Pill(dc, g, x, y, g_status.shaders, g_status.shaders_c, g_small);
-    RECT pct{S(kW - 110), S(kH - 204), S(kW - 48), S(kH - 180)};
-    ui::Text(dc, g_pct ? std::to_wstring(g_pct) + L"%" : L"", pct, g_small, ui::kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    RECT step{S(48), S(kH - 226), S(kW - 120), S(kH - 202)};
-    ui::Text(dc, g_step, step, g_small, ui::kText);
+void PaintCard(HDC dc,Gdiplus::Graphics& g) {
+    if(g_settings_page) {
+        for(auto field:{g_game,g_patch,g_dlc})ui::FieldBox(g,g_main,field,g_focus==field);
+        g.Flush();
+        for(const auto& row:std::vector<std::pair<int,const wchar_t*>>{{170,L"Game files"},{245,L"Update folder"},{320,L"DLC folder"},{405,L"Display and controls"}})
+            ui::Text(dc,row.second,RECT{S(24),S(row.first),S(kW-24),S(row.first+22)},g_label,ui::kMuted);
+        ui::Text(dc,L"Options are saved automatically.",RECT{S(24),S(614),S(kW-24),S(640)},g_small,ui::kMuted);
+        return;
+    }
+    int x=S(24);const int y=S(162);
+    for(const auto& state:std::vector<std::pair<std::wstring,COLORREF>>{{g_status.game,g_status.game_c},{g_status.patch,g_status.patch_c},{g_status.dlcs,g_status.dlcs_c},{g_status.shaders,g_status.shaders_c}})
+        x+=ui::Pill(dc,g,x,y,state.first,state.second,g_small)+S(8);
+    ui::Text(dc,g_step,RECT{S(24),S(200),S(kW-24),S(233)},g_small,ui::kMuted,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
+    if(g_busy) {
+        ui::Progress(g,RECT{S(24),S(438),S(kW-72),S(445)},g_pct);
+        ui::Text(dc,std::to_wstring(g_pct)+L"%",RECT{S(kW-66),S(423),S(kW-24),S(455)},g_small,ui::kMuted,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);
+    }
+    if(g_show_details)ui::FieldBox(g,g_main,g_log,false);
 }
 
 void Paint(HDC target) {
-    RECT client;
-    GetClientRect(g_main, &client);
-    ui::Buffered buffer(target, client);
-    HBRUSH bg = CreateSolidBrush(ui::kBg);
-    FillRect(buffer.dc, &client, bg);
-    DeleteObject(bg);
-    Gdiplus::Graphics g(buffer.dc);
-    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    PaintHero(buffer.dc, g);
-    PaintCard(buffer.dc, g);
+    RECT client;GetClientRect(g_main,&client);ui::Buffered buffer(target,client);
+    HBRUSH background=CreateSolidBrush(ui::kBg);FillRect(buffer.dc,&client,background);DeleteObject(background);
+    Gdiplus::Graphics graphics(buffer.dc);graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    PaintHero(buffer.dc,graphics);PaintCard(buffer.dc,graphics);
+}
+
+void LayoutPage(bool resize) {
+    const int settings_ids[]={kGameEdit,kGameBrowse,kPatchEdit,kPatchBrowse,kDlcEdit,kDlcBrowse,kResolution,kLanguage,kIcons,kFps,kConsole,kFullscreen,kSkipCutscenes,kOverlay,kNames};
+    for(int id:settings_ids)ShowWindow(GetDlgItem(g_main,id),g_settings_page?SW_SHOW:SW_HIDE);
+    for(int id:{kPlay,kMods,kTools,kDetails})ShowWindow(GetDlgItem(g_main,id),g_settings_page?SW_HIDE:SW_SHOW);
+    ShowWindow(g_log,!g_settings_page&&g_show_details?SW_SHOW:SW_HIDE);
+    ShowWindow(g_prepare,!g_settings_page&&(!Prepared()||!AotReady())?SW_SHOW:SW_HIDE);
+    for(int id:{kUpdate,kPkg,kTransfer})ShowWindow(GetDlgItem(g_main,id),SW_HIDE);
+    SetWindowTextW(g_settings,g_settings_page?L"Back":L"Settings");
+    MoveWindow(g_settings,S(g_settings_page?24:266),S(g_settings_page?666:326),S(g_settings_page?168:228),S(44),TRUE);
+    SetWindowTextW(g_details,g_show_details?L"Hide details":L"Show details");
+    EnableWindow(g_settings,!g_busy);EnableWindow(g_tools,!g_busy);EnableWindow(g_mods,!g_busy);
+    if(resize) {
+        RECT size{0,0,S(kW),S(PageHeight())};AdjustWindowRect(&size,GetWindowLongW(g_main,GWL_STYLE),FALSE);
+        SetWindowPos(g_main,nullptr,0,0,size.right-size.left,size.bottom-size.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+    }
+    InvalidateRect(g_main,nullptr,FALSE);
 }
 
 // ---- estado ----
@@ -304,7 +308,7 @@ void UpdateStatus() {
     const int dlcs = CountDlcs(dlc);
     g_status.dlcs = dlcs ? std::to_wstring(dlcs) + (dlcs == 1 ? L" DLC" : L" DLCs") : ui::T(L"Sem DLCs", L"No DLCs");
     g_status.dlcs_c = dlcs ? ui::kBlue : ui::kMuted;
-    g_status.shaders = !Prepared() ? ui::T(L"Preparar pendente", L"Prepare pending") : AotReady() ? ui::T(L"Shaders AOT prontos", L"AOT shaders ready") : ui::T(L"Sem shaders AOT", L"No AOT shaders");
+    g_status.shaders = !Prepared() ? ui::T(L"Preparar pendente", L"Prepare pending") : AotReady() ? ui::T(L"Shaders AOT prontos", L"Prepared") : ui::T(L"Sem shaders AOT", L"Preparation needed");
     g_status.shaders_c = !Prepared() ? ui::kAmber : AotReady() ? ui::kGreen : ui::kAmber;
     if (!g_busy && (g_step.empty() || g_step.rfind(L"Clique", 0) == 0 || g_step.rfind(L"Tudo", 0) == 0 || g_step.rfind(L"Click", 0) == 0 || g_step.rfind(L"All set", 0) == 0)) { // dica do proximo passo
         g_step = !game_ok ? ui::T(L"Clique em Procurar e escolha a pasta do jogo.", L"Click Browse and choose the game folder.") : !Prepared() || !AotReady()
@@ -315,6 +319,7 @@ void UpdateStatus() {
     EnableWindow(g_prepare, !g_busy && game_ok);
     EnableWindow(g_update, !g_busy);
     EnableWindow(g_pkg, !g_busy); // Fase 68
+    LayoutPage(false);
     InvalidateCard();
 }
 
@@ -348,6 +353,7 @@ std::wstring BrowseFolder(const wchar_t* title, const std::wstring& start) {
 }
 
 void SaveSettings() {
+    if (g_self_test) return;
     WriteIni(L"jogo", GetText(g_game));
     WriteIni(L"atualizacao", GetText(g_patch));
     WriteIni(L"dlcs", GetText(g_dlc));
@@ -523,7 +529,7 @@ bool RunPython(const wchar_t* script, const std::wstring& args, Task task) {
     std::error_code ec;
     std::wstring command = fs::is_regular_file(python, ec) ? Quote(python.wstring()) : L"python";
     command += L" -u " + Quote((g_root / L"tools" / L"setup" / script).wstring()) + args;
-    return RunCommand(command, task, L"ERRO: nao consegui abrir o Python.", L"ERROR: could not start Python.");
+    return RunCommand(command, task, L"ERROR: could not start Python.", L"ERROR: could not start Python.");
 }
 
 void RunPrepare() {
@@ -600,23 +606,8 @@ void RestartLauncher() {
     }
 }
 
-// Sobras de uma atualizacao: arquivos que estavam em uso foram renomeados para *.antigo
-void CleanOldFiles() {
-    if (g_dev_tree) {
-        return; // Fase 66: na pasta de desenvolvimento nao varre nada (e grande, e os .antigo de la sao backups)
-    }
-    std::error_code ec;
-    for (auto it = fs::recursive_directory_iterator(g_root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        if (it->path().filename() == L"assets" && it.depth() == 0) {
-            it.disable_recursion_pending();
-            continue;
-        }
-        const std::wstring ext = it->path().extension().wstring();
-        if (ext.rfind(L".antigo", 0) == 0 || ext == L".novo") {
-            fs::remove(it->path(), ec);
-        }
-    }
-}
+// Updater backups are preserved. A suffix alone does not identify an updater-owned
+// file: a recursive .novo/.antigo cleanup can otherwise remove modder backups.
 
 std::wstring ReadVersion() {
     // Fase 66: na pasta de desenvolvimento a versao vem do tools\dist\VERSION
@@ -667,7 +658,7 @@ void OnLine(const std::wstring& line) {
         g_pct = std::max(1, _wtoi(line.c_str() + 10));
         const size_t space = line.find(L' ', 10);
         g_step = space == std::wstring::npos ? L"" : line.substr(space + 1);
-        g_step[0] = towupper(g_step.empty() ? L' ' : g_step[0]);
+        if (!g_step.empty()) g_step[0] = towupper(g_step[0]);
         InvalidateCard();
         return;
     }
@@ -765,9 +756,11 @@ std::vector<std::wstring> ListMods() {
 // mods\desligados.txt: um nome de pasta por linha (o mods.py deixa essas de fora)
 std::vector<std::wstring> ReadDisabledMods() {
     std::vector<std::wstring> off;
-    std::wifstream in(ModsDir() / L"desligados.txt");
-    std::wstring line;
-    while (std::getline(in, line)) {
+    std::ifstream in(ModsDir() / L"desligados.txt",std::ios::binary);
+    std::string raw;
+    while (std::getline(in, raw)) {
+        if(raw.rfind("\xEF\xBB\xBF",0)==0)raw.erase(0,3);
+        std::wstring line=Utf8ToWide(raw);
         while (!line.empty() && (line.back() == L'\r' || line.back() == L' ')) {
             line.pop_back();
         }
@@ -893,14 +886,45 @@ void ExtractPkgs() {
         args += L" " + Quote(pkg);
     }
     args += ui::Pt() ? L" --lingua pt" : L" --lingua en";
-    if (RunCommand(Quote(exe.wstring()) + args, Task::kPkg, L"ERRO: nao consegui abrir o build\\pkg_extractor.exe.",
+    if (RunCommand(Quote(exe.wstring()) + args, Task::kPkg, L"ERROR: could not start build\\pkg_extractor.exe.",
                    L"ERROR: could not start build\\pkg_extractor.exe.")) {
         g_step = ui::T(L"Extraindo os PKGs...", L"Extracting the PKGs...");
         UpdateStatus();
     }
 }
 
-// Menu do botao Mods: cada pasta de mods\ com marca (clicar liga / desliga), abrir a pasta, instalar um .zip / .rar / .7z.
+std::wstring ModField(const fs::path& folder,const wchar_t* key,const std::wstring& fallback=L"") {
+    wchar_t value[2048]{};
+    GetPrivateProfileStringW(L"mod",key,fallback.c_str(),value,2048,(folder/L"mod.ini").c_str());
+    return value;
+}
+
+void ModDetails(const fs::path& folder,bool enabled,bool external=false) {
+    uint64_t bytes=0;size_t count=0,archives=0,definitions=0,animations=0,textures=0;bool incomplete=false;
+    std::error_code ec;
+    for(fs::recursive_directory_iterator it(folder,fs::directory_options::skip_permission_denied,ec),end;!ec&&it!=end;it.increment(ec)) {
+        const DWORD attributes=GetFileAttributesW(it->path().c_str());
+        if(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_REPARSE_POINT)) {it.disable_recursion_pending();incomplete=true;continue;}
+        if(!it->is_regular_file(ec))continue;
+        if(++count>50000){incomplete=true;break;}
+        bytes+=it->file_size(ec);
+        auto ext=it->path().extension().wstring();std::transform(ext.begin(),ext.end(),ext.begin(),towlower);
+        archives+=ext==L".dat";definitions+=ext==L".cd";animations+=ext==L".an4";textures+=ext==L".tex"||ext==L".dds";
+    }
+    wchar_t size[64]{};swprintf_s(size,L"%.1f MiB",double(bytes)/(1024*1024));
+    std::wstring text=ModField(folder,L"name",folder.filename().wstring());
+    if(auto version=ModField(folder,L"version");!version.empty())text+=L"  v"+version;
+    text+=L"\n\nStatus: "+std::wstring(enabled?L"Enabled for the next launch":L"Disabled");
+    if(auto description=ModField(folder,L"description");!description.empty())text+=L"\n\n"+description;
+    if(auto character=ModField(folder,L"character_id");!character.empty())text+=L"\nToypad character ID: "+character;
+    text+=L"\n\nFiles: "+std::to_wstring(count)+L"  |  Size: "+size+L"\nDAT packs: "+std::to_wstring(archives)+L"  |  Definitions: "+std::to_wstring(definitions)+L"\nAnimations: "+std::to_wstring(animations)+L"  |  Textures: "+std::to_wstring(textures);
+    text+=L"\n\nFolder:\n"+folder.wstring();
+    if(external)text+=L"\n\nExternal game-folder mods are managed from their own folder.";
+    if(ec||incomplete)text+=L"\n\nFile scan incomplete; linked files were not followed.";
+    MessageBoxW(g_main,text.c_str(),L"Installed mod details",MB_OK|MB_ICONINFORMATION);
+}
+
+// Each installed mod exposes its state, metadata, files and actual source folder.
 void ModsMenu(HWND button) {
     const std::vector<std::wstring> mods = ListMods();
     std::vector<std::wstring> off = ReadDisabledMods();
@@ -908,11 +932,23 @@ void ModsMenu(HWND button) {
         return std::any_of(off.begin(), off.end(), [&](const std::wstring& o) { return _wcsicmp(o.c_str(), name.c_str()) == 0; });
     };
     HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu,MF_STRING|MF_GRAYED,0,(L"Installed mods: "+std::to_wstring(mods.size())).c_str());
     if (mods.empty()) {
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, ui::T(L"Nenhum mod instalado", L"No mods installed"));
     }
     for (size_t i = 0; i < mods.size(); ++i) {
-        AppendMenuW(menu, MF_STRING | (is_off(mods[i]) ? 0 : MF_CHECKED), 100 + i, mods[i].c_str());
+        if(i>=512)break;
+        HMENU sub=CreatePopupMenu();
+        AppendMenuW(sub,MF_STRING,100+i,is_off(mods[i])?L"Enable for next launch":L"Disable for next launch");
+        AppendMenuW(sub,MF_STRING,10000+i,L"Details and file counts...");
+        AppendMenuW(sub,MF_STRING,20000+i,L"Open this mod folder");
+        const fs::path folder=ModsDir()/mods[i];
+        std::wstring label=ModField(folder,L"name",mods[i]);
+        if(auto version=ModField(folder,L"version");!version.empty())label+=L"  v"+version;
+        label+=is_off(mods[i])?L"  [Disabled]":L"  [Enabled]";
+        // Ampersands in names must stay literal in a Windows menu.
+        for(size_t p=0;(p=label.find(L'&',p))!=std::wstring::npos;p+=2)label.insert(p,1,L'&');
+        AppendMenuW(menu,MF_POPUP|(is_off(mods[i])?0:MF_CHECKED),reinterpret_cast<UINT_PTR>(sub),label.c_str());
     }
     std::error_code ec;
     const fs::path game = GetText(g_game);
@@ -927,13 +963,18 @@ void ModsMenu(HWND button) {
     AppendMenuW(menu, MF_STRING | (anomaly ? MF_CHECKED : 0), 3,
                 ui::T(L"Anomaly mod loader (por connorh315)", L"Anomaly mod loader (by connorh315)"));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod (.zip, .rar, .7z)...", L"Install a mod (.zip, .rar, .7z)..."));
+    AppendMenuW(menu, MF_STRING, 1, ui::T(L"Instalar mod (.zip, .rar, .7z)...", L"Install a character or mod..."));
     AppendMenuW(menu, MF_STRING, 2, ui::T(L"Abrir a pasta de mods", L"Open the mods folder"));
+    AppendMenuW(menu,MF_STRING,4,L"View mod loading log");
     RECT r;
     GetWindowRect(button, &r);
     const int picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY, r.left, r.bottom + S(2), 0, g_main, nullptr);
     DestroyMenu(menu);
-    if (picked >= 100 && picked < 100 + static_cast<int>(mods.size())) {
+    if(picked>=10000&&picked<10000+static_cast<int>(std::min<size_t>(mods.size(),512))) {
+        const auto& name=mods[picked-10000];ModDetails(ModsDir()/name,!is_off(name));
+    }else if(picked>=20000&&picked<20000+static_cast<int>(std::min<size_t>(mods.size(),512))) {
+        ShellExecuteW(g_main,L"open",(ModsDir()/mods[picked-20000]).c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+    }else if (picked >= 100 && picked < 100 + static_cast<int>(mods.size())) {
         const std::wstring& name = mods[picked - 100];
         if (is_off(name)) {
             std::erase_if(off, [&](const std::wstring& o) { return _wcsicmp(o.c_str(), name.c_str()) == 0; });
@@ -956,6 +997,10 @@ void ModsMenu(HWND button) {
                                   L"Anomaly off: mod packs use the port's own loader")
                           : ui::T(L"Anomaly ligado (connorh315): os pacotes de mod entram na frente dos do jogo",
                                   L"Anomaly on (connorh315): mod packs load ahead of the game's"));
+    }else if(picked==4){
+        const fs::path log=g_root/L"build"/L"logs"/L"mods.log";
+        if(fs::is_regular_file(log,ec))ShellExecuteW(g_main,L"open",log.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        else MessageBoxW(g_main,L"No mod loading log yet. The launcher creates it when preparing mods for a game launch.",L"Mods",MB_OK|MB_ICONINFORMATION);
     }
 }
 
@@ -1233,47 +1278,44 @@ void RunGame() {
     }
 }
 
-void CreateControls() {
-    const int field_h = S(24);
-    g_game = ui::Edit(g_main, S(58), S(kHero - 12), S(kW - 300), field_h, kGameEdit, g_font);
-    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero - 22), S(168), S(44), kGameBrowse, g_button, ui::kPanel);
-    g_patch = ui::Edit(g_main, S(58), S(kHero + 68), S(kW - 300), field_h, kPatchEdit, g_font);
-    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero + 58), S(168), S(44), kPatchBrowse, g_button, ui::kPanel);
-    g_dlc = ui::Edit(g_main, S(58), S(kHero + 148), S(kW - 300), field_h, kDlcEdit, g_font);
-    ui::Button(g_main, ui::T(L"Procurar...", L"Browse..."), ui::Style::kSecondary, S(kW - 216), S(kHero + 138), S(168), S(44), kDlcBrowse, g_button, ui::kPanel);
-    g_log = ui::Edit(g_main, S(58), S(kH - 170), S(kW - 116), S(60), kLog, g_small, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL);
-    SetWindowTheme(g_log, L"DarkMode_Explorer", nullptr); // barra de rolagem escura (Windows 10 1809+)
-    // Fase 61: resolucao, idioma e o mod de pular cutscenes, entre as etiquetas de estado e o progresso
-    g_resolution = ui::Button(g_main, L"", ui::Style::kSecondary, S(48), S(kHero + 234), S(206), S(40), kResolution, g_small, ui::kPanel);
-    g_language = ui::Button(g_main, L"", ui::Style::kSecondary, S(262), S(kHero + 234), S(236), S(40), kLanguage, g_small, ui::kPanel);
-    g_icons = ui::Button(g_main, L"", ui::Style::kSecondary, S(506), S(kHero + 234), S(186), S(40), kIcons, g_small, ui::kPanel); // Fase 62
-    g_version = ReadVersion();
-    g_update = ui::Button(g_main, (ui::T(L"Atualizar   \u2022   v", L"Check updates  \u2022  v") + g_version).c_str(), ui::Style::kSecondary, S(kW - 250), S(kHero + 195),
-                          S(202), S(32), kUpdate, g_font, ui::kPanel);
-    g_skip = ui::Button(g_main, ui::T(L"Pular todas as cutscenes", L"Skip all cutscenes"), ui::Style::kToggle, S(704), S(kHero + 234), S(250), S(40),
-                        kSkipCutscenes, g_small, ui::kPanel);
-    // Fase 65: contador de FPS / info no jogo e apelidos dos jogadores
-    g_overlay = ui::Button(g_main, ui::T(L"Contador de FPS e info  (F10 no jogo)", L"FPS and info counter  (F10 in game)"), ui::Style::kToggle, S(48),
-                           S(kHero + 284), S(380), S(40), kOverlay, g_small, ui::kPanel);
-    g_names_button = ui::Button(g_main, ui::T(L"Apelidos dos jogadores...", L"Player nicknames..."), ui::Style::kSecondary, S(506), S(kHero + 284),
-                                S(250), S(40), kNames, g_small, ui::kPanel);
-    g_fps = ui::Button(g_main, L"60 FPS", ui::Style::kToggle, S(40), S(kH - 74), S(140), S(40), kFps, g_font);
-    g_console = ui::Button(g_main, ui::T(L"Mostrar console", L"Show console"), ui::Style::kToggle, S(196), S(kH - 74), S(200), S(40), kConsole, g_font);
-    g_fullscreen = ui::Button(g_main, ui::T(L"Tela cheia", L"Fullscreen"), ui::Style::kToggle, S(408), S(kH - 74), S(140), S(40), kFullscreen, g_font);
-    g_prepare = ui::Button(g_main, ui::T(L"Preparar", L"Prepare"), ui::Style::kSecondary, S(kW - 420), S(kH - 82), S(170), S(54), kPrepare, g_button);
-    g_play = ui::Button(g_main, ui::T(L"JOGAR", L"PLAY"), ui::Style::kPrimary, S(kW - 236), S(kH - 82), S(212), S(54), kPlay, g_play_font);
-    // Fase 63: LD PC Transfer (conversor de saves) no canto da arte; a regiao arredondada deixa a arte aparecer nas pontas
-    HWND transfer = ui::Button(g_main, L"LD PC Transfer", ui::Style::kSecondary, S(kW - 236), S(30), S(196), S(40), kTransfer, g_button);
-    SetWindowRgn(transfer, CreateRoundRectRgn(0, 0, S(196) + 1, S(40) + 1, S(18), S(18)), TRUE);
-    // Fase 64: mods (menu com os instalados, instalar de um .zip / .rar / .7z, abrir a pasta)
-    g_mods = ui::Button(g_main, L"Mods  ▾", ui::Style::kSecondary, S(kW - 362), S(30), S(116), S(40), kMods, g_button);
-    SetWindowRgn(g_mods, CreateRoundRectRgn(0, 0, S(116) + 1, S(40) + 1, S(18), S(18)), TRUE);
-    // Fase 68: extrair PKGs do PS4 direto para as pastas do launcher
-    g_pkg = ui::Button(g_main, ui::T(L"Extrair PKG...", L"Extract PKG..."), ui::Style::kSecondary, S(kW - 534), S(30), S(164), S(40), kPkg, g_button);
-    SetWindowRgn(g_pkg, CreateRoundRectRgn(0, 0, S(164) + 1, S(40) + 1, S(18), S(18)), TRUE);
+void ToolsMenu(HWND button) {
+    HMENU menu=CreatePopupMenu();
+    for(const auto& entry:std::vector<std::pair<int,const wchar_t*>>{{kPrepare,L"Prepare game"},{kPkg,L"Extract PKG..."},{kTransfer,L"Transfer a save..."},{kUpdate,L"Check for updates"}})
+        AppendMenuW(menu,MF_STRING|(IsWindowEnabled(GetDlgItem(g_main,entry.first))?0:MF_GRAYED),entry.first,entry.second);
+    RECT rect;GetWindowRect(button,&rect);
+    int picked=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_LEFTALIGN|TPM_TOPALIGN|TPM_NONOTIFY,rect.left,rect.bottom+S(2),0,g_main,nullptr);
+    DestroyMenu(menu);if(picked)SendMessageW(g_main,WM_COMMAND,MAKEWPARAM(picked,BN_CLICKED),0);
 }
 
-// Fase 63: abre o LD PC Transfer (exe ao lado do launcher), no mesmo idioma
+void CreateControls() {
+    g_game=ui::Edit(g_main,S(38),S(205),S(kW-222),S(24),kGameEdit,g_font);
+    g_patch=ui::Edit(g_main,S(38),S(280),S(kW-222),S(24),kPatchEdit,g_font);
+    g_dlc=ui::Edit(g_main,S(38),S(355),S(kW-222),S(24),kDlcEdit,g_font);
+    for(const auto& row:std::vector<std::pair<int,int>>{{kGameBrowse,194},{kPatchBrowse,269},{kDlcBrowse,344}})
+        ui::Button(g_main,L"Browse...",ui::Style::kSecondary,S(kW-160),S(row.second),S(136),S(44),row.first,g_button);
+    g_log=ui::Edit(g_main,S(38),S(500),S(kW-76),S(158),kLog,g_small,ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY|WS_VSCROLL);
+    SetWindowTheme(g_log,L"DarkMode_Explorer",nullptr);
+    g_resolution=ui::Button(g_main,L"",ui::Style::kSecondary,S(24),S(442),S(228),S(44),kResolution,g_small);
+    g_language=ui::Button(g_main,L"",ui::Style::kSecondary,S(266),S(442),S(228),S(44),kLanguage,g_small);
+    g_icons=ui::Button(g_main,L"",ui::Style::kSecondary,S(508),S(442),S(228),S(44),kIcons,g_small);
+    g_fps=ui::Button(g_main,L"60 FPS",ui::Style::kToggle,S(24),S(502),S(228),S(42),kFps,g_font);
+    g_console=ui::Button(g_main,L"Show console",ui::Style::kToggle,S(266),S(502),S(228),S(42),kConsole,g_font);
+    g_fullscreen=ui::Button(g_main,L"Fullscreen",ui::Style::kToggle,S(508),S(502),S(228),S(42),kFullscreen,g_font);
+    g_skip=ui::Button(g_main,L"Skip cutscenes",ui::Style::kToggle,S(24),S(558),S(228),S(42),kSkipCutscenes,g_small);
+    g_overlay=ui::Button(g_main,L"Performance (F10)",ui::Style::kToggle,S(266),S(558),S(228),S(42),kOverlay,g_small);
+    g_names_button=ui::Button(g_main,L"Player nicknames...",ui::Style::kSecondary,S(508),S(558),S(228),S(42),kNames,g_small);
+    g_version=ReadVersion();
+    g_update=ui::Button(g_main,L"Check for updates",ui::Style::kSecondary,0,0,1,1,kUpdate,g_font);
+    g_pkg=ui::Button(g_main,L"Extract PKG...",ui::Style::kSecondary,0,0,1,1,kPkg,g_font);
+    ui::Button(g_main,L"Transfer save",ui::Style::kSecondary,0,0,1,1,kTransfer,g_font);
+    g_prepare=ui::Button(g_main,L"Prepare game",ui::Style::kSecondary,S(kW-192),S(391),S(168),S(40),kPrepare,g_button);
+    g_play=ui::Button(g_main,L"PLAY",ui::Style::kPrimary,S(24),S(246),S(kW-48),S(60),kPlay,g_play_font);
+    g_mods=ui::Button(g_main,L"Mods",ui::Style::kSecondary,S(24),S(326),S(228),S(44),kMods,g_button);
+    g_settings=ui::Button(g_main,L"Settings",ui::Style::kSecondary,S(266),S(326),S(228),S(44),kSettings,g_button);
+    g_tools=ui::Button(g_main,L"Tools",ui::Style::kSecondary,S(508),S(326),S(228),S(44),kTools,g_button);
+    g_details=ui::Button(g_main,L"Show details",ui::Style::kSecondary,S(24),S(391),S(168),S(40),kDetails,g_small);
+}
+
 void OpenTransfer() {
     wchar_t self[MAX_PATH * 4];
     GetModuleFileNameW(nullptr, self, MAX_PATH * 4);
@@ -1325,12 +1367,56 @@ void LoadSettings() {
     if (std::find(std::begin(kResolutions), std::end(kResolutions), g_res_value) == std::end(kResolutions)) {
         g_res_value = L"1280x720";
     }
-    g_lang_value = ReadIni(L"idioma", L"auto");
+    g_lang_value = ReadIni(L"idioma", L"en");
     g_lang_value = CurrentLanguage().code;
     UpdateChoiceLabels();
     LoadArt(game);
     AppendLog(ui::T(L"Bem-vindo! Escolha as pastas, clique em Preparar na primeira vez e depois em JOGAR.", L"Welcome! Choose the folders, click Prepare the first time and then PLAY."));
     UpdateStatus();
+}
+
+// Hidden, asset-free layout regression. Never loads/saves user settings, starts
+// tools or a game, displays a window, or touches the installed game folder.
+int SelfTest(const fs::path& report) {
+    std::vector<std::string> failures;
+    auto check=[&](bool ok,const std::string& message){if(!ok)failures.push_back(message);};
+    check(ui::LogText(L"INSTALADO Example")==L"INSTALLED Example","mod protocol display translation");
+    check(ui::LogText(L"C:\\Mods\\ERRO folder")==L"C:\\Mods\\ERRO folder","path changed by log translation");
+    check(Utf8ToWide("Example \xC3\xA9")==L"Example \u00e9","UTF-8 disabled-mod name round trip");
+    for(int id=kGameEdit;id<=kDetails;++id)
+        check(GetDlgItem(g_main,id)!=nullptr,"missing control "+std::to_string(id));
+    auto visible=[](HWND h){return (GetWindowLongPtrW(h,GWL_STYLE)&WS_VISIBLE)!=0;};
+    auto layout=[&](bool settings,bool details) {
+        g_settings_page=settings;g_show_details=details;LayoutPage();
+        RECT client{};GetClientRect(g_main,&client);
+        std::vector<std::pair<int,RECT>> controls;
+        for(int id=kGameEdit;id<=kDetails;++id) {
+            HWND h=GetDlgItem(g_main,id);if(!h||!visible(h))continue;
+            RECT r{};GetWindowRect(h,&r);MapWindowPoints(nullptr,g_main,reinterpret_cast<POINT*>(&r),2);
+            check(r.left>=0&&r.top>=0&&r.right<=client.right&&r.bottom<=client.bottom,"control outside page "+std::to_string(id));
+            for(const auto& previous:controls) {
+                RECT overlap{};
+                check(!IntersectRect(&overlap,&r,&previous.second),"overlapping controls "+std::to_string(previous.first)+" and "+std::to_string(id));
+            }
+            controls.push_back({id,r});
+        }
+        check(visible(g_play)!=settings,"Play visibility");
+        check(visible(g_game)==settings,"game folder visibility");
+        check(visible(g_log)==(!settings&&details),"log visibility");
+        for(int id:{kUpdate,kPkg,kTransfer})check(!visible(GetDlgItem(g_main,id)),"tool command leaked onto page");
+    };
+    layout(false,false);layout(false,true);layout(true,false);
+    g_busy=true;LayoutPage();check(!IsWindowEnabled(g_settings)&&!IsWindowEnabled(g_tools)&&!IsWindowEnabled(g_mods),"busy controls enabled");
+    g_busy=false;LayoutPage();
+    HDC dc=GetDC(g_main);HGDIOBJ previous=SelectObject(dc,g_font);wchar_t face[LF_FACESIZE]{};
+    GetTextFaceW(dc,LF_FACESIZE,face);SelectObject(dc,previous);ReleaseDC(g_main,dc);
+    check(_wcsicmp(face,L"Segoe UI")==0,"unexpected UI font");
+    std::ofstream out(report,std::ios::trunc);
+    if(!out)return 2;
+    out<<"{\"passed\":"<<(failures.empty()?"true":"false")<<",\"control_count\":"<<(kDetails-kGameEdit+1)<<",\"pages\":3,\"scale\":"<<ui::g_scale<<",\"failures\":[";
+    for(size_t i=0;i<failures.size();++i)out<<(i?",":"")<<'"'<<failures[i]<<'"';
+    out<<"]}\n";out.close();
+    return failures.empty()?0:1;
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1356,6 +1442,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case kSettings:
+            SaveSettings();g_settings_page=!g_settings_page;LayoutPage();break;
+        case kDetails:
+            g_show_details=!g_show_details;LayoutPage();break;
+        case kTools:
+            ToolsMenu(g_tools);break;
         case kGameBrowse: {
             const std::wstring folder = BrowseFolder(ui::T(L"Pasta do jogo (dump CUSA01176)", L"Game folder (CUSA01176 dump)"), GetText(g_game));
             if (!folder.empty()) {
@@ -1527,6 +1619,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    int argc=0;LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    fs::path test_report;
+    if(argv&&argc==3&&std::wstring(argv[1])==L"--self-test") {g_self_test=true;test_report=argv[2];}
+    if(argv)LocalFree(argv);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     ui::InitProcess();
     wchar_t exe[MAX_PATH * 4];
@@ -1541,7 +1637,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         g_dev_tree = fs::is_regular_file(g_root / L"CMakeLists.txt", ec) && fs::is_directory(g_root / L"src", ec);
     }
     // Fase 61: idioma escolhido no launcher (launcher.ini); "auto" segue LD_LANG / Windows
-    if (const std::wstring choice = ReadIni(L"idioma", L"auto"); choice != L"auto" && !choice.empty()) {
+    if (const std::wstring choice = g_self_test?L"en":ReadIni(L"idioma", L"en"); choice != L"auto" && !choice.empty()) {
         SetEnvironmentVariableW(L"LD_LANG", choice == L"pt" ? L"pt" : L"en");
     }
     SetEnvironmentVariableW(L"LD_LANG", ui::Pt() ? L"pt" : L"en"); // Fase 60
@@ -1551,7 +1647,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     g_font = ui::Font(15);
     g_small = ui::Font(13);
     g_label = ui::Font(11.5f, FW_SEMIBOLD);
-    g_title = ui::Font(44, FW_BLACK);
+    g_title = ui::Font(30, FW_SEMIBOLD);
     g_subtitle = ui::Font(15, FW_SEMIBOLD);
     g_button = ui::Font(15, FW_SEMIBOLD);
     g_play_font = ui::Font(21, FW_BLACK);
@@ -1567,12 +1663,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, S(16), S(16), 0));
     wc.lpszClassName = L"LegoDimensionsPcLauncher";
     RegisterClassExW(&wc);
-    g_main = CreateWindowExW(0, wc.lpszClassName, L"LEGO Dimensions PC", style, place.left, place.top, place.right, place.bottom,
+    g_main = CreateWindowExW(0, wc.lpszClassName, L"LEGO Dimensions PC - Beta", style, place.left, place.top, place.right, place.bottom,
                              nullptr, nullptr, instance, nullptr);
     ui::DarkTitle(g_main);
-    CleanOldFiles(); // Fase 61
     CreateControls();
+    if(g_self_test) {
+        const int result=SelfTest(test_report);DestroyWindow(g_main);CoUninitialize();return result;
+    }
     LoadSettings();
+    LayoutPage();
     ShowWindow(g_main, show);
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {

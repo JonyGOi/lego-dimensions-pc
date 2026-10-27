@@ -27,14 +27,7 @@ TITLE_ID = 'CUSA01176'
 
 def _portuguese():
     """Fase 60: textos em portugues se o launcher pediu (LD_LANG) ou se o Windows esta em portugues; senao ingles."""
-    lang = os.environ.get('LD_LANG', '')
-    if lang:
-        return lang.lower().startswith('pt')
-    try:
-        import ctypes
-        return ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x16  # LANG_PORTUGUESE
-    except Exception:
-        return True
+    return os.environ.get('LD_LANG', 'en').lower().startswith('pt')
 
 
 PT = _portuguese()
@@ -166,10 +159,10 @@ def run_step(args, label, start, end):
     for line in proc.stdout:
         line = line.rstrip()
         print(line if PT else english_line(line), flush=True)
-        m = re.search(r'lote (\d+)/(\d+)', line)
+        m = re.search(r'(?:lote|batch) (\d+)/(\d+)', line)
         if m and int(m.group(2)):
             progress(start + (end - start) * int(m.group(1)) // int(m.group(2)), '%s (%s/%s)' % (label, m.group(1), m.group(2)))
-        m = re.search(r'^\s+(\d+) arquivos, ', line)
+        m = re.search(r'^\s+(\d+) (?:arquivos|files), ', line)
         if m:
             progress(start + min(end - start - 1, (end - start) * int(m.group(1)) // 14200), label)
     if proc.wait() != 0:
@@ -180,10 +173,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--app0', required=True)
     ap.add_argument('--addcont', default='')
-    ap.add_argument('--patch', default='', help='pasta da atualizacao separada (padrao: procura CUSA01176-patch)')
+    ap.add_argument('--patch', default='', help='separate update folder (default: auto-detect CUSA01176-patch)')
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
-    ap.add_argument('--sem-aot', action='store_true', help='so o eboot (os shaders ficam para o compilador ao vivo)')
-    ap.add_argument('--limite', type=int, default=0, help='so os N primeiros lotes da traducao (teste)')
+    ap.add_argument('--sem-aot', action='store_true', help='eboot only (shaders deferred to live compiler)')
+    ap.add_argument('--limite', type=int, default=0, help='only first N translation batches (test)')
     args = ap.parse_args()
     t0 = time.time()
     progress(1, T('conferindo o jogo', 'checking the game'))

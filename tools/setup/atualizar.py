@@ -32,14 +32,7 @@ REQUIRED = {'LegoDimensionsLauncher.exe', 'build/lego_dimensions.exe'}
 
 
 def _portuguese():
-    lang = os.environ.get('LD_LANG', '')
-    if lang:
-        return lang.lower().startswith('pt')
-    try:
-        import ctypes
-        return ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x16  # LANG_PORTUGUESE
-    except Exception:
-        return True
+    return os.environ.get('LD_LANG', 'en').lower().startswith('pt')
 
 
 PT = _portuguese()
@@ -214,7 +207,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--apply', action='store_true')
-    parser.add_argument('--root', default=ROOT, help='pasta do port (testes)')
+    parser.add_argument('--root', default=ROOT, help='port folder (tests)')
     args = parser.parse_args()
     current = current_version(args.root)
     progress(2, T('Procurando atualizacoes no GitHub...', 'Looking for updates on GitHub...'))

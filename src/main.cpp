@@ -170,7 +170,7 @@ struct EntryParams {
 
 // Segundo argumento do entry point: o crt0 chama isto se main() retornar.
 HLE_SYSV_ABI void ProgramExit() {
-    std::printf("\nO programa chamou o exit handler passado em RSI. Encerrando.\n");
+    std::printf("\nProgram called the exit handler passed in RSI. Exiting.\n");
     hle::log::Shutdown(0);
 }
 
@@ -193,7 +193,7 @@ HLE_SYSV_ABI void ProgramExit() {
 // Nao usa a CRT: escreve o aviso direto no handle e chama TerminateProcess.
 DWORD WINAPI ExitGuardThread(void*) {
     Sleep(20000);
-    static const char kMessage[] = "\n[ENCERRAMENTO] o relatorio final nao terminou em 20 s: processo encerrado a forca (codigo 5)\n";
+    static const char kMessage[] = "\n[SHUTDOWN] final report did not finish within 20 s: process forcibly terminated (code 5)\n";
     // O que o relatorio ja tinha escrito esta no buffer da CRT: sem isto o log acabava ANTES do
     // ponto do travamento e nao dava para saber onde foi. Sem lock de proposito (quem travou pode
     // estar com ele); o processo acaba logo abaixo.
@@ -254,7 +254,7 @@ HLE_SYSV_ABI void* SelfTestThread(void* arg) {
 int SelfTest() {
     int failures = 0;
     const auto check = [&](const char* what, bool ok) {
-        std::printf("  [%s] %s\n", ok ? " OK " : "FALHA", what);
+        std::printf("  [%s] %s\n", ok ? " OK " : "FAILURE", what);
         failures += !ok;
     };
     using SnprintfFn = int (HLE_SYSV_ABI*)(char*, u64, const char*, ...);
@@ -264,8 +264,8 @@ int SelfTest() {
     // 5 inteiros variadicos em registradores + 7 na pilha, misturados com doubles
     Guest<SnprintfFn>("snprintf")(buf, sizeof(buf), "%d %s %5.2f %lld %x %c|%d %d %d %ld %g %s %u", 1,
                                   "abc", 3.14159, 123456789012LL, 255, 'z', 7, 8, 9, -5000000000LL, 2.5,
-                                  "fim", 4000000000u);
-    check(buf, !std::strcmp(buf, "1 abc  3.14 123456789012 ff z|7 8 9 -5000000000 2.5 fim 4000000000"));
+                                  "end", 4000000000u);
+    check(buf, !std::strcmp(buf, "1 abc  3.14 123456789012 ff z|7 8 9 -5000000000 2.5 end 4000000000"));
 
     // 9 doubles: o nono vai para a pilha
     Guest<SnprintfFn>("snprintf")(buf, sizeof(buf), "%g %g %g %g %g %g %g %g %g %d", 1.0, 2.0, 3.0, 4.0, 5.0,
@@ -273,7 +273,7 @@ int SelfTest() {
     check(buf, !std::strcmp(buf, "1 2 3 4 5 6 7 8 9 42"));
 
     const int n = Guest<SnprintfFn>("snprintf")(buf, 6, "%s", "truncado");
-    check("snprintf trunca e devolve o tamanho total", n == 8 && !std::strcmp(buf, "trunc"));
+    check("snprintf truncates and returns full length", n == 8 && !std::strcmp(buf, "trunc"));
 
     int i = 0;
     float f = 0;
@@ -291,7 +291,7 @@ int SelfTest() {
     const int l2 = Guest<MutexFn>("scePthreadMutexLock")(&static_mutex);
     const int u1 = Guest<MutexFn>("scePthreadMutexUnlock")(&static_mutex);
     const int u2 = Guest<MutexFn>("scePthreadMutexUnlock")(&static_mutex);
-    check("mutex estatico: lock ok, relock EDEADLK, unlock ok, unlock extra EPERM",
+    check("static mutex: lock succeeds, relock EDEADLK, unlock succeeds, extra unlock EPERM",
           l1 == 0 && l2 == hle::err::kEDEADLK && u1 == 0 && u2 == hle::err::kEPERM && static_mutex != nullptr);
 
     using AllocFn = int (HLE_SYSV_ABI*)(s64, s64, u64, u64, int, s64*);
@@ -307,7 +307,7 @@ int SelfTest() {
         mem_ok = static_cast<u8*>(addr)[0x3FFFFF] == 0xAB;
         mem_ok = mem_ok && Guest<UnmapFn>("sceKernelMunmap")(addr, 0x400000) == 0;
     }
-    check("memoria direta: aloca, mapeia alinhado em 2 MiB, escreve, desmapeia", mem_ok);
+    check("direct memory: allocate, map aligned to 2 MiB, write, unmap", mem_ok);
 
     using SetjmpFn = int (HLE_SYSV_ABI*)(u64*);
     using LongjmpFn = void (HLE_SYSV_ABI*)(u64*, int);
@@ -334,7 +334,7 @@ int SelfTest() {
     const int ss2 = Guest<SignalSemaFn>("sceKernelSignalSema")(sema, 1);
     const int sw3 = Guest<WaitSemaFn>("sceKernelWaitSema")(sema, 2, nullptr);
     const int sd = Guest<HandleFn>("sceKernelDeleteSema")(sema);
-    check("semaforo: wait ok, wait com timeout, signal ate o maximo, signal acima do maximo = EINVAL",
+    check("semaphore: wait succeeds, timed wait, signal up to maximum, signal over maximum = EINVAL",
           sc == 0 && sw1 == 0 && sw2 == hle::err::kETIMEDOUT && timeout == 0 && ss1 == 0 &&
               ss2 == hle::err::kEINVAL && sw3 == 0 && sd == 0);
 
@@ -358,7 +358,7 @@ int SelfTest() {
     timeout = 1000;
     const int ew4 = Guest<WaitEvfFn>("sceKernelWaitEventFlag")(evf, 0x6, 0x02, &pattern, &timeout);
     const int ed = Guest<HandleFn>("sceKernelDeleteEventFlag")(evf);
-    check("event flag: OR+CLEAR_PAT, AND com timeout (sem alterar o timeout), AND+CLEAR_ALL, Clear como mascara",
+    check("event flag: OR+CLEAR_PAT, timed AND (timeout unchanged), AND+CLEAR_ALL, Clear as mask",
           ec == 0 && ew1 == 0 && p1 == 0x5 && ew2 == hle::err::kETIMEDOUT && evf_timeout_kept && ew3 == 0 &&
               p3 == 0xB &&
               ew4 == hle::err::kETIMEDOUT && pattern == 0x9 && ed == 0);
@@ -374,7 +374,7 @@ int SelfTest() {
         &thread, nullptr, &SelfTestThread, &tt, "selftest");
     Guest<SignalSemaFn>("sceKernelSignalSema")(tt.sema, 1);
     const int tj = Guest<JoinFn>("scePthreadJoin")(thread, &thread_result);
-    check("thread: criada, bloqueia em semaforo, TCB proprio (diferente do da main), join devolve o retorno",
+    check("thread: created, blocks on semaphore, own TCB (different from main), join returns result",
           tc == 0 && tj == 0 && thread_result == reinterpret_cast<void*>(0x1234) && tt.self_ok &&
               tt.tcb != runtime::CurrentTcb());
 
@@ -386,7 +386,7 @@ int SelfTest() {
     const int ue2 = Guest<GetEventFn>("sceUserServiceGetEvent")(event);
     const int ue3 = Guest<GetEventFn>("sceUserServiceGetEvent")(event);
     hle::ResetUserServiceEvents();
-    check("sceUserServiceGetEvent: LOGIN do usuario 1 na primeira chamada, depois NO_EVENT",
+    check("sceUserServiceGetEvent: LOGIN for user 1 on first call, then NO_EVENT",
           ue1 == 0 && event[0] == 0 && event[1] == 1 && ue2 == static_cast<int>(0x80960007) && ue2 == ue3);
 
     // ---- VFS: /app0 somente leitura, /temp0 gravavel, leitura posicional
@@ -403,7 +403,7 @@ int SelfTest() {
     const int cl = Guest<CloseFn>("sceKernelClose")(fd);
     const int ul = Guest<PathFn>("sceKernelUnlink")("/temp0/selftest.bin");
     const int esc = Guest<OpenFn>("sceKernelOpen")("/temp0/../../fora.bin", 0x602, 0666);
-    check("VFS: /app0 recusa escrita, /temp0 grava e le por offset, '..' nao escapa do mount",
+    check("VFS: /app0 refuses writes, /temp0 writes and reads by offset, '..' cannot escape mount",
           ro == hle::fs::kEROFS && fd >= 3 && wr == 8 && rr == 4 && !std::memcmp(rd, "cdef", 4) && cl == 0 &&
               ul == 0 && esc < 0);
     {
@@ -429,7 +429,7 @@ int SelfTest() {
                         a_file.host == (base / "data" / "a.txt").lexically_normal() && le == 0 && list.size() == 3;
         hle::fs::Configure(saved_app0, writable);
         hle::fs::SetApp0Patch(saved_patch);
-        check("VFS: atualizacao separada (CUSA01176-patch) achada sozinha, vence o jogo base e a listagem junta as duas", ok);
+        check("VFS: separate update (CUSA01176-patch) auto-detected, overrides base game and listing merges both", ok);
     }
 
     // ---- Ngs2: tamanhos de buffer no offset que o jogo le, handles validos, render em silencio
@@ -465,7 +465,7 @@ int SelfTest() {
         u32 waveform, channels;
     } render = {pcm, sizeof(pcm), 0x18, 8};
     const int nrd = Guest<RenderFn>("sceNgs2SystemRender")(ngs_system, &render, 1);
-    check("Ngs2: hostBufferSize em +0x08, handles nao nulos, estado zerado, render em silencio",
+    check("Ngs2: hostBufferSize at +0x08, non-null handles, zeroed state, silent render",
           sys_size_ok && nr == 0 && info[1] >= 0x1000 && nsc == 0 && ngs_system && nrc == 0 && rack && nvh == 0 &&
               voice && nvc == 0 && nvs == 0 && state[0x18] == 0 && nrd == 0 && pcm[0] == 0.0f && pcm[2047] == 0.0f);
 
@@ -479,8 +479,8 @@ int SelfTest() {
         audio_result = Guest<AudioOutFn>("sceAudioOutOutput")(port, pcm);
     }
     const ULONGLONG audio_ms = GetTickCount64() - audio_start;
-    std::printf("         (10 buffers levaram %llu ms)\n", audio_ms);
-    check("AudioOut: porta >= 1 e saida no ritmo real (40-90 ms para 10 buffers)",
+    std::printf("         (10 buffers took %llu ms)\n", audio_ms);
+    check("AudioOut: port >= 1 and real-time output (40-90 ms for 10 buffers)",
           port >= 1 && audio_result == 256 && audio_ms >= 40 && audio_ms <= 90);
 
     // ---- Usbd: HandleEvents nao pode retornar na hora; lista de dispositivos conforme --toypad
@@ -503,8 +503,8 @@ int SelfTest() {
     const int ud = one == 1 ? Guest<UsbDescFn>("sceUsbdGetDeviceDescriptor")(usb_list[0], descriptor) : -1;
     Guest<UsbFreeListFn>("sceUsbdFreeDeviceList")(usb_list, 1);
     hle::SetVirtualToypadConnected(false);
-    std::printf("         (5 x HandleEvents levaram %llu ms)\n", usb_ms);
-    check("Usbd: HandleEvents bloqueia ~16 ms; 0 dispositivos sem --toypad, Toy Pad 0e6f:0241 com",
+    std::printf("         (5 x HandleEvents took %llu ms)\n", usb_ms);
+    check("Usbd: HandleEvents blocks ~16 ms; 0 devices without --toypad, Toy Pad 0e6f:0241 with it",
           usb_ms >= 60 && none == 0 && one == 1 && ud == 0 && descriptor[8] == 0x6F && descriptor[9] == 0x0E &&
               descriptor[10] == 0x41 && descriptor[11] == 0x02 && descriptor[17] == 1);
 
@@ -547,7 +547,7 @@ int SelfTest() {
     const s64 end_pos = Guest<FiosSeekFn>("sceFiosFHSeek")(fh, 0, 2);
     Guest<FiosDhCloseFn>("sceFiosFHCloseSync")(nullptr, fh);
     const int missing = Guest<FiosOpenFn>("sceFiosFHOpenSync")(nullptr, &fh, "/app0/nao_existe.dat", nullptr);
-    check("Fios2: DHOpen sem buffer = 0x80820008 + tamanho, listagem acha param.sfo, leitura, 0x80820005",
+    check("Fios2: DHOpen without buffer = 0x80820008 + size, listing finds param.sfo, read, 0x80820005",
           probe == static_cast<int>(0x80820008) && needed > 0 && dho == 0 && entries > 5 && saw_param_sfo &&
               fo == 0 && fst == 0 && stat_size > 0 && !(stat[0x20] & 1) && frd == 4 &&
               !std::memcmp(magic, "\0PSF", 4) && end_pos == stat_size && missing == static_cast<int>(0x80820005));
@@ -579,7 +579,7 @@ int SelfTest() {
     const int w3 = Guest<WaitEqFn>("sceKernelWaitEqueue")(queue, events, 4, &event_count, nullptr);
     const ULONGLONG eq_ms = GetTickCount64() - eq_start;
     waker.join();
-    check("equeue: timeout sem evento, evento com ident/filter/data/udata, disparos fundidos, acorda outra thread",
+    check("equeue: timeout without event, event with ident/filter/data/udata, coalesced triggers, wakes another thread",
           eq_timeout_ok && eq_event_ok && unregistered_refused && w3 == 0 && event_count == 1 &&
               events[0].data == 333 && eq_ms >= 15 && eq_ms < 500);
 
@@ -669,7 +669,7 @@ int SelfTest() {
         }
     }
     const hle::videoout::FlipStatus status = hle::videoout::GetFlipStatus(vo);
-    check("PM4/flip: NOP do driver percorrivel, WRITE_DATA/DMA_DATA/EOS/EOP escrevem labels, evento EOP, flip no VSync",
+    check("PM4/flip: driver NOP traversable, WRITE_DATA/DMA_DATA/EOS/EOP write labels, EOP event, flip on VSync",
           vo >= 1 && vaf == 0 && attr_width == 1920 && attr_pitch == 1920 && vreg == 0 && gae == 0 && writer == 0 &&
               sf == 0 && labels_ok && got_eop && got_flip && (flip_data >> 16) == 0x1234 &&
               hle::videoout::FlipCount() == flips_before + 1 && status.flip_arg == 0x1234 &&
@@ -684,7 +684,7 @@ int SelfTest() {
         rand_negative |= v < 0;
         rand_max_seen = v > rand_max_seen ? v : rand_max_seen;
     }
-    check("rand: nunca negativo e passa de 0x7FFF (faixa de 31 bits)", !rand_negative && rand_max_seen > 0x3FFFFFFF);
+    check("rand: never negative and exceeds 0x7FFF (31-bit range)", !rand_negative && rand_max_seen > 0x3FFFFFFF);
 
     // ---- Toy Pad: protocolo puro
     namespace tp = hle::toypad;
@@ -712,7 +712,7 @@ int SelfTest() {
     const auto led_reply = tp::HandleCommand(led_cmd, 32);
     const bool led_ok = led_reply && (*led_reply)[0] == 0x55 && (*led_reply)[1] == 0x01 && (*led_reply)[2] == 0x07 &&
                         (*led_reply)[3] == 0x5D;
-    check("Toy Pad: resposta do WAKE byte a byte, SEED (TEA) devolve a confirmacao, ack de LED com checksum",
+    check("Toy Pad: byte-exact WAKE response, SEED (TEA) returns confirmation, LED ack with checksum",
           wake_ok && seed_ok && tea_ok && led_ok);
 
     // ---- Fase 60: estado dos LEDs para o app (GET_LED v2): cor, piscar e fade, com a cor de origem do fade
@@ -737,7 +737,7 @@ int SelfTest() {
                                left[10] == 0x04 && left[11] == 0x19 && right[0] == 3 && right[1] == 2 && right[2] == 0 && right[3] == 0xff &&
                                right[8] == 5 && right[9] == 6 && right[10] == 0;
         led({0xc8, 0x13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}); // apaga tudo
-        check("Toy Pad: LEDs para o app (GET_LED v2, 40 bytes): cor, piscar, fade com a cor de origem; cor em todas apaga", led_v2_ok);
+        check("Toy Pad: LEDs to app (GET_LED v2, 40 bytes): color, blink, fade with source color; all-colors clears", led_v2_ok);
     }
 
     // ---- figura sintetica: tag coerente com o UID, evento de colocacao, leitura e modelo
@@ -769,7 +769,7 @@ int SelfTest() {
     }
     const auto removed = tp::RemoveFigure(1);
     const bool removed_ok = removed && (*removed)[5] == 1 && (*removed)[2] == 1 && !tp::RemoveFigure(1);
-    check("Toy Pad figura: tag sintetica decifra para o id, evento 56 0b de colocada/removida, READ e MODEL",
+    check("Toy Pad figure: synthetic tag decodes to id, placed/removed event 56 0b, READ and MODEL",
           tag_ok && placed_ok && read_ok && model_ok && removed_ok);
 
     // ---- portal.json com as tres zonas, e tres figuras ao mesmo tempo no Toy Pad
@@ -792,7 +792,7 @@ int SelfTest() {
         parse_ok &= hle::ParsePortalJson(partial, 1, &scratch_uid, &scratch_id) && scratch_id == 1 &&
                     !hle::ParsePortalJson(partial, 2, &scratch_uid, &scratch_id) &&
                     !hle::ParsePortalJson(partial, 3, &scratch_uid, &scratch_id);
-        check("portal.json: tres zonas independentes (ordem das chaves livre; null e UID incompleto = zona vazia)", parse_ok);
+        check("portal.json: three independent zones (any key order; null and incomplete UID = empty zone)", parse_ok);
 
         auto read_page0 = [&](u8 index, u8 seq) {
             u8 cmd[32] = {0x55, 0x04, 0xd2, seq, index, 0x00};
@@ -827,7 +827,7 @@ int SelfTest() {
         }
         tp::RemoveFigure(1);
         tp::RemoveFigure(3);
-        check("Toy Pad multi-tag: tres figuras colocadas, lidas pelo indice e removidas de forma independente", multi_ok);
+        check("Toy Pad multi-tag: three figures placed, read by index and independently removed", multi_ok);
         // Fase 60: a mesma tag (mesmo arquivo do app) em duas posicoes: a segunda copia ganha um UID novo, com o
         // id recifrado para ele (o jogo descartaria duas figuras com o mesmo UID)
         const tp::TagData copy_tag = tp::BuildTag(uids[0], ids[0]);
@@ -842,7 +842,7 @@ int SelfTest() {
         const auto again = tp::LoadTag(2, 5, copy_tag, std::string(), &second_id);
         tp::RemoveIndex(4);
         tp::RemoveIndex(5);
-        check("Toy Pad: segunda copia da mesma tag ganha UID novo e continua o mesmo personagem", dup_ok && again && second_id == ids[0]);
+        check("Toy Pad: second copy of same tag gets new UID and remains same character", dup_ok && again && second_id == ids[0]);
     }
 
     // ---- extrator de shaders: acha o OrbShdr a partir dos registradores e grava um arquivo por shader distinto
@@ -880,7 +880,7 @@ int SelfTest() {
                 size = entry.file_size();
             }
         }
-        check("extrator de shaders: OrbShdr achado pelos registradores, um arquivo por shader distinto (VS e PS), tamanho = codigo + cabecalho",
+        check("shader extractor: OrbShdr found via registers, one file per distinct shader (VS and PS), size = code + header",
               r1 == 0 && r2 == 0 && r3 == 0 && r4 == 0 && vs_files == 1 && ps_files == 1 && size == 32 + 28 &&
                   // PS nulo: o pacote comeca com SET_SH_REG de SPI_SHADER_PGM_LO_PS (0x08) = 0 e o resto e NOP
                   cmdbuf[0] == (0xC0000000u | (2u << 16) | (0x76u << 8)) && cmdbuf[1] == 0x08 && cmdbuf[2] == 0 &&
@@ -889,7 +889,7 @@ int SelfTest() {
         // endereco nao pode derrubar o processo
         VirtualFree(code, 0, MEM_RELEASE);
         const int r5 = Guest<SetShaderFn>("sceGnmSetVsShader")(cmdbuf, 0x1D, regs, 0);
-        check("extrator de shaders: endereco ja visto e depois desmapeado e ignorado sem excecao", r5 == 0);
+        check("shader extractor: previously seen address later unmapped is ignored without exception", r5 == 0);
         hle::gnm::SetShaderDumpDirectory({});
         std::filesystem::remove_all(dir, ec);
     }
@@ -939,13 +939,13 @@ int SelfTest() {
             geometry = queued_quad && queued_triangle && frame && renderer.DrawsRendered() == 2 && renderer.PipelinesCreated() == 2 &&
                        renderer.LastFrameDraws() == 2;
         }
-        check("Texturas: destile por microtile (Fase 59) igual ao destile elemento por elemento (BC 8/16 bytes, bordas cortadas)",
+        check("Textures: microtile detile (Phase 59) matches element-by-element detile (BC 8/16 bytes, clipped edges)",
               hle::gnm::SelftestDetile());
-        check("Vulkan: draws com vertices/indices copiados para os ring buffers, 2 pipelines (com e sem cor), vkCmdDrawIndexed no frame",
+        check("Vulkan: draws with vertices/indices copied to ring buffers, 2 pipelines (with and without color), vkCmdDrawIndexed in frame",
               geometry);
-        std::printf("         (%s; %u de 3 frames apresentados)\n", init ? renderer.Describe().c_str() : renderer.LastError().c_str(),
+        std::printf("         (%s; %u of 3 frames presented)\n", init ? renderer.Describe().c_str() : renderer.LastError().c_str(),
                     shown);
-        check("Vulkan: instancia + superficie Win32 + dispositivo + swapchain 1280x720 B8G8R8A8 FIFO, 3 frames limpos e apresentados",
+        check("Vulkan: instance + Win32 surface + device + swapchain 1280x720 B8G8R8A8 FIFO, 3 frames cleared and presented",
               init && shown == 3 && renderer.Describe().find("1280x720 B8G8R8A8_UNORM") != std::string::npos);
         renderer.Shutdown();
         if (hwnd) {
@@ -961,13 +961,13 @@ int SelfTest() {
     u32 pad_buttons;
     std::memcpy(&pad_buttons, pad_data, 4);
     // Sem janela em foco e sem roteiro ativo: so um controle XInput poderia mexer nisto.
-    std::printf("         (botoes lidos agora: 0x%x, sticks %u %u %u %u)\n", pad_buttons, pad_data[4], pad_data[5],
+    std::printf("         (buttons read now: 0x%x, sticks %u %u %u %u)\n", pad_buttons, pad_data[4], pad_data[5],
                 pad_data[6], pad_data[7]);
     {
         u8 other[0x78];
         // Fase 61: handles 1 a 4 (co-op local) valem; o 5 nao
         const bool coop_handles = Guest<PadReadFn>("scePadReadState")(2, other) == 0 && Guest<PadReadFn>("scePadReadState")(5, other) < 0;
-        check("Pad: ReadState devolve conectado, timestamp e (sem controle) sticks em 0x80; handles 1-4 validos (co-op), 5 nao",
+        check("Pad: ReadState returns connected, timestamp and (without controller) sticks at 0x80; handles 1-4 valid (co-op), 5 invalid",
               pad_read == 0 && pad_data[0x4C] == 1 && coop_handles);
     }
     // ---- roteiro com eixos analogicos: "LS_UP:ms" segura LeftY em 0, o resto fica em 128
@@ -987,7 +987,7 @@ int SelfTest() {
         hle::SetPadInputScript("");
         std::memset(pad_data, 0xCC, sizeof(pad_data));
         Guest<PadReadFn>("scePadReadState")(1, pad_data);
-        check("Pad: roteiro com analogicos (LS_UP = LeftY 0, LS_RIGHT = LeftX 255, RS_DOWN = RightY 255, junto com botao; centro 128 ao soltar)",
+        check("Pad: script with sticks (LS_UP = LeftY 0, LS_RIGHT = LeftX 255, RS_DOWN = RightY 255, with button; center 128 on release)",
               parsed && up && mixed && combined && rejected && pad_data[5] == 0x80 && pad_data[4] == 0x80);
     }
 
@@ -999,7 +999,7 @@ int SelfTest() {
     const bool pad_layout = pad_data[0x4C] == 1 && pad_data[0x68] == 1 && pad_data[0x34] == 0 && !(pad_data[3] & 0x80);
     Guest<PadReadFn>("scePadReadState")(1, pad_data);
     std::memcpy(&pad_ts2, pad_data + 0x50, 8);
-    check("Pad: connected em +0x4C, connectedCount em +0x68, sem bit 'interceptado', timestamp crescente",
+    check("Pad: connected at +0x4C, connectedCount at +0x68, no 'intercepted' bit, increasing timestamp",
           pad_layout && pad_ts2 > pad_ts1);
 
     // ---- Radar de telas: (pacote, offset) -> nome, cada arquivo conta uma vez
@@ -1020,7 +1020,7 @@ int SelfTest() {
         hle::radar::OnRead("/app0/data/chunk1/OUTRO.HDR", 5500, 16);  // nao e pacote
         const bool radar_none = hle::radar::FilesSeen() == 1;
         hle::radar::OnRead("/app0/data/chunk1/TESTE.DAT", 250, 5800); // .ogg + (gsc ja visto) + .csv
-        check("Radar: offset no pacote vira nome de arquivo, uma vez por arquivo, e o filtro de tela casa",
+        check("Radar: archive offset becomes filename, once per file, screen filter matches",
               radar_one && radar_none && hle::radar::FilesSeen() == 3 &&
                   hle::radar::IsScreenFile("\\levels\\frontend\\frontend_dx11.gsc") &&
                   hle::radar::IsScreenFile("\\levels\\loading_screen_startup\\a.led") &&
@@ -1053,7 +1053,7 @@ int SelfTest() {
     const int sub_out = Guest<UsbSubmitFn>("sceUsbdSubmitTransfer")(out_transfer);
     Guest<UsbVoidFn>("sceUsbdHandleEvents")();
     hle::SetVirtualToypadConnected(false);
-    check("Usbd + Toy Pad: leitura fica pendente, comando OUT completa a leitura com a resposta, 2 callbacks",
+    check("Usbd + Toy Pad: read remains pending, OUT command completes read with response, 2 callbacks",
           usb_handle && user_data_ok && sub_in == 0 && in_stays_pending && sub_out == 0 && out_calls == 1 &&
               in_calls == 1 && in_transfer->actual_length == 32 && in_transfer->status == 0 &&
               !std::memcmp(in_buffer, wake_expected, 17));
@@ -1098,7 +1098,7 @@ int SelfTest() {
     const int sd_fd = Guest<OpenFn>("sceKernelOpen")((sd_point + "/SAVE.DAT").c_str(), 0x602, 0666);
     const s64 sd_written = Guest<PwriteFn>("sceKernelPwrite")(sd_fd, "LEGO", 4, 0);
     Guest<CloseFn>("sceKernelClose")(sd_fd);
-    const int sd_setparam = Guest<SdSetParamFn>("sceSaveDataSetParam")(sd_result, 1, "Titulo de teste", 16);
+    const int sd_setparam = Guest<SdSetParamFn>("sceSaveDataSetParam")(sd_result, 1, "Test title", 16);
     char sd_title[128] = {};
     u64 sd_got = 0;
     const int sd_getparam = Guest<SdGetParamFn>("sceSaveDataGetParam")(sd_result, 1, sd_title, sizeof(sd_title), &sd_got);
@@ -1132,14 +1132,14 @@ int SelfTest() {
     }
     const bool sd_on_disk = std::filesystem::exists(hle::fs::WritableRoot() / "savedata0" / sd_name / "SAVE.DAT");
     const int sd_deleted = Guest<SdPointFn>("sceSaveDataDelete")(&sd_delete);
-    check("SaveData: NOT_FOUND, criar, gravar em /savedataN, Set/GetParam, MountInfo, Umount, EXISTS, busca, Delete",
+    check("SaveData: NOT_FOUND, create, write in /savedataN, Set/GetParam, MountInfo, Umount, EXISTS, search, Delete",
           sd_missing == static_cast<int>(0x809F0008) && sd_create == 0 && sd_point == "/savedata0" && sd_fd >= 3 &&
               sd_written == 4 && sd_setparam == 0 && sd_getparam == 0 && sd_got == 128 &&
-              !std::strcmp(sd_title, "Titulo de teste") && sd_getinfo == 0 && sd_info[0] > 0x140 && sd_umount == 0 &&
+              !std::strcmp(sd_title, "Test title") && sd_getinfo == 0 && sd_info[0] > 0x140 && sd_umount == 0 &&
               sd_after < 0 && sd_exists == static_cast<int>(0x809F0007) && sd_searched == 0 && sd_found &&
               sd_search.hit_num >= 1 && sd_on_disk && sd_deleted == 0);
 
-    std::printf("Selftest: %s\n", failures ? "FALHOU" : "tudo OK");
+    std::printf("Selftest: %s\n", failures ? "FAILED" : "all OK");
     return failures;
 }
 
@@ -1214,7 +1214,7 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--input-script") && i + 1 < argc) {
             // "seg:botao[:ms],..." ex.: "25:options,30:cross:500" - aperta botoes sem teclado
             if (!hle::SetPadInputScript(argv[++i])) {
-                std::printf("ERRO: --input-script invalido: %s\n", argv[i]);
+                std::printf("ERROR: invalid --input-script: %s\n", argv[i]);
                 return 1;
             }
         } else if (!std::strcmp(argv[i], "--portal") && i + 1 < argc) {
@@ -1438,7 +1438,7 @@ int main(int argc, char** argv) {
     // Fase 64: mods de PS4 / shadPS4 (pacotes da TT Games e arquivos soltos), depois da atualizacao
     if (!selftest && mods_cache != "-") {
         if (const int mods = hle::mods::Setup(mods_cache / "mods.txt")) {
-            std::printf("mods       : %d pacote(s) / pasta(s) com mods  [%s]  (--no-mods desliga)\n", mods, hle::fs::PathText(mods_cache).c_str());
+            std::printf("mods       : %d mod pack(s) / folder(s)  [%s]  (--no-mods disables)\n", mods, hle::fs::PathText(mods_cache).c_str());
         }
     }
     // Fase 46: DLC. Padrao: assets\addcont se existir; senao a pasta de addcont do shadPS4 para este
@@ -1471,34 +1471,34 @@ int main(int argc, char** argv) {
         hle::gnm::StartPerfThread();
         hle::radar::Configure(root / "tools" / "data" / "dat_index", radar_log);
         hle::radar::SetLocalIndexDir(root / "assets" / "dat_index"); // Fase 64: pacotes do jogador e dos mods
-        std::printf("radar      : %s  (todo arquivo lido de dentro dos .DAT)\n",
+        std::printf("radar      : %s  (every file read from .DAT archives)\n",
                     hle::fs::PathText(radar_log).c_str());
     }
     hle::SetVirtualToypadConnected(toypad);
     // Fase 61: com o Toy Pad fisico ligado, e ele que atende o jogo (o virtual, o portal.json e o app ficam de fora)
     if (toypad && !selftest && real_toypad && hle::UseRealToypad()) {
-        std::printf("portal     : Toy Pad real (USB); --no-real-toypad usa o virtual\n");
+        std::printf("portal     : Physical Toy Pad (USB); --no-real-toypad uses virtual portal\n");
     } else if (toypad && !selftest) {
         hle::StartPortalWatcher(portal_file);
-        std::printf("portal     : %s  (relido a cada 500 ms)\n", hle::fs::PathText(portal_file).c_str());
+        std::printf("portal     : %s  (reread every 500 ms)\n", hle::fs::PathText(portal_file).c_str());
         hle::StartToypadListener(toypad_port);
     }
     hle::videoout::SetWindowEnabled(window && !selftest);
     hle::SetStubLogger(&hle::log::StubLogger);
     runtime::InstallCrashHandler();
-    std::printf("Overrides  : %u implementacoes reais instaladas sobre a tabela gerada (%zu simbolos)\n",
+    std::printf("Overrides  : %u actual implementations installed over generated table (%zu symbols)\n",
                 ov.installed, hle::Symbols().size());
     {
         std::error_code ec;
         const bool has_eboot = std::filesystem::exists(app0 / "eboot.bin", ec);
         const bool has_data = std::filesystem::is_directory(app0 / "data", ec);
-        std::printf("/app0      : %s  (eboot.bin: %s, data/: %s) - somente leitura\n", hle::fs::PathText(app0).c_str(),
-                    has_eboot ? "sim" : "NAO", has_data ? "sim" : "NAO");
+        std::printf("/app0      : %s  (eboot.bin: %s, data/: %s) - read only\n", hle::fs::PathText(app0).c_str(),
+                    has_eboot ? "yes" : "NO", has_data ? "yes" : "NO");
         if (!app0_patch.empty()) {
-            std::printf("atualizacao: %s  (por cima do /app0)\n", hle::fs::PathText(app0_patch).c_str());
+            std::printf("update     : %s  (overlaying /app0)\n", hle::fs::PathText(app0_patch).c_str());
         }
         std::printf("/temp0     : %s\n", hle::fs::PathText((root / "assets" / "temp0")).c_str());
-        std::printf("saves      : %s  (montados em /savedataN por sceSaveDataMount)\n",
+        std::printf("saves      : %s  (mounted at /savedataN by sceSaveDataMount)\n",
                     hle::fs::PathText((root / "assets" / "savedata0")).c_str());
     }
     runtime::RegisterCurrentThread("main");
@@ -1506,26 +1506,26 @@ int main(int argc, char** argv) {
     // ---- 1. carga ---------------------------------------------------------
     loader::ElfPieLoader elf;
     if (!elf.Load(elf_path)) {
-        std::printf("ERRO ao carregar %s: %s\n", hle::fs::PathText(elf_path).c_str(), elf.error().c_str());
+        std::printf("ERROR loading %s: %s\n", hle::fs::PathText(elf_path).c_str(), elf.error().c_str());
         return 1;
     }
     runtime::SetGuestImage(elf.base_address(), elf.image_size(), loader::ElfPieLoader::kReserveSize);
     std::printf("ELF        : %s\n", hle::fs::PathText(elf_path).c_str());
-    std::printf("Base       : 0x%" PRIx64 "  (reserva de %" PRIu64 " MiB, imagem de %.1f MiB)\n",
+    std::printf("Base       : 0x%" PRIx64 "  (reservation of %" PRIu64 " MiB, image of %.1f MiB)\n",
                 elf.base_address(), loader::ElfPieLoader::kReserveSize >> 20,
                 elf.image_size() / 1048576.0);
 
     // ---- 2. relocacoes ----------------------------------------------------
     elf.Relocate();
     const auto& rs = elf.reloc_stats();
-    std::printf("Relocacoes : .rela.dyn=%" PRIu64 "  .rela.plt=%" PRIu64 "  nao resolvidas=%" PRIu64
-                "  tipos desconhecidos=%zu\n",
+    std::printf("Relocations: .rela.dyn=%" PRIu64 "  .rela.plt=%" PRIu64 "  unresolved=%" PRIu64
+                "  unknown types=%zu\n",
                 rs.rela_dyn, rs.rela_plt, rs.unresolved, rs.unknown_types.size());
 
     // ---- 3. TLS + patch de FS ---------------------------------------------
     runtime::OrbisTls tls;
     if (!tls.AllocateSlot() || !tls.SetupCurrentThread(elf.tls(), elf.base())) {
-        std::printf("ERRO: nao foi possivel montar o TLS da thread principal\n");
+        std::printf("ERROR: could not initialize main thread TLS\n");
         return 1;
     }
     for (const auto& seg : elf.segments()) {
@@ -1534,25 +1534,25 @@ int main(int argc, char** argv) {
         }
         const auto ps = patcher::PatchFsThreadPointer(elf.base() + seg.vaddr, seg.filesz, tls.gs_offset());
         std::printf("Patch FS   : %" PRIu64 " x 'mov r64, fs:[0]' -> gs:[0x%x]\n", ps.patched, tls.gs_offset());
-        std::printf("             %" PRIu64 " x 'mov r64, fs:[disp != 0]' (forma absoluta, achado confiavel)\n",
+        std::printf("             %" PRIu64 " x 'mov r64, fs:[disp != 0]' (absolute form, reliable match)\n",
                     ps.absolute_nonzero);
         for (const auto& [off, disp] : ps.absolute_nonzero_samples) {
             std::printf("               eboot+0x%" PRIx64 "  disp=0x%" PRIx64 "\n", seg.vaddr + off, (u64)disp);
         }
-        std::printf("             %" PRIu64 " outros candidatos com prefixo FS (inclui .rodata e meio de "
-                    "instrucao; o VEH avisa se algum for executado)\n",
+        std::printf("             %" PRIu64 " other candidates with FS prefix (includes .rodata and middle of "
+                    "instruction; VEH reports any that execute)\n",
                     ps.other_forms);
     }
 
     if (g_skip_cutscenes) {
-        std::printf("Cutscenes : %s\n", PatchCutsceneSkip(elf.base()) ? "todas podem ser puladas (--skip-cutscenes)"
-                                                                       : "AVISO: eboot diferente, mod de pular nao aplicado");
+        std::printf("Cutscenes : %s\n", PatchCutsceneSkip(elf.base()) ? "all can be skipped (--skip-cutscenes)"
+                                                                       : "WARNING: different eboot, skip mod not applied");
     }
     if (!selftest) {
         hle::anomaly::Install(elf.base()); // Fase 67: carregador de mods Anomaly (connorh315), se houver pacotes de mod
     }
     if (!elf.Protect()) {
-        std::printf("ERRO: %s\n", elf.error().c_str());
+        std::printf("ERROR: %s\n", elf.error().c_str());
         return 1;
     }
     if (selftest) {

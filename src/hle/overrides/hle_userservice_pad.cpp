@@ -118,7 +118,7 @@ HLE_IMPL(int, sceUserServiceGetUserName, int user_id, char* name, u64 size) {
 HLE_OVERRIDE(sceUserServiceGetUserName);
 
 HLE_IMPL(int, sceUserServiceGetUserColor, int user_id, int* color) {
-    HLE_TRACE("user=%d -> cor %d", user_id, user_id - kUserId);
+    HLE_TRACE("user=%d -> color %d", user_id, user_id - kUserId);
     if (!color || user_id < kUserId || user_id >= kUserId + kMaxUsers) {
         return kUserServiceErrorInvalidArgument;
     }
@@ -136,7 +136,7 @@ HLE_IMPL(int, sceUserServiceGetEvent, UserServiceEvent* event) {
     if (g_login_event_pending.exchange(false)) {
         event->event_type = 0;
         event->user_id = kUserId;
-        HLE_TRACE("-> LOGIN do usuario %d", kUserId);
+        HLE_TRACE("-> LOGIN for user %d", kUserId);
         return err::OK;
     }
     for (int slot = 1; slot < kMaxUsers; ++slot) {
@@ -150,11 +150,11 @@ HLE_IMPL(int, sceUserServiceGetEvent, UserServiceEvent* event) {
             }
             event->event_type = present ? 0 : 1; // 0 = login, 1 = logout
             event->user_id = user;
-            HLE_TRACE("-> %s do usuario %d (controle %s)", present ? "LOGIN" : "LOGOUT", user, present ? "conectado" : "desconectado");
+            HLE_TRACE("-> %s for user %d (controller %s)", present ? "LOGIN" : "LOGOUT", user, present ? "conectado" : "desconectado");
             return err::OK;
         }
     }
-    HLE_QUIET("-> sem evento");
+    HLE_QUIET("-> no event");
     return kUserServiceErrorNoEvent;
 }
 HLE_OVERRIDE(sceUserServiceGetEvent);
@@ -188,7 +188,7 @@ HLE_IMPL(int, sceSystemServiceParamGetInt, int param_id, int* value) {
     case 7: *value = 0; break;    // controle parental desligado
     case 1000: *value = 1; break; // confirmar com X
     default:
-        HLE_TRACE("id=%d -> parametro desconhecido", param_id);
+        HLE_TRACE("id=%d -> unknown parameter", param_id);
         return kSystemServiceErrorParameter;
     }
     HLE_TRACE("id=%d -> %d", param_id, *value);
@@ -244,7 +244,7 @@ HLE_IMPL(int, sceSystemServiceReceiveEvent, void* event) {
         words[0] = kSystemServiceEventEntitlementUpdate;
         words[1] = kUserId; // userId
         words[2] = 0;       // np_service_label
-        HLE_TRACE("-> ENTITLEMENT_UPDATE (DLC instalado)");
+        HLE_TRACE("-> ENTITLEMENT_UPDATE (DLC installed)");
         return err::OK;
     }
     return kSystemServiceErrorNoEvent;
@@ -328,7 +328,7 @@ void ScanAddcont() {
     g_addcont.clear();
     std::error_code ec;
     if (g_addcont_dir.empty() || !std::filesystem::is_directory(g_addcont_dir, ec)) {
-        log::Tagged("DLC", "pasta de DLC nao encontrada (%s): nenhum DLC", fs::PathText(g_addcont_dir).c_str());
+        log::Tagged("DLC", "DLC folder not found (%s): no DLC", fs::PathText(g_addcont_dir).c_str());
         return;
     }
     for (std::filesystem::directory_iterator it(g_addcont_dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -339,12 +339,12 @@ void ScanAddcont() {
         const auto category = ReadSfoString(sfo, "CATEGORY");
         const auto content_id = ReadSfoString(sfo, "CONTENT_ID");
         if (!category || category->compare(0, 2, "ac") != 0 || !content_id || content_id->size() <= 20) {
-            log::Tagged("DLC", "%s: sem param.sfo de conteudo adicional, ignorado", fs::PathText(it->path().filename()).c_str());
+            log::Tagged("DLC", "%s: no add-on content param.sfo, ignored", fs::PathText(it->path().filename()).c_str());
             continue;
         }
         const std::string label = content_id->substr(20, 16);
         g_addcont.push_back({label, it->path()});
-        log::Tagged("DLC", "%s instalado [%s]", label.c_str(), fs::PathText(it->path()).c_str());
+        log::Tagged("DLC", "%s installed [%s]", label.c_str(), fs::PathText(it->path()).c_str());
     }
 }
 
@@ -368,7 +368,7 @@ HLE_IMPL(int, sceAppContentGetAddcontInfoList, u32 service_label, AddcontInfo* l
             return kAppContentErrorParameter;
         }
         *hit_num = static_cast<u32>(g_addcont.size());
-        HLE_TRACE("label=%u -> %u DLCs (so a contagem)", service_label, *hit_num);
+        HLE_TRACE("label=%u -> %u DLCs (count only)", service_label, *hit_num);
         return err::OK;
     }
     const u32 count = std::min<u32>(list_num, static_cast<u32>(g_addcont.size()));
@@ -391,7 +391,7 @@ HLE_IMPL(int, sceAppContentGetAddcontInfo, u32 service_label, const EntitlementL
     }
     std::lock_guard lock(g_addcont_mutex);
     const int index = FindAddcont(label->data);
-    HLE_TRACE("label=%u \"%.16s\" -> %s", service_label, label->data, index < 0 ? "SEM DIREITO" : "instalado");
+    HLE_TRACE("label=%u \"%.16s\" -> %s", service_label, label->data, index < 0 ? "NOT ENTITLED" : "instalado");
     if (index < 0) {
         return kAppContentErrorNoEntitlement;
     }
@@ -408,7 +408,7 @@ HLE_IMPL(int, sceAppContentGetEntitlementKey, u32 service_label, const Entitleme
     }
     std::lock_guard lock(g_addcont_mutex);
     const int index = FindAddcont(label->data);
-    HLE_TRACE("label=%u \"%.16s\" -> %s", service_label, label->data, index < 0 ? "SEM DIREITO" : "chave zerada");
+    HLE_TRACE("label=%u \"%.16s\" -> %s", service_label, label->data, index < 0 ? "NOT ENTITLED" : "zeroed key");
     if (index < 0) {
         return kAppContentErrorNoEntitlement;
     }
@@ -424,7 +424,7 @@ HLE_IMPL(int, sceAppContentAddcontMount, u32 service_label, const EntitlementLab
     std::lock_guard lock(g_addcont_mutex);
     const int index = FindAddcont(label->data);
     if (index < 0) {
-        HLE_TRACE("label=%u \"%.16s\" -> NAO ENCONTRADO", service_label, label->data);
+        HLE_TRACE("label=%u \"%.16s\" -> NOT FOUND", service_label, label->data);
         return kAppContentErrorNotFound;
     }
     std::memset(mount_point, 0, sizeof(*mount_point));
@@ -457,7 +457,7 @@ HLE_IMPL(int, sceAppContentInitialize, const void* init_param, void* boot_param)
 HLE_OVERRIDE(sceAppContentInitialize);
 
 HLE_IMPL(int, sceAppContentTemporaryDataMount2, int option, AppContentMountPoint* mount_point) {
-    HLE_TRACE("opcao=%d -> /temp0", option);
+    HLE_TRACE("option=%d -> /temp0", option);
     if (!mount_point) {
         return kAppContentErrorParameter;
     }

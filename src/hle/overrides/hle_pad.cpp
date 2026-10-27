@@ -170,13 +170,13 @@ void ProbeGame(u64 return_address, u64 guest_rbp, const void* data) {
         for (int slot = 0; slot < 16; ++slot) {
             const u64 entry = base + kPadTable + slot * 0x18;
             if (Peek<s32>(entry) != -1 || Peek<u64>(entry + 8) == reinterpret_cast<u64>(data)) {
-                log::Tagged("PAD", "tabela do jogo, slot %d: userId=%d handle=%d ScePadData=%p em_uso=%u", slot,
+                log::Tagged("PAD", "game table, slot %d: userId=%d handle=%d ScePadData=%p in_use=%u", slot,
                             Peek<s32>(entry), Peek<s32>(entry + 4), reinterpret_cast<void*>(Peek<u64>(entry + 8)),
                             Peek<u8>(entry + 0x10));
             }
         }
         const u32 assign = Peek<u32>(base + kEnterAssign);
-        log::Tagged("PAD", "layout de botoes do jogo (eboot+0x%llx) = %u -> na mascara do jogo, X vira 0x%08x e O vira 0x%08x",
+        log::Tagged("PAD", "game button layout (eboot+0x%llx) = %u -> in game mask, X becomes 0x%08x and O becomes 0x%08x",
                     static_cast<unsigned long long>(kEnterAssign), assign, assign == 1 ? 0x80000000u : 0x40000000u,
                     assign == 1 ? 0x40000000u : 0x80000000u);
     }
@@ -207,10 +207,10 @@ void ProbeGame(u64 return_address, u64 guest_rbp, const void* data) {
             g_game_mask_changes.fetch_add(1);
             g_game_mask_or.fetch_or(view.mask);
         }
-        log::Tagged("PAD", "t=%.1fs JOGO ve: controle 0 de %u (slot %u, tipo %u) conectado=%u interceptado=%u mascara=0x%08x",
+        log::Tagged("PAD", "t=%.1fs GAME sees: controller 0 of %u (slot %u, type %u) connected=%u intercepted=%u mask=0x%08x",
                     Seconds(), view.objects, view.slot, view.type, view.connected, view.intercepted, view.mask);
     } else {
-        log::Tagged("PAD", "t=%.1fs sonda: objeto de controle do jogo nao encontrado", Seconds());
+        log::Tagged("PAD", "t=%.1fs probe: game controller object not found", Seconds());
     }
     g_game_view = view;
 }
@@ -237,7 +237,7 @@ std::string ButtonList(u32 buttons) {
             out += b.name;
         }
     }
-    return out.empty() ? "(nenhum)" : out;
+    return out.empty() ? "(none)" : out;
 }
 
 bool g_stick_log = false; // --stick-log
@@ -292,7 +292,7 @@ void ReadXInput(Input& in, DWORD index = 0) {
         const ULONGLONG now = GetTickCount64();
         if (now - last >= 500) {
             last = now;
-            std::printf("[PAD] analogico esquerdo: LeftX %u LeftY %u (XInput %d, %d) botoes 0x%04x\n", in.lx, in.ly, state.Gamepad.sThumbLX,
+            std::printf("[PAD] left stick: LeftX %u LeftY %u (XInput %d, %d) buttons 0x%04x\n", in.lx, in.ly, state.Gamepad.sThumbLX,
                         state.Gamepad.sThumbLY, b);
         }
     }
@@ -375,7 +375,7 @@ bool PadFocusGate() {
     }
     if (!allowed) {
         g_pad_blocked = true;
-        log::Tagged("PAD", "janela do jogo fora de foco: controle bloqueado");
+        log::Tagged("PAD", "game window not focused: controller blocked");
     }
     return allowed;
 }
@@ -384,7 +384,7 @@ u32 PadHeldSinceFocus(u32 buttons) {
     if (g_pad_blocked && PadFocusGate()) { // acabou de voltar o foco
         g_pad_blocked = false;
         g_pad_held_mask = buttons;
-        log::Tagged("PAD", "janela do jogo em foco: controle liberado");
+        log::Tagged("PAD", "game window focused: controller enabled");
     }
     g_pad_held_mask &= buttons; // botao solto sai da mascara
     return g_pad_held_mask;
@@ -476,7 +476,7 @@ void ReadLiveFile(double now, int player) {
         }
         cursor = step.end_s + 0.15; // folga entre dois toques do mesmo botao
         g_script.push_back(step);
-        log::Tagged("PAD", "t=%.1fs ao vivo (jogador %d): %s por %.0f ms", now, player + 1, name.c_str(), hold_ms);
+        log::Tagged("PAD", "t=%.1fs live (player %d): %s for %.0f ms", now, player + 1, name.c_str(), hold_ms);
     }
 }
 
@@ -507,7 +507,7 @@ void ReadScript(Input& in, int player = 0) {
     static std::atomic<u32> last_sticks{0x80808080};
     const u32 sticks = in.lx | (in.ly << 8) | (in.rx << 16) | (static_cast<u32>(in.ry) << 24);
     if (player == 0 && !g_script.empty() && last_sticks.exchange(sticks) != sticks) {
-        log::Tagged("PAD", "t=%.1fs analogicos: esquerdo (%u, %u) direito (%u, %u)  [128 = centro, 0 = cima/esquerda, 255 = baixo/direita]",
+        log::Tagged("PAD", "t=%.1fs sticks: left (%u, %u) right (%u, %u)  [128 = center, 0 = up/left, 255 = down/right]",
                     now, in.lx, in.ly, in.rx, in.ry);
     }
 }
@@ -579,8 +579,8 @@ HLE_IMPL(int, scePadOpen, int user_id, int type, int index, const void* param) {
     // Fase 61: usuarios 1 a 4 (co-op local), um controle cada; o handle e o proprio id do usuario
     const int result = (user_id >= kUserId && user_id < kUserId + padsdl::kSlots && index == 0) ? user_id : kPadErrorInvalidArg;
     XINPUT_STATE state{};
-    HLE_TRACE("user=%d tipo=%d indice=%d -> %d (controle XInput %s; teclado com a janela em foco)", user_id, type,
-              index, result, XInputGetState(0, &state) == ERROR_SUCCESS ? "detectado" : "nao detectado");
+    HLE_TRACE("user=%d type=%d index=%d -> %d (XInput controller %s; keyboard when window focused)", user_id, type,
+              index, result, XInputGetState(0, &state) == ERROR_SUCCESS ? "detectado" : "not detected");
     return result;
 }
 HLE_OVERRIDE(scePadOpen);
@@ -623,7 +623,7 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
         data->timestamp = g_last_timestamp;
         static std::atomic<u32> last_buttons[padsdl::kSlots];
         if (last_buttons[slot].exchange(other.buttons) != other.buttons) {
-            log::Tagged("PAD", "t=%.1fs jogador %d: botoes 0x%05x %s", Seconds(), slot + 1, other.buttons, ButtonList(other.buttons).c_str());
+            log::Tagged("PAD", "t=%.1fs player %d: buttons 0x%05x %s", Seconds(), slot + 1, other.buttons, ButtonList(other.buttons).c_str());
         }
         return err::OK;
     }
@@ -649,7 +649,7 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
             const ULONGLONG now = GetTickCount64();
             if (now - last >= 500) {
                 last = now;
-                std::printf("[PAD] analogico esquerdo (SDL): LeftX %u LeftY %u botoes 0x%05x\n", in.lx, in.ly, in.buttons);
+                std::printf("[PAD] left stick (SDL): LeftX %u LeftY %u buttons 0x%05x\n", in.lx, in.ly, in.buttons);
             }
         }
     } else if (pad_allowed && padsdl::Count() == 0) { // Fase 61: com outros controles no SDL, o XInput 0 seria um deles
@@ -686,7 +686,7 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
 
     const u32 previous = g_last_buttons.exchange(in.buttons);
     if (previous != in.buttons) {
-        log::Tagged("PAD", "t=%.1fs botoes 0x%05x %s", Seconds(), in.buttons, ButtonList(in.buttons).c_str());
+        log::Tagged("PAD", "t=%.1fs buttons 0x%05x %s", Seconds(), in.buttons, ButtonList(in.buttons).c_str());
     }
     return err::OK;
 }
@@ -749,7 +749,7 @@ void SetPadKeyboardEnabled(bool enabled) {
 }
 
 void PrintPadStats() {
-    std::printf("Pad        : %llu leituras; a mascara de botoes DENTRO do jogo mudou %llu vez(es) (bits vistos: 0x%08x)\n",
+    std::printf("Pad        : %llu reads; button mask INSIDE the game changed %llu time(s) (bits seen: 0x%08x)\n",
                 static_cast<unsigned long long>(g_reads.load()), static_cast<unsigned long long>(g_game_mask_changes.load()),
                 g_game_mask_or.load());
 }
@@ -834,14 +834,14 @@ void PadMacroTick(u64 draws, u64 stable_frames) {
         }
         if ((draws == 134 || draws == 136) && stable_frames >= 60) {
             if (g_spam_count) {
-                log::Tagged("MACRO", "t=%.1fs %d toques de X / O / triangulo enviados desde os 35 s para tentar pular a abertura", now,
+                log::Tagged("MACRO", "t=%.1fs %d X / O / triangle taps sent since 35 s to try skipping intro", now,
                             g_spam_count);
             }
-            MacroPress(kOptions, 0.0, 0.3, "tela de titulo (134/136 draws) parada: OPTIONS");
+            MacroPress(kOptions, 0.0, 0.3, "title screen (134/136 draws) idle: OPTIONS");
             g_macro_state = 1;
             g_macro_time = now;
         } else if ((draws == 175 || draws == 176) && stable_frames >= 30) {
-            log::Tagged("MACRO", "t=%.1fs ja no menu principal (um dos %d toques de pular a abertura passou da tela de titulo)", now,
+            log::Tagged("MACRO", "t=%.1fs already at main menu (one of %d intro-skip taps passed the title screen)", now,
                         g_spam_count);
             g_macro_state = 1;
             g_macro_time = now;
@@ -852,15 +852,15 @@ void PadMacroTick(u64 draws, u64 stable_frames) {
             // Fase 32: com saves em disco o cursor ja comeca em "Carregar Jogo" (o D-PAD BAIXO que havia
             // aqui o levava para "Opcoes"). O macro so e usado com saves.
             if (std::getenv("LD_MACRO_NEWGAME")) { // testes: sobe para "Novo Jogo"
-                MacroPress(kUp, 0.5, 0.1, "menu principal parado: D-PAD CIMA (Carregar Jogo -> Novo Jogo)");
+                MacroPress(kUp, 0.5, 0.1, "main menu idle: D-PAD UP (Load Game -> New Game)");
             }
-            MacroPress(kCross, 2.5, 0.3, "menu principal (175/176 draws) parado: X");
+            MacroPress(kCross, 2.5, 0.3, "main menu (175/176 draws) idle: X");
             g_macro_state = 2;
             g_macro_time = now + 2.5;
             g_macro_presses = 0;
         } else if (now - g_macro_time > 60.0) {
-            log::Tagged("MACRO", "t=%.1fs o menu principal (175/176 draws) nao apareceu em 60 s depois do OPTIONS (tela atual: %llu "
-                                 "draws). Sem save o jogo passa por outras telas; macro encerrado.",
+            log::Tagged("MACRO", "t=%.1fs main menu (175/176 draws) did not appear within 60 s of OPTIONS (current screen: %llu "
+                                 "draws). Without a save the game passes through other screens; macro ended.",
                         now, static_cast<unsigned long long>(draws));
             g_macro_state = 3;
         }
@@ -870,18 +870,18 @@ void PadMacroTick(u64 draws, u64 stable_frames) {
             ++g_macro_presses;
             g_macro_time = now;
             char what[96];
-            std::snprintf(what, sizeof(what), "X de confirmacao %d de 3 (tela atual: %llu draws)", g_macro_presses,
+            std::snprintf(what, sizeof(what), "confirmation X %d of 3 (current screen: %llu draws)", g_macro_presses,
                           static_cast<unsigned long long>(draws));
             if (draws == 151) {
-                log::Tagged("MACRO", "t=%.1fs a tela e a de OPCOES (151 draws): \"Carregar Jogo\" esta desabilitado e o cursor "
-                                     "pulou para \"Opcoes\". Saindo com O; macro encerrado.", now);
-                MacroPress(kCircle, 0.0, 0.3, "O (volta ao menu principal)");
+                log::Tagged("MACRO", "t=%.1fs screen is OPTIONS (151 draws): \"Load Game\" is disabled and cursor "
+                                     "jumped to \"Options\". Returning with O; macro ended.", now);
+                MacroPress(kCircle, 0.0, 0.3, "O (return to main menu)");
                 g_macro_state = 3;
                 break;
             }
             MacroPress(kCross, 0.0, 0.3, what);
         } else if (g_macro_presses >= 3) {
-            log::Tagged("MACRO", "t=%.1fs macro \"Carregar Jogo\" terminado", now);
+            log::Tagged("MACRO", "t=%.1fs \"Load Game\" macro finished", now);
             g_macro_state = 3;
         }
         break;

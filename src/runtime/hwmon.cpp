@@ -177,7 +177,7 @@ void Loop() {
     Nvml nvml;
     const bool has_adl = adl.Open();
     const bool has_nvml = !has_adl && nvml.Open();
-    std::printf("[INFO] contador de FPS: GPU %s\n", has_adl ? "AMD (ADL)" : has_nvml ? "NVIDIA (NVML)" : "sem leitura (so FPS, CPU e RAM)");
+    std::printf("[INFO] FPS counter: GPU %s\n", has_adl ? "AMD (ADL)" : has_nvml ? "NVIDIA (NVML)" : "no readings (FPS, CPU and RAM only)");
     FILETIME idle0{}, kernel0{}, user0{};
     GetSystemTimes(&idle0, &kernel0, &user0);
     for (;;) {

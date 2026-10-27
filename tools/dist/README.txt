@@ -32,6 +32,13 @@ WHAT YOU NEED
   - (Optional) DS4/Xbox controllers (up to 4 for local co-op) and, for the portal, the real Toy Pad on
     USB, or the LegoToypad app, or assets\portal.json.
 
+COMPACT BETA LAUNCHER
+  The home screen contains PLAY, Mods, Settings and Tools. Folder paths and
+  game options are under Settings. Extract PKG, save transfer, Prepare and update
+  checks are under Tools. Show details expands the log. New settings default to
+  English; existing settings and mod states are retained. Each installed mod
+  exposes its enabled state, metadata, file counts and source folder.
+
 HOW TO USE
   1. Open LegoDimensionsLauncher.exe.
      If the game, the update or the DLCs are .pkg files, click "Extract PKG..." (at the top), pick the

@@ -90,7 +90,7 @@ bool Disassemble(u64 address, int count, bool* uses_fs = nullptr) {
         ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
         const auto* bytes = reinterpret_cast<const u8*>(address);
         if (ZYAN_FAILED(ZydisDecoderDecodeFull(&decoder, bytes, avail, &insn, ops))) {
-            std::printf("  %s %-28s  (bytes invalidos: %02x)\n", i == 0 ? "=>" : "  ",
+            std::printf("  %s %-28s  (invalid bytes: %02x)\n", i == 0 ? "=>" : "  ",
                         DescribeAddress(address).c_str(), bytes[0]);
             return true;
         }
@@ -112,7 +112,7 @@ bool Disassemble(u64 address, int count, bool* uses_fs = nullptr) {
 }
 
 void DumpContext(const CONTEXT& c) {
-    std::printf("Registradores:\n");
+    std::printf("Registers:\n");
     std::printf("  RAX=%016" PRIx64 "  RBX=%016" PRIx64 "  RCX=%016" PRIx64 "  RDX=%016" PRIx64 "\n",
                 (u64)c.Rax, (u64)c.Rbx, (u64)c.Rcx, (u64)c.Rdx);
     std::printf("  RSI=%016" PRIx64 "  RDI=%016" PRIx64 "  RBP=%016" PRIx64 "  RSP=%016" PRIx64 "\n",
@@ -124,7 +124,7 @@ void DumpContext(const CONTEXT& c) {
     std::printf("  RIP=%016" PRIx64 "  EFLAGS=%08lx  (%s)\n", (u64)c.Rip, c.EFlags,
                 DescribeAddress(c.Rip).c_str());
 
-    std::printf("Pilha (a partir de RSP):\n");
+    std::printf("Stack (from RSP):\n");
     for (int i = 0; i < 8; ++i) {
         const u64 addr = c.Rsp + i * 8;
         if (!IsReadable(addr, 8)) {
@@ -137,7 +137,7 @@ void DumpContext(const CONTEXT& c) {
 
     // Sem unwind info do jogo: qualquer valor na pilha que aponte para dentro da imagem e
     // tratado como possivel endereco de retorno.
-    std::printf("Possiveis enderecos de retorno na pilha:\n");
+    std::printf("Possible return addresses on stack:\n");
     int found = 0;
     for (u64 addr = c.Rsp; found < 10 && addr < c.Rsp + 0x800 && IsReadable(addr, 8); addr += 8) {
         const u64 value = *reinterpret_cast<const u64*>(addr);
@@ -147,7 +147,7 @@ void DumpContext(const CONTEXT& c) {
         }
     }
     if (!found) {
-        std::printf("  (nenhum)\n");
+        std::printf("  (none)\n");
     }
 }
 
@@ -180,29 +180,29 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
     hle::log::FlushGameText();
     std::fflush(stdout);
     std::printf("\n======================== CRASH DUMP ========================\n");
-    std::printf("Excecao : 0x%08lX %s\n", rec->ExceptionCode, name);
+    std::printf("Exception: 0x%08lX %s\n", rec->ExceptionCode, name);
     std::printf("Thread  : %s (tid %lu)\n", CurrentThreadName(), GetCurrentThreadId());
     if ((rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
          rec->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) && rec->NumberParameters >= 2) {
-        static const char* kOps[] = {"leitura de", "escrita em", "?", "?", "?", "?", "?", "?",
-                                     "execucao de"};
+        static const char* kOps[] = {"read from", "write to", "?", "?", "?", "?", "?", "?",
+                                     "execute from"};
         const ULONG_PTR op = rec->ExceptionInformation[0];
-        std::printf("Acesso  : %s 0x%016" PRIx64 "\n", op <= 8 ? kOps[op] : "?",
+        std::printf("Access  : %s 0x%016" PRIx64 "\n", op <= 8 ? kOps[op] : "?",
                     (u64)rec->ExceptionInformation[1]);
     }
     std::printf("Local   : %s\n", DescribeAddress(c.Rip).c_str());
 
-    std::printf("Instrucao:\n");
+    std::printf("Instruction:\n");
     bool uses_fs = false;
     if (!Disassemble(c.Rip, 5, &uses_fs)) {
-        std::printf("  RIP aponta para memoria nao mapeada (salto/call para ponteiro invalido).\n");
+        std::printf("  RIP points to unmapped memory (jump/call to invalid pointer).\n");
         if (IsReadable(c.Rsp, 8)) {
             const u64 ret = *reinterpret_cast<const u64*>(c.Rsp);
-            std::printf("  Provavel chamador: %s\n", DescribeAddress(ret).c_str());
+            std::printf("  Likely caller: %s\n", DescribeAddress(ret).c_str());
         }
     }
     if (uses_fs) {
-        std::printf("  ** A instrucao usa o segmento FS e nao foi coberta pelo patcher de TLS. **\n");
+        std::printf("  ** Instruction uses FS segment and was not covered by TLS patcher. **\n");
     }
     DumpContext(c);
     hle::log::DumpHistory();
@@ -238,7 +238,7 @@ void InstallCrashHandler() {
 
 GuestThread* RegisterCurrentThread(const char* name) {
     auto* t = new GuestThread;
-    std::snprintf(t->name, sizeof(t->name), "%s", name && *name ? name : "sem-nome");
+    std::snprintf(t->name, sizeof(t->name), "%s", name && *name ? name : "unnamed");
     t->thread_id = GetCurrentThreadId();
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &t->handle, 0, FALSE,
                     DUPLICATE_SAME_ACCESS);
@@ -404,7 +404,7 @@ void SampleThreads(double seconds, const char* reason) {
         Sleep(4);
     }
 
-    std::printf("\n======================== PERFIL DE CPU: %s (%.1f s, %u amostras por thread) ========================\n", reason,
+    std::printf("\n======================== CPU PROFILE: %s (%.1f s, %u samples per thread) ========================\n", reason,
                 seconds, rounds);
     for (const Track& track : tracks) {
         std::map<std::string, u32> places;
@@ -418,7 +418,7 @@ void SampleThreads(double seconds, const char* reason) {
             if (InImage(sample.rip)) {
                 // dentro do jogo: agrupa por pagina de 4 KiB do eboot
                 char text[48];
-                std::snprintf(text, sizeof(text), "codigo do jogo em eboot+0x%llx",
+                std::snprintf(text, sizeof(text), "game code at eboot+0x%llx",
                               static_cast<unsigned long long>((sample.rip - g_base) & ~0xFFFull));
                 place = text;
             } else {
@@ -436,7 +436,7 @@ void SampleThreads(double seconds, const char* reason) {
         if (busy < 2.0) {
             continue;
         }
-        std::printf("* %-24s executando em %.0f%% das amostras\n", track.thread->name, busy);
+        std::printf("* %-24s running in %.0f%% of samples\n", track.thread->name, busy);
         std::vector<std::pair<u32, std::string>> ranked;
         for (const auto& [place, count] : places) {
             ranked.emplace_back(count, place);
@@ -446,8 +446,8 @@ void SampleThreads(double seconds, const char* reason) {
             std::printf("    %5.1f%%  %s\n", 100.0 * ranked[i].first / track.samples.size(), ranked[i].second.c_str());
         }
     }
-    std::printf("  (threads com menos de 2%% de execucao omitidas; \"executando\" = fora de uma espera bloqueante do HLE)\n");
-    std::printf("======================== fim do perfil ========================\n");
+    std::printf("  (threads running in fewer than 2%% of samples omitted; \"running\" = outside a blocking HLE wait)\n");
+    std::printf("======================== end of profile ========================\n");
     std::fflush(stdout);
 }
 
@@ -497,7 +497,7 @@ void ProfileThreadDeep(const char* thread_name, double seconds, const char* reas
         }
     }
     if (!target) {
-        std::printf("[PERFIL] thread \"%s\" nao encontrada\n", thread_name);
+        std::printf("[PROFILE] thread \"%s\" not found\n", thread_name);
         return;
     }
     std::vector<std::vector<u64>> stacks;
@@ -554,7 +554,7 @@ void ProfileThreadDeep(const char* thread_name, double seconds, const char* reas
         }
     }
     const double total = std::max<size_t>(1, stacks.size() + waiting);
-    std::printf("\n======================== PERFIL PROFUNDO: thread %s, %s (%.1f s, %u amostras: %u em espera do HLE, %u no codigo do jogo) "
+    std::printf("\n======================== DEEP PROFILE: thread %s, %s (%.1f s, %u samples: %u waiting in HLE, %u in game code) "
                 "========================\n",
                 thread_name, reason, seconds, rounds, waiting, in_guest);
     auto print = [&](const char* title, const std::map<std::string, u32>& map, size_t limit) {
@@ -568,10 +568,10 @@ void ProfileThreadDeep(const char* thread_name, double seconds, const char* reas
             std::printf("    %5.1f%%  %s\n", 100.0 * ranked[i].first / total, ranked[i].second.c_str());
         }
     };
-    print("inclusivo (a funcao e o que ela chamou)", inclusive, 45);
-    print("exclusivo (a propria funcao)", exclusive, 30);
-    print("por funcao do executavel (a mais interna; inclui as DLLs que ela chamou)", own, 30);
-    std::printf("======================== fim do perfil profundo ========================\n");
+    print("inclusive (function and its callees)", inclusive, 45);
+    print("exclusive (function itself)", exclusive, 30);
+    print("by executable function (innermost; includes DLLs called by it)", own, 30);
+    std::printf("======================== end of deep profile ========================\n");
     std::fflush(stdout);
 }
 
@@ -615,11 +615,11 @@ void DumpStallStacks(const char* reason) {
         }
         ResumeThread(shot.thread->handle);
     }
-    std::printf("[TRAVADA-PILHAS] %s\n", reason);
+    std::printf("[STALL-STACKS] %s\n", reason);
     for (const Snapshot& shot : shots) {
         std::string line;
         if (shot.guest_rip) {
-            line = "codigo do jogo em " + DescribeAddress(shot.guest_rip);
+            line = "game code at " + DescribeAddress(shot.guest_rip);
         } else {
             for (u32 i = 0; i < shot.count && i < 7; ++i) {
                 line += (i ? " <- " : "") + HostSymbol(shot.frames[i]);
@@ -631,9 +631,9 @@ void DumpStallStacks(const char* reason) {
         if (line.size() > 600) {
             line.resize(600);
         }
-        std::printf("[TRAVADA-PILHAS]   %-22s %s%s%s\n", shot.thread->name, shot.waiting ? "[espera: " : "", shot.waiting ? shot.waiting : "",
+        std::printf("[STALL-STACKS]   %-22s %s%s%s\n", shot.thread->name, shot.waiting ? "[wait: " : "", shot.waiting ? shot.waiting : "",
                     shot.waiting ? "] " : "");
-        std::printf("[TRAVADA-PILHAS]       %s\n", line.c_str());
+        std::printf("[STALL-STACKS]       %s\n", line.c_str());
     }
     std::fflush(stdout);
 }
@@ -680,21 +680,21 @@ void DumpAllThreads(const char* reason) {
     }
 
     std::printf("\n======================== %s ========================\n", reason);
-    std::printf("%zu thread(s) do jogo vivas:\n", snaps.size());
+    std::printf("%zu live game thread(s):\n", snaps.size());
     for (const auto& s : snaps) {
         const char* waiting = s.thread->waiting.load();
-        std::printf("* %-24s tid=%-6lu %s%s  (%llu esperas ja concluidas)\n", s.thread->name, s.thread->thread_id,
-                    waiting ? "BLOQUEADA em " : "executando", waiting ? waiting : "",
+        std::printf("* %-24s tid=%-6lu %s%s  (%llu completed waits)\n", s.thread->name, s.thread->thread_id,
+                    waiting ? "BLOCKED in " : "executando", waiting ? waiting : "",
                     static_cast<unsigned long long>(s.thread->waits_completed.load()));
         if (!s.ok) {
             continue;
         }
         std::printf("    RIP=%s", DescribeAddress(s.context.Rip).c_str());
-        std::printf("   enderecos do eboot na pilha:");
+        std::printf("   eboot addresses on stack:");
         for (const u64 r : s.returns) {
             std::printf(" %s", DescribeAddress(r).c_str());
         }
-        std::printf("%s\n", s.returns.empty() ? " (nenhum)" : "");
+        std::printf("%s\n", s.returns.empty() ? " (none)" : "");
     }
     hle::log::DumpHistory();
     std::printf("============================================================\n");

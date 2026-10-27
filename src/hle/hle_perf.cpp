@@ -36,13 +36,13 @@ void PrintWindow(double seconds, u64 frames) {
     std::string line;
     char item[160];
     for (const Row& row : rows) {
-        std::snprintf(item, sizeof(item), "%s%s %.2f ms/frame (%.0f chamadas/frame, pior %.1f ms)", line.empty() ? "" : " | ",
+        std::snprintf(item, sizeof(item), "%s%s %.2f ms/frame (%.0f calls/frame, worst %.1f ms)", line.empty() ? "" : " | ",
                       row.name, frames ? row.ns / 1e6 / frames : 0.0, frames ? static_cast<double>(row.calls) / frames : 0.0,
                       row.max_ns / 1e6);
         line += item;
     }
-    log::Tagged("PERF", "%.1f quadros/s (%.1f ms por frame) | %s", seconds > 0 ? frames / seconds : 0.0, frame_ms, line.c_str());
-    log::Tagged("PERF", "HLE mais chamados por frame: %s", log::TopCallDeltas(12, frames).c_str());
+    log::Tagged("PERF", "%.1f frames/s (%.1f ms per frame) | %s", seconds > 0 ? frames / seconds : 0.0, frame_ms, line.c_str());
+    log::Tagged("PERF", "Most called HLE functions per frame: %s", log::TopCallDeltas(12, frames).c_str());
 }
 
 } // namespace hle::perf

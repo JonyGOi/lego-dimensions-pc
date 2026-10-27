@@ -184,14 +184,14 @@ def main():
             elif platform in PLATFORMS and (platform not in found or pack.upper().startswith('PATCH')):
                 found[platform] = (pack, data)
     if 'ps4' not in found:
-        print('ERRO folha de icones do PS4 nao encontrada nos .DAT', flush=True)
+        print('ERROR PS4 icon sheet not found in .DAT archives', flush=True)
         return 1
     sheets = {}
     for platform, (pack, data) in found.items():
         sheet = parse_tsh(data, names)
         sprites, w, h, fourcc, blocks = sheet
         sheets[platform] = {'sheet': sheet, 'image': decode_dxt(blocks, w, h, fourcc)}
-        print('icones %-8s %s: %dx%d %s, %d recortes' % (platform, pack, w, h, fourcc.decode(), len(sprites)), flush=True)
+        print('icons %-8s %s: %dx%d %s, %d sprites' % (platform, pack, w, h, fourcc.decode(), len(sprites)), flush=True)
     os.makedirs(OUT, exist_ok=True)
     ps4 = sheets['ps4']
     _s, w4, h4, fourcc4, blocks4 = ps4['sheet']
@@ -206,7 +206,7 @@ def main():
             f.write(b''.join(bytes(row) for row in image))
         if args.png:
             write_png(os.path.join(OUT, platform + '.png'), image, w4, h4)
-        print('icones %s prontos' % platform, flush=True)
+        print('icons %s ready' % platform, flush=True)
     return 0
 
 

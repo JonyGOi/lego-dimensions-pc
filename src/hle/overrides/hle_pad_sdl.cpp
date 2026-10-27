@@ -109,10 +109,10 @@ void Thread() {
     SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (!SDL_Init(SDL_INIT_GAMEPAD)) {
-        std::printf("[PAD-SDL] SDL_Init falhou: %s (fica so o XInput)\n", SDL_GetError());
+        std::printf("[PAD-SDL] SDL_Init failed: %s (XInput remains available)\n", SDL_GetError());
         return;
     }
-    std::printf("[PAD-SDL] SDL %d.%d.%d iniciado; esperando controles (ate %d, um por jogador)\n", SDL_MAJOR_VERSION, SDL_MINOR_VERSION,
+    std::printf("[PAD-SDL] SDL %d.%d.%d started; waiting for controllers (up to %d, one per player)\n", SDL_MAJOR_VERSION, SDL_MINOR_VERSION,
                 SDL_MICRO_VERSION, kSlots);
     for (;;) {
         SDL_Event event;
@@ -136,7 +136,7 @@ void Thread() {
                     const char* name = SDL_GetGamepadName(slot.pad);
                     {
                         std::lock_guard lock(g_mutex);
-                        std::snprintf(slot.name, sizeof(slot.name), "%s", name ? name : "controle");
+                        std::snprintf(slot.name, sizeof(slot.name), "%s", name ? name : "controller");
                         // Fase 62: icones dos botoes pelo tipo de controle (os genericos seguem o layout do Xbox)
                         switch (SDL_GetGamepadType(slot.pad)) {
                         case SDL_GAMEPAD_TYPE_PS4:
@@ -152,7 +152,7 @@ void Thread() {
                         }
                     }
                     SDL_SetGamepadPlayerIndex(slot.pad, free_slot); // LED / luz do controle com o numero do jogador
-                    std::printf("[PAD-SDL] controle aberto como jogador %d: %s (tipo %s, %d touchpad(s))\n", free_slot + 1,
+                    std::printf("[PAD-SDL] controller opened as player %d: %s (type %s, %d touchpad(s))\n", free_slot + 1,
                                 name ? name : "?", SDL_GetGamepadStringForType(SDL_GetGamepadType(slot.pad)),
                                 SDL_GetNumGamepadTouchpads(slot.pad));
                 }
@@ -160,7 +160,7 @@ void Thread() {
                 for (int i = 0; i < kSlots; ++i) {
                     Slot& slot = g_slots[i];
                     if (slot.pad && slot.id == event.gdevice.which) {
-                        std::printf("[PAD-SDL] controle do jogador %d desconectado\n", i + 1);
+                        std::printf("[PAD-SDL] player %d controller disconnected\n", i + 1);
                         SDL_CloseGamepad(slot.pad);
                         slot.pad = nullptr;
                         std::lock_guard lock(g_mutex);

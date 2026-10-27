@@ -151,7 +151,7 @@ void CompleteRead(Transfer* transfer, const toypad::Packet& packet) {
 }
 
 HLE_IMPL(int, sceUsbdInit) {
-    HLE_TRACE("Toy Pad virtual %s", g_toypad_connected ? "CONECTADO (--toypad)" : "desconectado");
+    HLE_TRACE("Virtual Toy Pad %s", g_toypad_connected ? "CONNECTED (--toypad)" : "desconectado");
     return err::OK;
 }
 HLE_OVERRIDE(sceUsbdInit);
@@ -174,7 +174,7 @@ HLE_IMPL(s64, sceUsbdGetDeviceList, Device*** list) {
     const int count = g_toypad_connected ? 1 : 0;
     auto** devices = new Device*[2]{g_toypad_connected ? &g_device : nullptr, nullptr};
     *list = devices;
-    HLE_QUIET("-> %d dispositivo(s)", count);
+    HLE_QUIET("-> %d device(s)", count);
     return count;
 }
 HLE_OVERRIDE(sceUsbdGetDeviceList);
@@ -209,7 +209,7 @@ HLE_OVERRIDE(sceUsbdGetDeviceAddress);
 
 HLE_IMPL(Handle*, sceUsbdOpenDeviceWithVidPid, u16 vendor, u16 product) {
     const bool match = g_toypad_connected && vendor == kToypadVendor && product == kToypadProduct;
-    HLE_TRACE("%04x:%04x -> %s", vendor, product, match ? "aberto" : "nao encontrado");
+    HLE_TRACE("%04x:%04x -> %s", vendor, product, match ? "opened" : "not found");
     return match ? &g_handle : nullptr;
 }
 HLE_OVERRIDE(sceUsbdOpenDeviceWithVidPid);
@@ -501,13 +501,13 @@ void PortalWatcher() {
             }
             if (applied.present) {
                 if (const auto event = toypad::RemoveFigure(pad)) {
-                    log::Tagged("PORTAL", "figura REMOVIDA da zona %d (id %u)", pad, applied.id);
+                    log::Tagged("PORTAL", "figure REMOVED from zone %d (id %u)", pad, applied.id);
                     InjectPacket(*event);
                 }
             }
             if (wanted.present) {
                 if (const auto event = toypad::PlaceFigure(pad, wanted.uid, wanted.id)) {
-                    log::Tagged("PORTAL", "figura COLOCADA na zona %d: id %u, uid %02x %02x %02x %02x %02x %02x %02x", pad,
+                    log::Tagged("PORTAL", "figure PLACED in zone %d: id %u, uid %02x %02x %02x %02x %02x %02x %02x", pad,
                                 wanted.id, wanted.uid[0], wanted.uid[1], wanted.uid[2], wanted.uid[3], wanted.uid[4],
                                 wanted.uid[5], wanted.uid[6]);
                     InjectPacket(*event);
@@ -526,7 +526,7 @@ void InjectToypadPacket(const toypad::Packet& packet) {
 
 void TakeToypadExternalControl() {
     if (!g_external_control.exchange(true)) {
-        log::Tagged("PORTAL", "o app LegoToypad assumiu o portal: portal.json deixa de valer nesta execucao");
+        log::Tagged("PORTAL", "LegoToypad app took over portal: portal.json no longer applies to this run");
         // As figuras do portal.json saem JA, antes de o pedido do app ser atendido: elas usam os
         // indices 1..3, os mesmos que o app pode escolher.
         const bool ready = toypad::SessionReady();

@@ -130,7 +130,7 @@ HLE_IMPL(int, sceFiosFHOpenSync, const void* attr, int* out_fh, const char* path
     auto file = fs::Open("sceFiosFHOpenSync", path, mode, &error);
     if (!file) {
         *out_fh = 0;
-        HLE_QUIET("\"%s\" flags=0x%x -> erro 0x%x", path, flags, ToFiosError(error));
+        HLE_QUIET("\"%s\" flags=0x%x -> error 0x%x", path, flags, ToFiosError(error));
         return ToFiosError(error);
     }
     std::lock_guard lock(g_mutex);
@@ -268,7 +268,7 @@ HLE_OVERRIDE(sceFiosDHOpenSync);
 HLE_IMPL(int, sceFiosDHOpen, const void* attr, int* out_dh, const char* path, void* buffer, u64 buffer_size) {
     u64 needed = 0;
     const int result = OpenDirectory("sceFiosDHOpen", out_dh, path, buffer_size, &needed);
-    HLE_QUIET("\"%s\" buffer=%" PRIu64 " -> 0x%x, precisa de %" PRIu64, path, buffer_size, result, needed);
+    HLE_QUIET("\"%s\" buffer=%" PRIu64 " -> 0x%x, requires %" PRIu64, path, buffer_size, result, needed);
     std::lock_guard lock(g_mutex);
     const int op = g_next_op++;
     g_ops[op] = {result, static_cast<s64>(needed)};

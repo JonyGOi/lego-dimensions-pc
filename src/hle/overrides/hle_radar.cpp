@@ -84,7 +84,7 @@ Pack LoadPack(const std::string& name) {
         entry.packed = std::strtoull(line.c_str() + t2 + 1, nullptr, 10);
         entry.offset = std::strtoull(line.c_str() + t3 + 1, nullptr, 10);
         if (entry.name.empty()) {
-            entry.name = "(sem nome)";
+            entry.name = "(unnamed)";
         }
         pack.entries.push_back(std::move(entry));
     }
@@ -174,9 +174,9 @@ void OnRead(const std::string& guest_path, s64 offset, u64 size) {
                 const s64 second = static_cast<s64>(now);
                 if (second != g_burst_second) {
                     if (g_burst_suppressed) {
-                        screen_lines.push_back("... e mais " + std::to_string(g_burst_suppressed) +
-                                               " arquivo(s) no segundo " + std::to_string(g_burst_second) +
-                                               " (lista completa no log do radar)");
+                        screen_lines.push_back("... and more " + std::to_string(g_burst_suppressed) +
+                                               " file(s) in second " + std::to_string(g_burst_second) +
+                                               " (full list in radar log)");
                     }
                     g_burst_second = second;
                     g_burst_count = g_burst_suppressed = 0;
@@ -193,7 +193,7 @@ void OnRead(const std::string& guest_path, s64 offset, u64 size) {
         }
     }
     for (const std::string& line : screen_lines) {
-        log::Raw(">>> [RADAR DE TELA] Carregando: %s <<<", line.c_str());
+        log::Raw(">>> [SCREEN RADAR] Loading: %s <<<", line.c_str());
     }
 }
 
@@ -208,19 +208,19 @@ void PrintStats() {
         std::fflush(g_log);
     }
     if (g_burst_suppressed) {
-        std::printf(">>> [RADAR DE TELA] ... e mais %u arquivo(s) no segundo %lld (lista completa no log do radar) <<<\n",
+        std::printf(">>> [SCREEN RADAR] ... and %u more file(s) in second %lld (full list in radar log) <<<\n",
                     g_burst_suppressed, static_cast<long long>(g_burst_second));
     }
-    std::printf("Radar      : %llu arquivos distintos lidos de dentro dos .DAT (%llu no filtro de tela)",
+    std::printf("Radar      : %llu distinct files read from .DAT archives (%llu in screen filter)",
                 static_cast<unsigned long long>(g_files_seen), static_cast<unsigned long long>(g_screen_files));
     if (g_packs_without_index) {
-        std::printf("; %llu pacote(s) SEM indice - rode tools/build_dat_index.py",
+        std::printf("; %llu pack(s) WITHOUT index - run tools/build_dat_index.py",
                     static_cast<unsigned long long>(g_packs_without_index));
     }
     std::printf("\n");
     for (const auto& [name, pack] : g_packs) {
         if (pack.seen) {
-            std::printf("             %-16s %6llu de %zu\n", name.c_str(), static_cast<unsigned long long>(pack.seen),
+            std::printf("             %-16s %6llu of %zu\n", name.c_str(), static_cast<unsigned long long>(pack.seen),
                         pack.entries.size());
         }
     }

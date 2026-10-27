@@ -26,16 +26,38 @@ Get the installer (`LEGO_Dimensions_PC_Setup.exe`) or the portable zip from the 
 ## How to use
 
 1. Install (or extract the zip) and open **LegoDimensionsLauncher.exe**.
-2. Choose the game folder. A separate update folder is found automatically. Choose the DLC folder too, if you have one.
-3. Click **Prepare** (first time only). This converts the `eboot.bin` from your dump and translates all of the game's shaders to Vulkan. It takes 20 to 60 minutes.
+2. Open **Settings** to choose the game folder. A separate update folder is found automatically. Choose the DLC folder too, if you have one.
+3. Click **Prepare game** (first time only, also available under **Tools**). This converts the `eboot.bin` from your dump and translates all of the game's shaders to Vulkan. It takes 20 to 60 minutes.
 4. Click **PLAY**.
 5. Later, **Check updates** in the launcher downloads and installs new versions from the GitHub releases (from 1.3 on).
 
 Details and tips in the [README](tools/dist/README.txt) that ships with the port.
 
+The beta launcher uses a compact home screen with **PLAY**, **Mods**, **Settings**
+and **Tools**. **Show details** expands the preparation log. Folder paths,
+resolution, language, controller icons and gameplay options are in Settings;
+PKG extraction, save transfer, preparation and update checks are in Tools.
+Existing settings and mod enable/disable choices retain their original format.
+The window icon is loaded from the owner's `sce_sys/icon0.png`; no game artwork
+is included in the source. Updater backups are preserved rather than deleted
+by a recursive filename-suffix scan.
+
+For an asset-free launcher layout check, run
+`LegoDimensionsLauncher.exe --self-test report.json`. This writes a JSON result
+for the hidden Home, Details and Settings layouts without opening gameplay,
+loading user settings or starting external tools. `LD_UI_WORKAREA=1280x680`
+can exercise the small-screen layout. Visual appearance and gameplay remain
+separate manual checks.
+
 ## Language
 
-The launcher, the installer and the port's own screens (loading screen, save picker) are in Portuguese when Windows is in Portuguese and in English otherwise. The game itself is told your Windows language when the game has it (English, French, German, Spanish, Italian, Dutch, Danish, Portuguese); anything else falls back to English. The **Language** selector in the launcher picks one by hand (Portuguese, English, Spanish, French, German, Italian, Dutch, Danish).
+New launcher settings and setup command output default to English. Choose the
+game language under **Settings > Language**; existing saved choices are retained,
+including Automatic (Windows). Portuguese translations remain available for
+existing dialogs and explicit Portuguese setup commands. The installer follows
+the Windows display language. Runtime diagnostic logs are in English regardless
+of the game's text language. Existing script command names and protocol tokens
+remain compatible.
 
 The languages other than Portuguese and English need the game's original text files: a dump with a fan translation that replaced `text.csv` closes the game in those languages.
 
@@ -64,23 +86,40 @@ The languages other than Portuguese and English need the game's original text fi
 Requires:
 - Visual Studio 2022 or newer, with the C++ tools and **clang-cl**;
 - CMake;
-- [Vulkan SDK](https://vulkan.lunarg.com/) 1.4;
+- Vulkan headers are included. An installed [Vulkan SDK](https://vulkan.lunarg.com/) is used when available. The SDK is optional for the port build, supplies runtime validation layers, and is still required by the shader-translator build below;
 - Python 3.
 
 ```bat
-set VULKAN_SDK=C:\VulkanSDK\1.4.363.0
 build.bat                    :: the port -> build\lego_dimensions.exe
 tools\dist\build_dist.bat    :: launcher and installer
 ```
 
 **Shader translator** (`tools/shader_compiler_tool`): uses the shader recompiler from [shadPS4](https://github.com/shadps4-emu/shadPS4), unmodified, at commit [`eeecd10`](https://github.com/shadps4-emu/shadPS4/commit/eeecd103f648572b249b422e759e76799274b34c). The only replacement is `override/resource_patching_pass.cpp`, which lives in that folder.
+Install Vulkan SDK 1.4 and set `VULKAN_SDK` for this separate translator build.
 1. Build that shadPS4 commit (Release, clang-cl).
 2. Point `SHADPS4_DIR` at it.
 3. Run `tools\shader_compiler_tool\build.bat`.
 
 **Distribution package:** `python tools/dist/montar.py` builds the installer and the zip in `dist\`.
 
-Source code comments and log messages are in Portuguese.
+Many source comments remain in Portuguese; runtime diagnostics are in English.
+AI-assisted changes include diagnostic translation, the compact launcher and
+bounded PKG I/O. No game files, custom character assets, saves or Toypad app fork
+are included in these changes.
+
+Use `-DLD_APP_ICON=/path/to/your/icon.ico` when configuring CMake to embed artwork
+you supply yourself. Without it the existing source icon is used. The launcher
+also reads the window icon from the owner's game folder. No game icon is added
+to the repository.
+
+Asset-free checks: `python tools/test_english_output.py`,
+`python tools/test_vulkan_headers.py`, and
+`python tools/test_pkg_extractor_jobs.py --exe <pkg_extractor.exe>`.
+The built-in `lego_dimensions.exe --selftest <prepared-ELF>` checks HLE behavior
+and requires an owner-supplied ELF plus `--app0 <dump>` for its Fios tests.
+Use a separate `--root <test-directory>` to keep test saves out of the normal
+installation. This returns before the game entry point; gameplay is a separate
+manual test.
 
 ## License
 

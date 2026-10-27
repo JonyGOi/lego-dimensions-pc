@@ -89,7 +89,7 @@ MESSAGES = {
         'same_dir': 'the destination folder cannot be the source folder',
     },
 }
-LANG = 'pt'
+LANG = 'en'
 
 
 class TransferError(Exception):
@@ -365,8 +365,8 @@ def main():
     parser.add_argument('--origem')
     parser.add_argument('--destino')
     parser.add_argument('--formato', choices=sorted(FORMATS))
-    parser.add_argument('--lingua', default='pt')
-    parser.add_argument('--backup', help='pasta onde guardar os saves que o destino ja tinha')
+    parser.add_argument('--lingua', default='en')
+    parser.add_argument('--backup', help='folder for backing up saves already present at destination')
     args = parser.parse_args()
     LANG = 'en' if args.lingua.lower().startswith('en') else 'pt'
     try:
