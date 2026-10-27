@@ -108,11 +108,25 @@ bool PatchCutsceneSkip(u8* base) {
     constexpr u64 kSite = 0x173fe10;
     static const u8 kOriginal[] = {0x8A, 0x83, 0xE8, 0x00, 0x00, 0x00, 0x24, 0x01}; // mov al, [rbx+0xe8]; and al, 1
     static const u8 kPatched[] = {0xB0, 0x01, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // mov al, 1; nop x6
-    if (std::memcmp(base + kSite, kOriginal, sizeof(kOriginal)) != 0) {
-        return false; // outro eboot: nao mexe
+    if (std::memcmp(base + kSite, kOriginal, sizeof(kOriginal)) == 0) {
+        std::memcpy(base + kSite, kPatched, sizeof(kPatched));
+        return true;
     }
-    std::memcpy(base + kSite, kPatched, sizeof(kPatched));
-    return true;
+    // Procura por padrao unico em outros executaveis/versoes (ex.: CUSA00935)
+    u64 found = 0;
+    int count = 0;
+    for (u64 offset = 0x1000; offset + sizeof(kOriginal) <= 0x3000000; ++offset) {
+        if (std::memcmp(base + offset, kOriginal, sizeof(kOriginal)) == 0) {
+            found = offset;
+            ++count;
+            if (count > 1) break;
+        }
+    }
+    if (count == 1) {
+        std::memcpy(base + found, kPatched, sizeof(kPatched));
+        return true;
+    }
+    return false; // outro eboot: nao mexe
 }
 
 // Fase 58: pasta da atualizacao separada (CUSA01176-patch), dentro da pasta do jogo ou ao lado dela.
@@ -120,7 +134,8 @@ std::filesystem::path FindPatchDir(const std::filesystem::path& app0) {
     std::error_code ec;
     const std::string name = hle::fs::PathText(app0.filename());
     const std::filesystem::path candidates[] = {app0 / (name + "-patch"), app0.parent_path() / (name + "-patch"),
-                                                app0 / "CUSA01176-patch", app0.parent_path() / "CUSA01176-patch"};
+                                                app0 / "CUSA01176-patch", app0.parent_path() / "CUSA01176-patch",
+                                                app0 / "CUSA00935-patch", app0.parent_path() / "CUSA00935-patch"};
     for (const auto& dir : candidates) {
         if (std::filesystem::exists(dir / "eboot.bin", ec) || std::filesystem::exists(dir / "sce_sys" / "param.sfo", ec)) {
             return dir;
@@ -1448,7 +1463,17 @@ int main(int argc, char** argv) {
         if (std::filesystem::is_directory(root / "assets" / "addcont", ec)) {
             addcont_dir = root / "assets" / "addcont";
         } else if (const char* appdata = std::getenv("APPDATA")) {
-            addcont_dir = std::filesystem::path(appdata) / "shadPS4" / "addcont" / "CUSA01176";
+            const std::filesystem::path shadps4_addcont = std::filesystem::path(appdata) / "shadPS4" / "addcont";
+            const std::string app0_name = hle::fs::PathText(app0.filename());
+            if (!app0_name.empty() && std::filesystem::is_directory(shadps4_addcont / app0_name, ec)) {
+                addcont_dir = shadps4_addcont / app0_name;
+            } else if (std::filesystem::is_directory(shadps4_addcont / "CUSA00935", ec)) {
+                addcont_dir = shadps4_addcont / "CUSA00935";
+            } else if (std::filesystem::is_directory(shadps4_addcont / "CUSA01176", ec)) {
+                addcont_dir = shadps4_addcont / "CUSA01176";
+            } else {
+                addcont_dir = shadps4_addcont / "CUSA01176";
+            }
         }
     }
     hle::SetAddcontDirectory(selftest ? std::filesystem::path{} : addcont_dir);

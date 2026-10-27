@@ -22,7 +22,7 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 EXTRACTOR = os.path.join(ROOT, 'tools', 'nu2_shader_extractor', 'nu2_shader_extractor.py')
-TITLE_ID = 'CUSA01176'
+SUPPORTED_TITLE_IDS = ('CUSA01176', 'CUSA00935')
 
 
 def _portuguese():
@@ -86,12 +86,13 @@ def game_file(app0, patch, *parts):
 def check_game(app0, patch=''):
     sfo = game_file(app0, patch, 'sce_sys', 'param.sfo')
     if not os.path.isfile(game_file(app0, patch, 'eboot.bin')) or not os.path.isfile(sfo):
-        fail(T('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions, CUSA01176)',
-               'the game folder must contain eboot.bin and sce_sys\\param.sfo (PS4 dump of LEGO Dimensions, CUSA01176)'))
+        fail(T('a pasta do jogo precisa ter eboot.bin e sce_sys\\param.sfo (dump do PS4 do LEGO Dimensions: %s)',
+               'the game folder must contain eboot.bin and sce_sys\\param.sfo (PS4 dump of LEGO Dimensions: %s)') % ', '.join(SUPPORTED_TITLE_IDS))
     info = read_sfo(sfo)
-    if info.get('TITLE_ID') != TITLE_ID:
-        fail(T('o dump e de outro jogo ou regiao (%s); este port e do LEGO Dimensions %s',
-               'the dump is from another game or region (%s); this port is for LEGO Dimensions %s') % (info.get('TITLE_ID'), TITLE_ID))
+    title_id = info.get('TITLE_ID')
+    if title_id not in SUPPORTED_TITLE_IDS:
+        fail(T('o dump e de outro jogo ou regiao (%s); este port e do LEGO Dimensions (%s)',
+               'the dump is from another game or region (%s); this port is for LEGO Dimensions (%s)') % (title_id, ', '.join(SUPPORTED_TITLE_IDS)))
     dats = set()
     for base in [app0] + ([patch] if patch else []):
         if os.path.isdir(os.path.join(base, 'data')):
@@ -180,7 +181,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--app0', required=True)
     ap.add_argument('--addcont', default='')
-    ap.add_argument('--patch', default='', help='pasta da atualizacao separada (padrao: procura CUSA01176-patch)')
+    ap.add_argument('--patch', default='', help='pasta da atualizacao separada (padrao: procura CUSA01176-patch / CUSA00935-patch)')
     ap.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument('--sem-aot', action='store_true', help='so o eboot (os shaders ficam para o compilador ao vivo)')
     ap.add_argument('--limite', type=int, default=0, help='so os N primeiros lotes da traducao (teste)')

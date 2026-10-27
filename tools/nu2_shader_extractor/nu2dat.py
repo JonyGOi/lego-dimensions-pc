@@ -15,7 +15,17 @@ import zlib
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 DEFAULT_APP0 = r'C:\Jogos\CUSA01176'
 # Fase 47: DLCs (uma pasta por DLC com DLCnn.DAT2 + DLCnn.HDR2), a mesma pasta de addcont do shadPS4
-DEFAULT_ADDCONT = os.path.join(os.environ.get('APPDATA', ''), 'shadPS4', 'addcont', 'CUSA01176')
+def _default_addcont():
+    appdata = os.environ.get('APPDATA', '')
+    if not appdata:
+        return ''
+    for tid in ('CUSA00935', 'CUSA01176'):
+        p = os.path.join(appdata, 'shadPS4', 'addcont', tid)
+        if os.path.isdir(p):
+            return p
+    return os.path.join(appdata, 'shadPS4', 'addcont', 'CUSA01176')
+
+DEFAULT_ADDCONT = _default_addcont()
 INDEX_DIR = os.path.join(ROOT, 'tools', 'data', 'dat_index')
 
 
@@ -26,7 +36,8 @@ def find_patch(app0):
     name = os.path.basename(app0)
     parent = os.path.dirname(app0)
     for d in (os.path.join(app0, name + '-patch'), os.path.join(parent, name + '-patch'),
-              os.path.join(app0, 'CUSA01176-patch'), os.path.join(parent, 'CUSA01176-patch')):
+              os.path.join(app0, 'CUSA01176-patch'), os.path.join(parent, 'CUSA01176-patch'),
+              os.path.join(app0, 'CUSA00935-patch'), os.path.join(parent, 'CUSA00935-patch')):
         if os.path.isfile(os.path.join(d, 'eboot.bin')) or os.path.isfile(os.path.join(d, 'sce_sys', 'param.sfo')):
             return d
     return ''

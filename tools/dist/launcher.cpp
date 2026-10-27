@@ -204,8 +204,8 @@ void PaintCard(HDC dc, Gdiplus::Graphics& g) {
     g.Flush();
     RECT l1{S(48), S(kHero - 46), S(900), S(kHero - 24)}, lp{S(48), S(kHero + 34), S(900), S(kHero + 56)},
         l2{S(48), S(kHero + 114), S(900), S(kHero + 136)};
-    ui::Text(dc, ui::T(L"PASTA DO JOGO  —  dump do PS4 (CUSA01176), a pasta com eboot.bin", L"GAME FOLDER  —  PS4 dump (CUSA01176), the folder with eboot.bin"), l1, g_label, ui::kMuted);
-    ui::Text(dc, ui::T(L"ATUALIZA\u00c7\u00c3O  —  s\u00f3 se ela estiver numa pasta separada (CUSA01176-patch); achada sozinha", L"UPDATE  —  only if it is in a separate folder (CUSA01176-patch); found automatically"), lp, g_label,
+    ui::Text(dc, ui::T(L"PASTA DO JOGO  —  dump do PS4 (CUSA01176 / CUSA00935), a pasta com eboot.bin", L"GAME FOLDER  —  PS4 dump (CUSA01176 / CUSA00935), the folder with eboot.bin"), l1, g_label, ui::kMuted);
+    ui::Text(dc, ui::T(L"ATUALIZA\u00c7\u00c3O  —  s\u00f3 se ela estiver numa pasta separada (CUSA01176-patch / CUSA00935-patch); achada sozinha", L"UPDATE  —  only if it is in a separate folder (CUSA01176-patch / CUSA00935-patch); found automatically"), lp, g_label,
              ui::kMuted);
     ui::Text(dc, ui::T(L"PASTA DAS DLCs  —  opcional, uma subpasta por DLC (como a addcont do shadPS4)", L"DLC FOLDER  —  optional, one subfolder per DLC (like the shadPS4 addcont)"), l2, g_label, ui::kMuted);
     int x = S(48);
@@ -251,8 +251,9 @@ fs::path FindPatch(const fs::path& game) {
         return {};
     }
     const std::wstring name = game.filename().wstring();
-    for (const fs::path& dir : {game / (name + L"-patch"), game.parent_path() / (name + L"-patch"), game / L"CUSA01176-patch",
-                                game.parent_path() / L"CUSA01176-patch"}) {
+    for (const fs::path& dir : {game / (name + L"-patch"), game.parent_path() / (name + L"-patch"),
+                                game / L"CUSA01176-patch", game.parent_path() / L"CUSA01176-patch",
+                                game / L"CUSA00935-patch", game.parent_path() / L"CUSA00935-patch"}) {
         if (fs::is_regular_file(dir / L"eboot.bin", ec) || fs::is_regular_file(dir / L"sce_sys" / L"param.sfo", ec)) {
             return dir;
         }
@@ -868,7 +869,7 @@ void ExtractPkgs() {
     // onde extrair: perto do jogo que ja esta no campo, senao na pasta dos PKGs
     const std::wstring game = GetText(g_game);
     const std::wstring start = !game.empty() ? fs::path(game).parent_path().wstring() : fs::path(pkgs[0]).parent_path().wstring();
-    const std::wstring destination = BrowseFolder(ui::T(L"Pasta onde extrair (o jogo fica em <pasta>\\CUSA01176)", L"Folder to extract into (the game goes to <folder>\\CUSA01176)"), start);
+    const std::wstring destination = BrowseFolder(ui::T(L"Pasta onde extrair (o jogo fica em <pasta>\\<TITLE_ID>)", L"Folder to extract into (the game goes to <folder>\\<TITLE_ID>)"), start);
     if (destination.empty()) {
         return;
     }
@@ -1300,10 +1301,15 @@ void LoadSettings() {
         dlc.clear();
         wchar_t appdata[MAX_PATH];
         if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) {
-            const fs::path candidate = fs::path(appdata) / L"shadPS4" / L"addcont" / L"CUSA01176";
+            const fs::path shadps4_addcont = fs::path(appdata) / L"shadPS4" / L"addcont";
+            const std::wstring game_name = fs::path(game).filename().wstring();
             std::error_code ec;
-            if (fs::is_directory(candidate, ec)) {
-                dlc = candidate.wstring();
+            if (!game_name.empty() && fs::is_directory(shadps4_addcont / game_name, ec)) {
+                dlc = (shadps4_addcont / game_name).wstring();
+            } else if (fs::is_directory(shadps4_addcont / L"CUSA00935", ec)) {
+                dlc = (shadps4_addcont / L"CUSA00935").wstring();
+            } else if (fs::is_directory(shadps4_addcont / L"CUSA01176", ec)) {
+                dlc = (shadps4_addcont / L"CUSA01176").wstring();
             }
         }
     }
@@ -1357,7 +1363,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case kGameBrowse: {
-            const std::wstring folder = BrowseFolder(ui::T(L"Pasta do jogo (dump CUSA01176)", L"Game folder (CUSA01176 dump)"), GetText(g_game));
+            const std::wstring folder = BrowseFolder(ui::T(L"Pasta do jogo (dump CUSA01176 / CUSA00935)", L"Game folder (CUSA01176 / CUSA00935 dump)"), GetText(g_game));
             if (!folder.empty()) {
                 SetWindowTextW(g_game, folder.c_str());
                 LoadArt(folder);
@@ -1369,7 +1375,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         }
         case kPatchBrowse: {
-            const std::wstring folder = BrowseFolder(ui::T(L"Pasta da atualiza\u00e7\u00e3o (CUSA01176-patch)", L"Update folder (CUSA01176-patch)"), GetText(g_patch).empty() ? GetText(g_game) : GetText(g_patch));
+            const std::wstring folder = BrowseFolder(ui::T(L"Pasta da atualiza\u00e7\u00e3o (CUSA01176-patch / CUSA00935-patch)", L"Update folder (CUSA01176-patch / CUSA00935-patch)"), GetText(g_patch).empty() ? GetText(g_game) : GetText(g_patch));
             if (!folder.empty()) {
                 SetWindowTextW(g_patch, folder.c_str());
                 SaveSettings();

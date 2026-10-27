@@ -2,7 +2,7 @@
 
 **English** | [Português](README.pt-BR.md)
 
-An **unofficial** native port of the PS4 LEGO Dimensions (CUSA01176, version 01.24) to Windows x64.
+An **unofficial** native port of the PS4 LEGO Dimensions (CUSA01176 / CUSA00935, version 01.24) to Windows x64.
 
 It is not a PS4 emulator. The game executable runs directly on the PC's processor, and the PS4 system libraries were rewritten for Windows. The PS4 graphics (GCN) are translated to Vulkan, and the game's shaders are translated before you play, from the game's own packages.
 
@@ -17,9 +17,9 @@ Get the installer (`LEGO_Dimensions_PC_Setup.exe`) or the portable zip from the 
 - Windows 10 (1803 or newer) or Windows 11, 64-bit.
 - A graphics card with **Vulkan 1.3** and an up-to-date driver. Tested on an AMD Radeon RX 6600.
 - **16 GB of RAM**. The game uses about 5 GB; 8 GB may work, but with stutters.
-- The game dump: the `CUSA01176` folder (with `eboot.bin`, `sce_sys` and `data\chunk*`), **version 01.24**. Two layouts work:
+- The game dump: the `CUSA01176` or `CUSA00935` folder (with `eboot.bin`, `sce_sys` and `data\chunk*`), **version 01.24**. Two layouts work:
   1. all in one: the update already inside the dump (`data\chunk1` with `PATCH.DAT`, `PATCH0.DAT`...);
-  2. base game + update in a separate folder, `CUSA01176-patch` (shadPS4 layout), inside the game folder or next to it.
+  2. base game + update in a separate folder, `CUSA01176-patch` or `CUSA00935-patch` (shadPS4 layout), inside the game folder or next to it.
 - Optional: DLCs (one subfolder per DLC, in the shadPS4 `addcont` layout), a DS4/Xbox controller and the LegoToypad app for the portal.
 - Game, update or DLCs as `.pkg` files: the launcher's **Extract PKG...** button extracts them into the layout above and fills in the folders (PKG extraction from shadPS4 0.7.0).
 
