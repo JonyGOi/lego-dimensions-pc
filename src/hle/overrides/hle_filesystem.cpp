@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <cinttypes>
 #include <cstdio>
@@ -127,6 +128,7 @@ void File::SetTail(void* tail, u64 base, std::string pack) {
 }
 
 s64 File::PreadHost(void* handle, void* buffer, u64 size, s64 offset) {
+    const auto t0 = std::chrono::steady_clock::now();
     u8* out = static_cast<u8*>(buffer);
     u64 total = 0;
     while (total < size) {
@@ -146,6 +148,12 @@ s64 File::PreadHost(void* handle, void* buffer, u64 size, s64 offset) {
             break;
         }
         total += got;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (ms >= 2.0 || (ms >= 0.5 && (guest_path_.find(".DAT") != std::string::npos || guest_path_.find(".dat") != std::string::npos ||
+                                    guest_path_.find(".HDR") != std::string::npos || guest_path_.find(".hdr") != std::string::npos))) {
+        std::printf("[DIAG-IO] thread=%lu file=%s off=%lld sz=%llu took=%.2f ms\n",
+                    GetCurrentThreadId(), guest_path_.c_str(), static_cast<long long>(offset), static_cast<unsigned long long>(total), ms);
     }
     return static_cast<s64>(total);
 }

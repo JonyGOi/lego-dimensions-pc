@@ -58,6 +58,7 @@ std::atomic<u64> g_validation_errors{0}, g_validation_warnings{0};
     X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory)     \
     X(vkMapMemory) X(vkCreateShaderModule) X(vkDestroyShaderModule) X(vkCreatePipelineLayout)      \
     X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)                   \
+    X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)                   \
     X(vkCmdBindPipeline) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdPushConstants)              \
     X(vkCmdBindVertexBuffers) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCreateImage)         \
     X(vkDestroyImage) X(vkGetImageMemoryRequirements) X(vkBindImageMemory) X(vkCreateSampler)      \
@@ -198,9 +199,14 @@ struct State {
     struct TempStaging {
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
+        u64 bytes = 0;
         u32 recorded_serial = 0;
     };
     std::vector<TempStaging> temp_staging;
+    std::vector<TempStaging> staging_pool;
+    std::mutex staging_pool_mutex;
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
+    std::filesystem::path pipeline_cache_path;
     struct PendingUpload {
         VkBuffer source = VK_NULL_HANDLE; // Fase 59: buffer temporario (staging do frame cheio); nulo = staging do frame
         VkImage image = VK_NULL_HANDLE;
@@ -404,7 +410,7 @@ constexpr u64 kIndexReserved = 16; // inicio do anel de indices: os 6 indices do
 constexpr size_t kMaxDrawsPerFrame = 16384;
 constexpr u32 kMaxTargets = 256;
 constexpr u64 kStagingBytes = 40ull << 20;
-constexpr u64 kFrameStagingHalf = 128ull << 20; // Fase 39: por metade; Fase 45: 48 -> 128 MiB (entrada de cena com 187 MiB de texturas)
+constexpr u64 kFrameStagingHalf = 256ull << 20; // Fase 39: por metade; Fase 45: 48 -> 128 -> 256 MiB (sem overflow na troca de area)
 VulkanRenderer::UploadStats g_upload_stats; // com g.mutex
 // Fase 43: modulos e layouts compartilhados entre pares (ver SharedModule)
 std::mutex g_shared_mutex;
@@ -593,6 +599,98 @@ bool PickPhysicalDevice() {
 // sozinho nao causa isso. Conferir de novo quando o driver for atualizado.
 bool g_gpl_wanted = false;
 
+
+struct VkPipelineCacheHeaderVersionOne {
+    uint32_t headerSize;
+    VkPipelineCacheHeaderVersion headerVersion; // VK_PIPELINE_CACHE_HEADER_VERSION_ONE = 1
+    uint32_t vendorID;
+    uint32_t deviceID;
+    uint8_t pipelineCacheUUID[VK_UUID_SIZE];
+};
+
+void LoadPipelineCache() {
+    if (g.pipeline_cache) return;
+    std::filesystem::path path = g.pipeline_cache_path;
+    if (path.empty()) {
+        path = std::filesystem::path(render::GameSpirvDirectory().empty() ? "assets/shaders_spv" : render::GameSpirvDirectory()) / "vk_pipeline_cache.bin";
+        g.pipeline_cache_path = path;
+    }
+    std::vector<u8> cache_data;
+    bool valid = false;
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) {
+        if (std::ifstream in(path, std::ios::binary | std::ios::ate); in.is_open()) {
+            const auto size = static_cast<size_t>(in.tellg());
+            if (size >= sizeof(VkPipelineCacheHeaderVersionOne)) {
+                cache_data.resize(size);
+                in.seekg(0, std::ios::beg);
+                in.read(reinterpret_cast<char*>(cache_data.data()), size);
+                VkPipelineCacheHeaderVersionOne header{};
+                std::memcpy(&header, cache_data.data(), sizeof(header));
+                if (header.headerSize >= sizeof(VkPipelineCacheHeaderVersionOne) &&
+                    header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+                    header.vendorID == g.properties.vendorID &&
+                    header.deviceID == g.properties.deviceID &&
+                    std::memcmp(header.pipelineCacheUUID, g.properties.pipelineCacheUUID, VK_UUID_SIZE) == 0) {
+                    valid = true;
+                    std::printf("[PIPELINE-CACHE] Carregado cache em disco: %zu bytes (vendor=0x%x, device=0x%x)\n",
+                                size, header.vendorID, header.deviceID);
+                } else {
+                    std::printf("[PIPELINE-CACHE] Descartando cache incompativel (arq: ven=0x%x dev=0x%x vs gpu: ven=0x%x dev=0x%x)\n",
+                                header.vendorID, header.deviceID, g.properties.vendorID, g.properties.deviceID);
+                    cache_data.clear();
+                }
+            }
+        }
+    }
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    if (valid && !cache_data.empty()) {
+        info.initialDataSize = cache_data.size();
+        info.pInitialData = cache_data.data();
+    }
+    VkResult result = vk.vkCreatePipelineCache(g.device, &info, nullptr, &g.pipeline_cache);
+    if (result != VK_SUCCESS && valid) {
+        info.initialDataSize = 0;
+        info.pInitialData = nullptr;
+        result = vk.vkCreatePipelineCache(g.device, &info, nullptr, &g.pipeline_cache);
+    }
+    if (result == VK_SUCCESS) {
+        std::printf("[PIPELINE-CACHE] VkPipelineCache ativo (valido=%d)\n", valid);
+    } else {
+        std::printf("[PIPELINE-CACHE] Falha ao criar VkPipelineCache: %d\n", result);
+        g.pipeline_cache = VK_NULL_HANDLE;
+    }
+}
+
+void SavePipelineCache() {
+    if (!g.device || !g.pipeline_cache || !vk.vkGetPipelineCacheData) {
+        return;
+    }
+    size_t size = 0;
+    if (vk.vkGetPipelineCacheData(g.device, g.pipeline_cache, &size, nullptr) != VK_SUCCESS || size <= sizeof(VkPipelineCacheHeaderVersionOne)) {
+        return;
+    }
+    std::vector<u8> data(size);
+    if (vk.vkGetPipelineCacheData(g.device, g.pipeline_cache, &size, data.data()) != VK_SUCCESS) {
+        return;
+    }
+    std::filesystem::path path = g.pipeline_cache_path;
+    if (path.empty()) {
+        path = std::filesystem::path(render::GameSpirvDirectory().empty() ? "assets/shaders_spv" : render::GameSpirvDirectory()) / "vk_pipeline_cache.bin";
+        g.pipeline_cache_path = path;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::filesystem::path tmp_path = path;
+    tmp_path += ".tmp";
+    if (std::ofstream out(tmp_path, std::ios::binary); out.is_open()) {
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        out.close();
+        std::filesystem::rename(tmp_path, path, ec);
+        std::printf("[PIPELINE-CACHE] Salvo cache em disco: %zu bytes em %s\n", data.size(), path.string().c_str());
+    }
+}
+
 bool CreateDevice() {
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -754,6 +852,7 @@ bool CreateDevice() {
         return Fail("funcao de dispositivo do Vulkan ausente");
     }
     vk.vkGetDeviceQueue(g.device, g.queue_family, 0, &g.queue);
+    LoadPipelineCache();
     if (g.gpl) {
         g.set_depth_clamp = reinterpret_cast<PFN_vkCmdSetDepthClampEnableEXT>(vk.vkGetDeviceProcAddr(g.device, "vkCmdSetDepthClampEnableEXT"));
         g.gpl = g.set_depth_clamp != nullptr;
@@ -1233,8 +1332,23 @@ VkComponentSwizzle SwizzleComponent(u32 selector, VkComponentSwizzle identity) {
 // se nao coube (o chamador faz a copia antiga, com submissao propria e vkQueueWaitIdle). Com g.mutex.
 // Fase 61: buffer de envio proprio (visivel pela CPU), liberado quando o frame em que foi gravado terminar.
 bool CreateTempStaging(u64 bytes, State::TempStaging* temp, void** mapped) {
+    {
+        std::lock_guard lock(g.staging_pool_mutex);
+        for (auto it = g.staging_pool.begin(); it != g.staging_pool.end(); ++it) {
+            if (it->bytes >= bytes) {
+                *temp = *it;
+                g.staging_pool.erase(it);
+                if (vk.vkMapMemory(g.device, temp->memory, 0, bytes, 0, mapped) == VK_SUCCESS) {
+                    return true;
+                }
+                g.staging_pool.push_back(*temp);
+                break;
+            }
+        }
+    }
+    const u64 alloc_size = std::max<u64>((bytes + 0xFFFFull) & ~0xFFFFull, 16ull << 20); // 16 MiB minimo
     VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    info.size = bytes;
+    info.size = alloc_size;
     info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (vk.vkCreateBuffer(g.device, &info, nullptr, &temp->buffer) != VK_SUCCESS) {
@@ -1255,7 +1369,12 @@ bool CreateTempStaging(u64 bytes, State::TempStaging* temp, void** mapped) {
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     allocate.allocationSize = requirements.size;
     allocate.memoryTypeIndex = type;
-    if (type == ~0u || vk.vkAllocateMemory(g.device, &allocate, nullptr, &temp->memory) != VK_SUCCESS ||
+    const auto t_alloc = std::chrono::steady_clock::now();
+    const VkResult res = (type == ~0u) ? VK_ERROR_FEATURE_NOT_PRESENT : vk.vkAllocateMemory(g.device, &allocate, nullptr, &temp->memory);
+    const double ms_alloc = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_alloc).count();
+    std::printf("[DIAG-MEM] thread=%lu CreateTempStaging alloc=%.2f MiB type=%u took=%.2f ms (res=%d)\n",
+                GetCurrentThreadId(), static_cast<double>(requirements.size) / (1024.0 * 1024.0), type, ms_alloc, res);
+    if (res != VK_SUCCESS ||
         vk.vkBindBufferMemory(g.device, temp->buffer, temp->memory, 0) != VK_SUCCESS ||
         vk.vkMapMemory(g.device, temp->memory, 0, bytes, 0, mapped) != VK_SUCCESS) {
         if (temp->memory) vk.vkFreeMemory(g.device, temp->memory, nullptr);
@@ -1264,6 +1383,7 @@ bool CreateTempStaging(u64 bytes, State::TempStaging* temp, void** mapped) {
         temp->memory = VK_NULL_HANDLE;
         return false;
     }
+    temp->bytes = alloc_size;
     return true;
 }
 
@@ -1441,7 +1561,7 @@ void GrowPoolAhead(u32 type) { // com g_texture_pool.mutex
 }
 
 bool PoolAllocate(const VkMemoryRequirements& requirements, u32 type, u32* chunk_out, u64* offset_out, VkDeviceMemory* memory_out) {
-    if (requirements.size > kTexturePoolChunk / 2 || std::getenv("LD_NO_TEXTURE_POOL")) {
+    if (requirements.size > kTexturePoolChunk || std::getenv("LD_NO_TEXTURE_POOL")) {
         return false;
     }
     std::lock_guard lock(g_texture_pool.mutex);
@@ -1460,7 +1580,12 @@ bool PoolAllocate(const VkMemoryRequirements& requirements, u32 type, u32* chunk
     allocate.memoryTypeIndex = type;
     TexturePool::Chunk chunk;
     chunk.type = type;
-    if (vk.vkAllocateMemory(g.device, &allocate, nullptr, &chunk.memory) != VK_SUCCESS) {
+    const auto t_chunk = std::chrono::steady_clock::now();
+    const VkResult res_chunk = vk.vkAllocateMemory(g.device, &allocate, nullptr, &chunk.memory);
+    const double ms_chunk = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_chunk).count();
+    std::printf("[DIAG-MEM] thread=%lu PoolAllocate chunk=128 MiB type=%u took=%.2f ms (res=%d)\n",
+                GetCurrentThreadId(), type, ms_chunk, res_chunk);
+    if (res_chunk != VK_SUCCESS) {
         return false;
     }
     chunk.free[0] = kTexturePoolChunk;
@@ -1833,7 +1958,7 @@ VkPipeline GetPipeline(const DrawCall& draw) {
     rendering.pColorAttachmentFormats = &g.format.format;
     info.pNext = &rendering;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    const VkResult result = vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &info, nullptr, &pipeline);
     if (result != VK_SUCCESS) {
         Fail("vkCreateGraphicsPipelines", result);
         return VK_NULL_HANDLE;
@@ -1928,7 +2053,14 @@ bool BindTargetMemory(VkImage image, VkDeviceMemory* memory) {
     VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     allocate.allocationSize = requirements.size;
     allocate.memoryTypeIndex = type;
-    if (vk.vkAllocateMemory(g.device, &allocate, nullptr, memory) != VK_SUCCESS) {
+    const auto t_tgt = std::chrono::steady_clock::now();
+    const VkResult res_tgt = vk.vkAllocateMemory(g.device, &allocate, nullptr, memory);
+    const double ms_tgt = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_tgt).count();
+    if (ms_tgt >= 0.5) {
+        std::printf("[DIAG-MEM] thread=%lu BindTargetMemory size=%.2f MiB type=%u took=%.2f ms (res=%d)\n",
+                    GetCurrentThreadId(), static_cast<double>(requirements.size) / (1024.0 * 1024.0), type, ms_tgt, res_tgt);
+    }
+    if (res_tgt != VK_SUCCESS) {
         *memory = VK_NULL_HANDLE;
         return false;
     }
@@ -1966,7 +2098,7 @@ void PrewarmTargetPool() {
     VkPhysicalDeviceMemoryProperties properties;
     vk.vkGetPhysicalDeviceMemoryProperties(g.physical, &properties);
     const u64 heap = properties.memoryHeaps[properties.memoryTypes[type].heapIndex].size;
-    const u32 chunks = static_cast<u32>(std::clamp<u64>(heap / 8 / kTexturePoolChunk, 2, 8));
+    const u32 chunks = static_cast<u32>(std::clamp<u64>(heap / 8 / kTexturePoolChunk, 4, 8));
     const auto start = std::chrono::steady_clock::now();
     u32 made = 0;
     for (u32 i = 0; i < chunks; ++i) {
@@ -2347,7 +2479,7 @@ VkPipeline CreateShaderLibrary(VkShaderModule module, bool vertex, VkPipelineLay
     }
     info.pDynamicState = &dynamic;
     VkPipeline library = VK_NULL_HANDLE;
-    if (vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &library) != VK_SUCCESS) {
+    if (vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &info, nullptr, &library) != VK_SUCCESS) {
         library = VK_NULL_HANDLE;
     }
     return library;
@@ -2370,7 +2502,7 @@ VkPipeline VertexInputLibrary(const VkPipelineVertexInputStateCreateInfo& vertex
     info.pVertexInputState = &vertex_input;
     info.pInputAssemblyState = &assembly;
     VkPipeline library = VK_NULL_HANDLE;
-    if (vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &library) != VK_SUCCESS) {
+    if (vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &info, nullptr, &library) != VK_SUCCESS) {
         library = VK_NULL_HANDLE;
     }
     g_vertex_libs[key] = library;
@@ -2402,7 +2534,7 @@ VkPipeline OutputLibrary(const VkPipelineColorBlendStateCreateInfo& blend, const
     info.pMultisampleState = &multisample;
     info.pDynamicState = &dynamic;
     VkPipeline library = VK_NULL_HANDLE;
-    if (vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &library) != VK_SUCCESS) {
+    if (vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &info, nullptr, &library) != VK_SUCCESS) {
         library = VK_NULL_HANDLE;
     }
     g_output_libs[key] = library;
@@ -2533,7 +2665,7 @@ VkPipeline BuildGamePipeline(const GameDraw& draw, VkShaderModule vs, VkShaderMo
             link.pLibraries = libraries;
             VkGraphicsPipelineCreateInfo linked{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, &link};
             linked.layout = layout;
-            if (vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &linked, nullptr, &pipeline) != VK_SUCCESS) {
+            if (vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &linked, nullptr, &pipeline) != VK_SUCCESS) {
                 pipeline = VK_NULL_HANDLE;
             }
         }
@@ -2542,19 +2674,22 @@ VkPipeline BuildGamePipeline(const GameDraw& draw, VkShaderModule vs, VkShaderMo
             ++g_gpl_stats.links;
             g_gpl_stats.link_ms += ms;
             g_gpl_stats.link_worst_ms = std::max(g_gpl_stats.link_worst_ms, ms);
-            if (g_gpl_stats.links <= 12) {
-                std::printf("[GPL] pipeline ligado de bibliotecas em %.3f ms\n", ms);
+            if (ms >= 1.0 || g_gpl_stats.links <= 12) {
+                std::printf("[DIAG-PIPE] thread=%lu GPL link: %.3f ms (hash=%016llx, ok=1)\n",
+                            GetCurrentThreadId(), ms, static_cast<unsigned long long>(draw.pair));
             }
             return pipeline;
         }
         ++g_gpl_stats.link_failures; // cai no pipeline monolitico abaixo
     }
-    const VkResult result = vk.vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    const VkResult result = vk.vkCreateGraphicsPipelines(g.device, g.pipeline_cache, 1, &info, nullptr, &pipeline);
     if (result != VK_SUCCESS) {
         Fail("vkCreateGraphicsPipelines (shaders do jogo)", result);
         pipeline = VK_NULL_HANDLE;
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::printf("[DIAG-PIPE] thread=%lu Monolithic compile: %.3f ms (hash=%016llx, fast=%d, ok=%d)\n",
+                GetCurrentThreadId(), ms, static_cast<unsigned long long>(draw.pair), g_pipeline_flags != 0, pipeline != VK_NULL_HANDLE);
     std::lock_guard lock(g_lib_mutex);
     ++g_gpl_stats.monolithic;
     g_gpl_stats.monolithic_ms += ms;
@@ -2617,7 +2752,11 @@ bool g_sync_frame_any = false;
 VulkanRenderer::SyncPipelineStats g_sync_stats;
 
 void SavePipelineState(u64 hash, const std::vector<u32>& key) {
-    if (g_pipeline_state_path.empty() || key.empty()) {
+    if (g_pipeline_state_path.empty()) {
+        const std::string dir = render::GameSpirvDirectory().empty() ? "assets/shaders_spv" : render::GameSpirvDirectory();
+        g_pipeline_state_path = dir + "/pipeline_states.txt";
+    }
+    if (key.empty()) {
         return;
     }
     std::lock_guard file_lock(g_pipeline_file_mutex);
@@ -2704,7 +2843,9 @@ void PipelineWorker() {
             g_pipeline_jobs.push_back(std::move(upgrade)); // depois de tudo o que um frame espera
         }
         if (job.prewarm) {
-            ++g_prewarm_done;
+            if (++g_prewarm_done == g_prewarm_total.load()) {
+                SavePipelineCache();
+            }
         } else if (pipeline) {
             SavePipelineState(job.hash, job.key);
         }
@@ -2839,12 +2980,12 @@ u64 g_draws_late_texture = 0;
 // ate g_burst_wait_ms: um engasgo curto no corte, no lugar de objetos faltando.
 // Fase 56: limiar 1 e teto 400 ms: o frame nao sai sem objetos (a 1a vez vira um engasgo no corte, sem
 // pop-in). Os pipelines urgentes saem sem otimizacao (Fase 56), o que encurta esse engasgo.
-double g_burst_wait_ms = 400.0;
+double g_burst_wait_ms = 0.0; // Eliminado: nunca travar por centenas de ms esperando pipelines
 u32 g_burst_threshold = 1;
 
 void WaitFramePipelines() {
     const auto start = std::chrono::steady_clock::now();
-    double budget = std::max(g_sync_budget_ms - g_frame_wait_spent_ms, 8.0); // teto do frame inteiro
+    double budget = std::clamp(g_sync_budget_ms - g_frame_wait_spent_ms, 0.0, 2.0); // maximo de 2 ms para manter 60 FPS
     g_frame_wait_spent_ms = 0;
     if (g_burst_wait_ms > budget) {
         std::unordered_set<u64> pending;
@@ -2885,6 +3026,10 @@ void WaitFramePipelines() {
     }
     if (waited) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        if (ms >= 1.0) {
+            std::printf("[DIAG-PIPE-WAIT] thread=%lu frame waited=%.2f ms (budget=%.1f ms)\n",
+                        GetCurrentThreadId(), ms, budget);
+        }
         std::lock_guard lock(g.mutex);
         g_sync_stats.total_ms += ms;
         g_sync_stats.worst_single_ms = std::max(g_sync_stats.worst_single_ms, ms);
@@ -3086,6 +3231,19 @@ void DestroyAll() {
         if (g.image_available) vk.vkDestroySemaphore(g.device, g.image_available, nullptr);
         if (g.pool) vk.vkDestroyCommandPool(g.device, g.pool, nullptr);
         if (g.swapchain) vk.vkDestroySwapchainKHR(g.device, g.swapchain, nullptr);
+        SavePipelineCache();
+        if (g.pipeline_cache) {
+            vk.vkDestroyPipelineCache(g.device, g.pipeline_cache, nullptr);
+            g.pipeline_cache = VK_NULL_HANDLE;
+        }
+        {
+            std::lock_guard pool_lock(g.staging_pool_mutex);
+            for (auto& s : g.staging_pool) {
+                if (s.buffer) vk.vkDestroyBuffer(g.device, s.buffer, nullptr);
+                if (s.memory) vk.vkFreeMemory(g.device, s.memory, nullptr);
+            }
+            g.staging_pool.clear();
+        }
         vk.vkDestroyDevice(g.device, nullptr);
     }
     if (g.surface) vk.vkDestroySurfaceKHR(g.instance, g.surface, nullptr);
@@ -3409,10 +3567,17 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     EvictForgottenTextures(); // Fase 59
     if (!g.temp_staging.empty()) { // Fase 59: buffers temporarios de envio cujo frame ja terminou
         size_t kept = 0;
-        for (const State::TempStaging& temp : g.temp_staging) {
+        for (State::TempStaging& temp : g.temp_staging) {
             if (temp.recorded_serial && temp.recorded_serial <= g.frame_serial) {
-                vk.vkDestroyBuffer(g.device, temp.buffer, nullptr);
-                vk.vkFreeMemory(g.device, temp.memory, nullptr);
+                vk.vkUnmapMemory(g.device, temp.memory);
+                temp.recorded_serial = 0;
+                std::lock_guard pool_lock(g.staging_pool_mutex);
+                if (g.staging_pool.size() < 64) {
+                    g.staging_pool.push_back(temp);
+                } else {
+                    vk.vkDestroyBuffer(g.device, temp.buffer, nullptr);
+                    vk.vkFreeMemory(g.device, temp.memory, nullptr);
+                }
             } else {
                 g.temp_staging[kept++] = temp;
             }
@@ -5157,6 +5322,18 @@ void VulkanRenderer::SetPipelineStateFile(const std::string& path) {
     g_pipeline_state_path = path;
 }
 
+void VulkanRenderer::SetPipelineCacheFile(const std::string& path) {
+    g.pipeline_cache_path = path;
+}
+
+void VulkanRenderer::SaveDiskPipelineCache() {
+    SavePipelineCache();
+}
+
+void VulkanRenderer::LoadDiskPipelineCache() {
+    LoadPipelineCache();
+}
+
 
 void VulkanRenderer::PrewarmProgress(u32* done, u32* total) const {
     *done = g_prewarm_done.load();
@@ -5176,7 +5353,11 @@ std::mutex g_prewarm_waiting_mutex;
 bool JobFromKey(const std::vector<u32>& key, PipelineJob& job);
 
 u32 VulkanRenderer::PrewarmPipelines() {
-    if (g_pipeline_state_path.empty() || !g.active || !g_async_pipelines.load()) {
+    if (g_pipeline_state_path.empty()) {
+        const std::string dir = render::GameSpirvDirectory().empty() ? "assets/shaders_spv" : render::GameSpirvDirectory();
+        g_pipeline_state_path = dir + "/pipeline_states.txt";
+    }
+    if (!g.active || !g_async_pipelines.load()) {
         return 0;
     }
     std::lock_guard waiting_lock(g_prewarm_waiting_mutex);
