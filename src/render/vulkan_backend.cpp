@@ -662,7 +662,10 @@ void LoadPipelineCache() {
     }
 }
 
+static std::mutex g_pipeline_cache_save_mutex;
+
 void SavePipelineCache() {
+    std::lock_guard lock(g_pipeline_cache_save_mutex);
     if (!g.device || !g.pipeline_cache || !vk.vkGetPipelineCacheData) {
         return;
     }
@@ -2844,9 +2847,7 @@ void PipelineWorker() {
             g_pipeline_jobs.push_back(std::move(upgrade)); // depois de tudo o que um frame espera
         }
         if (job.prewarm) {
-            if (++g_prewarm_done == g_prewarm_total.load()) {
-                SavePipelineCache();
-            }
+            ++g_prewarm_done;
         } else if (pipeline) {
             SavePipelineState(job.hash, job.key);
         }
