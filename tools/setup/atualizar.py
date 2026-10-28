@@ -23,7 +23,7 @@ import urllib.request
 import zipfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-REPO = os.environ.get('LD_REPO', 'JonyGOi/lego-dimensions-pc')
+REPO = os.environ.get('LD_REPO', 'vascon-es/lego-dimensions-pc')
 API = 'https://api.github.com/repos/%s/releases/latest' % REPO
 ASSET_SUFFIX = '_portatil.zip'
 KEEP_IF_PRESENT = {'assets/portal.json'}
