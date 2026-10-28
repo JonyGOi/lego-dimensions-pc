@@ -862,62 +862,66 @@ void QueueStatsOverlay() {
     vertices.clear();
     OverlayCanvas c{vertices, static_cast<float>(client.right), static_cast<float>(client.bottom)};
     const float p = client.bottom >= 1400 ? 3.0f : 2.0f; // tamanho do pixel da fonte
-    constexpr u32 kGreen = 0xFF00C800, kBlue = 0xFFFF9638, kPink = 0xFFAA96FF, kGray = 0xFFD0D0D0;
-    const float x = 3 * p, c1 = 52 * p, c2 = 84 * p, c3 = 126 * p, c4 = 174 * p;
-    float y = 3 * p;
-    const float row = 10 * p;
-    char v[32];
-    auto num = [&](int value) {
-        std::snprintf(v, sizeof(v), "%d", value);
-        return std::string(v);
-    };
-    if (!s.gpu_name.empty()) {
-        c.Write("GPU", x, y, p, kGreen);
-        if (s.gpu_temp >= 0) c.Value(num(s.gpu_temp), "^C", c1, y, p);
-        if (s.gpu_load >= 0) c.Value(num(s.gpu_load), "%", c2, y, p);
-        if (s.gpu_clock >= 0) c.Value(num(s.gpu_clock), "MHZ", c3, y, p);
-        if (s.gpu_power >= 0) {
-            std::snprintf(v, sizeof(v), "%.1f", s.gpu_power);
-            c.Value(v, "W", c4, y, p);
+
+    if (g_stats_overlay.load()) {
+        const runtime::hwmon::Snapshot s = runtime::hwmon::Get();
+        constexpr u32 kGreen = 0xFF00C800, kBlue = 0xFFFF9638, kPink = 0xFFAA96FF, kGray = 0xFFD0D0D0;
+        const float x = 3 * p, c1 = 52 * p, c2 = 84 * p, c3 = 126 * p, c4 = 174 * p;
+        float y = 3 * p;
+        const float row = 10 * p;
+        char v[32];
+        auto num = [&](int value) {
+            std::snprintf(v, sizeof(v), "%d", value);
+            return std::string(v);
+        };
+        if (!s.gpu_name.empty()) {
+            c.Write("GPU", x, y, p, kGreen);
+            if (s.gpu_temp >= 0) c.Value(num(s.gpu_temp), "^C", c1, y, p);
+            if (s.gpu_load >= 0) c.Value(num(s.gpu_load), "%", c2, y, p);
+            if (s.gpu_clock >= 0) c.Value(num(s.gpu_clock), "MHZ", c3, y, p);
+            if (s.gpu_power >= 0) {
+                std::snprintf(v, sizeof(v), "%.1f", s.gpu_power);
+                c.Value(v, "W", c4, y, p);
+            }
+            y += row;
+            if (s.vrm_temp >= 0 || s.hotspot >= 0) {
+                c.Write(s.vrm_temp >= 0 ? "VRM" : "HOT", x, y, p, kGreen);
+                c.Value(num(s.vrm_temp >= 0 ? s.vrm_temp : s.hotspot), "^C", c1, y, p);
+                y += row;
+            }
+            if (s.vram_mb >= 0 || s.mem_clock >= 0) {
+                c.Write("MEM", x, y, p, kGreen);
+                if (s.vram_mb >= 0) c.Value(num(s.vram_mb), "MB", c1, y, p);
+                if (s.mem_clock >= 0) c.Value(num(s.mem_clock), "MHZ", c3, y, p);
+                y += row;
+            }
         }
-        y += row;
-        if (s.vrm_temp >= 0 || s.hotspot >= 0) {
-            c.Write(s.vrm_temp >= 0 ? "VRM" : "HOT", x, y, p, kGreen);
-            c.Value(num(s.vrm_temp >= 0 ? s.vrm_temp : s.hotspot), "^C", c1, y, p);
+        if (s.cpu_load >= 0) {
+            c.Write("CPU", x, y, p, kBlue);
+            c.Value(num(s.cpu_load), "%", c2, y, p);
             y += row;
         }
-        if (s.vram_mb >= 0 || s.mem_clock >= 0) {
-            c.Write("MEM", x, y, p, kGreen);
-            if (s.vram_mb >= 0) c.Value(num(s.vram_mb), "MB", c1, y, p);
-            if (s.mem_clock >= 0) c.Value(num(s.mem_clock), "MHZ", c3, y, p);
+        if (s.ram_mb >= 0) {
+            c.Write("RAM", x, y, p, kBlue);
+            c.Value(num(s.ram_mb), "MB", c1, y, p);
             y += row;
         }
-    }
-    if (s.cpu_load >= 0) {
-        c.Write("CPU", x, y, p, kBlue);
-        c.Value(num(s.cpu_load), "%", c2, y, p);
+        c.Write("VULKAN", x, y, p, kPink);
+        c.Value(num(static_cast<int>(fps + 0.5f)), "FPS", c1 + 10 * p, y, p);
+        std::snprintf(v, sizeof(v), "%.1f", ms);
+        c.Value(v, "MS", c3 - 8 * p, y, p);
         y += row;
-    }
-    if (s.ram_mb >= 0) {
-        c.Write("RAM", x, y, p, kBlue);
-        c.Value(num(s.ram_mb), "MB", c1, y, p);
-        y += row;
-    }
-    c.Write("VULKAN", x, y, p, kPink);
-    c.Value(num(static_cast<int>(fps + 0.5f)), "FPS", c1 + 10 * p, y, p);
-    std::snprintf(v, sizeof(v), "%.1f", ms);
-    c.Value(v, "MS", c3 - 8 * p, y, p);
-    y += row;
-    // grafico do tempo de cada quadro (escala 0..50 ms), como o do Afterburner
-    c.Write("FRAMETIME", x, y, p * 0.75f, kPink);
-    c.Write(v, c4 - TextWidth(v, p * 0.75f), y, p * 0.75f, kPink);
-    const float gx0 = x, gx1 = c4 + 10 * p, gy0 = y + 7 * p, gy1 = y + 22 * p;
-    c.Rect(gx0, gy1, gx1, gy1 + std::max(1.0f, p * 0.5f), 0xFF505050); // linha de base
-    for (int i = 0; i < kFrames; ++i) {
-        const float t = std::clamp(frame_ms[(head + i) % kFrames], 0.0f, 50.0f) / 50.0f;
-        const float px = gx0 + (gx1 - gx0) * i / kFrames;
-        const float py = gy1 - (gy1 - gy0) * t;
-        c.Rect(px, py - p * 0.5f, px + (gx1 - gx0) / kFrames + 0.5f, py + p * 0.5f, kGray);
+        // grafico do tempo de cada quadro (escala 0..50 ms), como o do Afterburner
+        c.Write("FRAMETIME", x, y, p * 0.75f, kPink);
+        c.Write(v, c4 - TextWidth(v, p * 0.75f), y, p * 0.75f, kPink);
+        const float gx0 = x, gx1 = c4 + 10 * p, gy0 = y + 7 * p, gy1 = y + 22 * p;
+        c.Rect(gx0, gy1, gx1, gy1 + std::max(1.0f, p * 0.5f), 0xFF505050); // linha de base
+        for (int i = 0; i < kFrames; ++i) {
+            const float t = std::clamp(frame_ms[(head + i) % kFrames], 0.0f, 50.0f) / 50.0f;
+            const float px = gx0 + (gx1 - gx0) * i / kFrames;
+            const float py = gy1 - (gy1 - gy0) * t;
+            c.Rect(px, py - p * 0.5f, px + (gx1 - gx0) / kFrames + 0.5f, py + p * 0.5f, kGray);
+        }
     }
     if (g_video_menu_open.load()) {
         constexpr u32 kBg = 0xEE121216, kBorder = 0xFF00D000, kTitleYellow = 0xFF00E0FF, kHiBg = 0xAA303038;
