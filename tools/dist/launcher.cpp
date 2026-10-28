@@ -289,6 +289,35 @@ int CountDlcs(const fs::path& dir) {
     return n;
 }
 
+fs::path FindDlc(const fs::path& game) {
+    std::error_code ec;
+    if (game.empty()) {
+        return {};
+    }
+    const std::wstring name = game.filename().wstring();
+    for (const fs::path& dir : {game / L"dlcs", game / L"Dlcs",
+                                game.parent_path() / L"dlcs" / name,
+                                game.parent_path() / L"Dlcs" / name,
+                                game.parent_path() / L"addcont" / name,
+                                game / L"addcont" / name,
+                                game.parent_path() / L"Dlcs" / L"CUSA00935",
+                                game.parent_path() / L"Dlcs" / L"CUSA01176",
+                                game.parent_path() / L"dlcs" / L"CUSA00935",
+                                game.parent_path() / L"dlcs" / L"CUSA01176"}) {
+        if (CountDlcs(dir) > 0) {
+            return dir;
+        }
+    }
+    wchar_t appdata[MAX_PATH];
+    if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH)) {
+        const fs::path shadps4 = fs::path(appdata) / L"shadPS4" / L"addcont";
+        if (CountDlcs(shadps4 / name) > 0) return shadps4 / name;
+        if (CountDlcs(shadps4 / L"CUSA00935") > 0) return shadps4 / L"CUSA00935";
+        if (CountDlcs(shadps4 / L"CUSA01176") > 0) return shadps4 / L"CUSA01176";
+    }
+    return {};
+}
+
 void UpdateStatus() {
     const fs::path game = GetText(g_game), dlc = GetText(g_dlc);
     std::error_code ec;
@@ -1361,6 +1390,15 @@ void LaunchLegoToypad(bool notify_if_running) {
         }
         return;
     }
+    // Garante que o atalho padrao do controle venha como SELECT (Back, mascara 32)
+    const fs::path ini = exe.parent_path() / L"LegoToypad.ini";
+    wchar_t shortcut_type[64]{};
+    GetPrivateProfileStringW(L"Shortcut", L"Type", L"", shortcut_type, 64, ini.c_str());
+    if (shortcut_type[0] == L'\0' || _wcsicmp(shortcut_type, L"Keyboard") == 0) {
+        WritePrivateProfileStringW(L"Shortcut", L"Type", L"Controller", ini.c_str());
+        WritePrivateProfileStringW(L"Shortcut", L"ControllerMask", L"32", ini.c_str());
+    }
+
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     std::wstring cmd = Quote(exe.wstring());
@@ -1462,6 +1500,12 @@ void LoadSettings() {
         patch = FindPatch(game).wstring(); // Fase 58
     }
     SetWindowTextW(g_patch, patch.c_str());
+    if (dlc.empty() || CountDlcs(dlc) == 0) {
+        const fs::path auto_dlc = FindDlc(game);
+        if (!auto_dlc.empty()) {
+            dlc = auto_dlc.wstring();
+        }
+    }
     SetWindowTextW(g_dlc, dlc.c_str());
     ui::SetChecked(g_fps, ReadIni(L"fps60", L"1") == L"1");
     ui::SetChecked(g_console, ReadIni(L"console", L"0") == L"1");
@@ -1513,6 +1557,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 LoadArt(folder);
                 if (GetText(g_patch).empty()) { // Fase 58: acha a pasta da atualizacao sozinha
                     SetWindowTextW(g_patch, FindPatch(folder).wstring().c_str());
+                }
+                if (GetText(g_dlc).empty() || CountDlcs(GetText(g_dlc)) == 0) {
+                    SetWindowTextW(g_dlc, FindDlc(folder).wstring().c_str());
                 }
                 SaveSettings();
             }

@@ -2775,9 +2775,10 @@ void SavePipelineState(u64 hash, const std::vector<u32>& key) {
 // novos espera o mais lento deles, e nao a soma (na sessao do usuario chegavam a 134 ms em fila).
 int PipelineThreadCount() {
     static const int count = [] {
-        const char* env = std::getenv("LD_PIPE_THREADS"); // so para medir
-        const int n = env ? std::atoi(env) : 6; // 6 > 4 no teste a frio: 1345 x 4144 draws adiados
-        return std::clamp(n, 1, 8);
+        const char* env = std::getenv("LD_PIPE_THREADS");
+        if (env) return std::clamp(std::atoi(env), 1, 32);
+        const unsigned int hw = std::thread::hardware_concurrency();
+        return std::clamp<int>(hw ? static_cast<int>(hw) : 8, 6, 24);
     }();
     return count;
 }
@@ -2815,7 +2816,7 @@ void PipelineWorker() {
         // aquecimento e pedidos sem pressa ficam abaixo do normal e nao disputam a CPU com o jogo.
         const bool urgent = job.fast || (!job.upgrade && !job.prewarm);
         SetThreadPriority(GetCurrentThread(), urgent ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
-        g_pipeline_flags = job.fast ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0; // Fase 56
+        g_pipeline_flags = (job.fast || job.prewarm) ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0;
         if (!job.vs || !job.ps) {
             ResolvePairModules(job.draw.pair, &job.vs, &job.ps); // Fase 59: par do pacote registrado sem modulos
         }
@@ -2980,12 +2981,12 @@ u64 g_draws_late_texture = 0;
 // ate g_burst_wait_ms: um engasgo curto no corte, no lugar de objetos faltando.
 // Fase 56: limiar 1 e teto 400 ms: o frame nao sai sem objetos (a 1a vez vira um engasgo no corte, sem
 // pop-in). Os pipelines urgentes saem sem otimizacao (Fase 56), o que encurta esse engasgo.
-double g_burst_wait_ms = 0.0; // Eliminado: nunca travar por centenas de ms esperando pipelines
+double g_burst_wait_ms = 16.0; // Teto de 1 frame (16 ms) para compilar sem pop-in preto
 u32 g_burst_threshold = 1;
 
 void WaitFramePipelines() {
     const auto start = std::chrono::steady_clock::now();
-    double budget = std::clamp(g_sync_budget_ms - g_frame_wait_spent_ms, 0.0, 2.0); // maximo de 2 ms para manter 60 FPS
+    double budget = std::clamp(g_sync_budget_ms - g_frame_wait_spent_ms, 0.0, 16.0); // ate 1 frame
     g_frame_wait_spent_ms = 0;
     if (g_burst_wait_ms > budget) {
         std::unordered_set<u64> pending;
