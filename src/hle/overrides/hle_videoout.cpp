@@ -157,6 +157,8 @@ void SetFullscreen(HWND hwnd, bool enabled) {
     render::VulkanRenderer::Instance().RequestSwapchainRebuild();
 }
 
+} // namespace
+
 void SetWindowResolution(u32 width, u32 height) {
     g_window_width = width;
     g_window_height = height;
@@ -174,6 +176,8 @@ void SetWindowResolution(u32 width, u32 height) {
     }
     render::VulkanRenderer::Instance().RequestSwapchainRebuild();
 }
+
+namespace {
 
 static void ApplyAndSaveVideoSettings() {
     HWND hwnd = static_cast<HWND>(WindowHandle());
@@ -263,6 +267,8 @@ static void InitMenuDefaults() {
     }
 }
 
+} // namespace
+
 void ToggleVideoSettingsMenu() {
     InitMenuDefaults();
     g_video_menu_open = !g_video_menu_open;
@@ -304,6 +310,8 @@ void HandleVideoMenuController(u32 pressed) {
         last_nav = now;
     }
 }
+
+namespace {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
