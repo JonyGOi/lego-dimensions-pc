@@ -61,6 +61,12 @@ void SetStatsOverlay(bool enabled);
 // Chamado uma vez por quadro do jogo, antes do DrawFrame: mede o tempo do quadro e, ligado, enfileira o desenho.
 void QueueStatsOverlay();
 
+// Menu de configuracoes de video dentro do jogo (F2 ou L3+R3)
+void SetWindowResolution(u32 width, u32 height);
+void ToggleVideoSettingsMenu();
+bool IsVideoSettingsMenuOpen();
+void HandleVideoMenuController(u32 pressed_buttons);
+
 // true se a janela do jogo existe e esta em primeiro plano (o teclado so vale nesse caso).
 bool WindowHasFocus();
 // HWND da janela do jogo (nullptr se nao ha janela): dona dos dialogos do port.

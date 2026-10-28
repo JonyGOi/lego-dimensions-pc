@@ -19,6 +19,8 @@ struct AvPlayer {
     std::atomic<bool> active{false};
 };
 
+using CallbackFn = void (HLE_SYSV_ABI*)(void* user_data, int event_id, int source_id, void* event_data);
+
 HLE_IMPL(u64, sceAvPlayerInit, const void* init_data) {
     auto* player = new AvPlayer();
     if (init_data) {
@@ -45,10 +47,13 @@ HLE_IMPL(int, sceAvPlayerAddSource, AvPlayer* player, const char* filename) {
         if (filename) {
             player->source = filename;
         }
+        if (player->user_data) {
+            // Desbloqueia diretamente o loop de espera do eboot na thread NuBgProc-ET (while(![rbx + 0x28]) usleep(1000))
+            *reinterpret_cast<u8*>(reinterpret_cast<uintptr_t>(player->user_data) + 0x28) = 1;
+        }
         if (player->callback) {
-            using CallbackFn = void (*)(void* user_data, int event_id, int source_id, void* event_data);
             auto fn = reinterpret_cast<CallbackFn>(player->callback);
-            // Evento 2 = SCE_AVPLAYER_STATE_READY -> notifica os streams e desbloqueia a thread NuBgProc-ET
+            // Evento 2 = SCE_AVPLAYER_STATE_READY -> configura os streams
             log::Tagged("AVPLAYER", "Disparando evento READY (2) para callback %p (user_data=%p)", player->callback, player->user_data);
             fn(player->user_data, 2, 0, nullptr);
         }
@@ -67,8 +72,10 @@ HLE_IMPL(int, sceAvPlayerGetStreamInfo, AvPlayer* player, u32 stream_index, void
     log::Tagged("AVPLAYER", "sceAvPlayerGetStreamInfo(%p, stream=%u, info=%p)", player, stream_index, info);
     if (info) {
         std::memset(info, 0, 128);
-        // info[0] e o tipo de stream (0 = video)
-        *reinterpret_cast<u32*>(info) = 0;
+        *reinterpret_cast<u32*>(info) = 0; // tipo 0 = video
+        *reinterpret_cast<u32*>(static_cast<char*>(info) + 8) = 1920; // largura
+        *reinterpret_cast<u32*>(static_cast<char*>(info) + 12) = 1080; // altura
+        *reinterpret_cast<u64*>(static_cast<char*>(info) + 24) = 1000; // duracao
     }
     return err::OK;
 }
@@ -93,11 +100,14 @@ HLE_IMPL(int, sceAvPlayerStart, AvPlayer* player) {
     log::Tagged("AVPLAYER", "sceAvPlayerStart(%p)", player);
     if (player) {
         player->active = true;
+        if (player->user_data) {
+            *reinterpret_cast<u8*>(reinterpret_cast<uintptr_t>(player->user_data) + 0x28) = 1;
+        }
         if (player->callback) {
-            using CallbackFn = void (*)(void* user_data, int event_id, int source_id, void* event_data);
             auto fn = reinterpret_cast<CallbackFn>(player->callback);
-            // Evento 3 = SCE_AVPLAYER_STATE_PLAY
+            // Dispara STATE_PLAY (3) e imediatamente STATE_EOF (4) para avisar o jogo que o trailer terminou
             fn(player->user_data, 3, 0, nullptr);
+            fn(player->user_data, 4, 0, nullptr);
         }
     }
     return err::OK;
@@ -105,7 +115,7 @@ HLE_IMPL(int, sceAvPlayerStart, AvPlayer* player) {
 HLE_OVERRIDE(sceAvPlayerStart);
 
 HLE_IMPL(int, sceAvPlayerIsActive, AvPlayer* player) {
-    // Retorna 0 para indicar que o playback terminou, permitindo ao jogo retornar ao portal
+    // Retorna 0 para indicar que o playback terminou, permitindo ao jogo retornar imediatamente ao portal
     return 0;
 }
 HLE_OVERRIDE(sceAvPlayerIsActive);
@@ -130,7 +140,6 @@ HLE_IMPL(int, sceAvPlayerStop, AvPlayer* player) {
     if (player) {
         player->active = false;
         if (player->callback) {
-            using CallbackFn = void (*)(void* user_data, int event_id, int source_id, void* event_data);
             auto fn = reinterpret_cast<CallbackFn>(player->callback);
             // Evento 1 = SCE_AVPLAYER_STATE_STOP
             fn(player->user_data, 1, 0, nullptr);

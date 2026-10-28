@@ -5297,6 +5297,10 @@ void VulkanRenderer::RequestSwapchainRebuild() {
     g.swapchain_dirty.store(true, std::memory_order_relaxed);
 }
 
+void VulkanRenderer::SavePipelineCache() {
+    render::SavePipelineCache();
+}
+
 std::string VulkanRenderer::Describe() const {
     std::lock_guard lock(g.mutex);
     if (!g.active) {

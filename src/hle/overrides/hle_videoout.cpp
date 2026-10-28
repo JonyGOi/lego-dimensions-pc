@@ -39,6 +39,7 @@
 
 namespace hle::gnm {
 void WarmupStatus(char* text, size_t size); // hle_gnm.cpp
+void SetButtonIcons(const char* name); // hle_gnm.cpp
 }
 
 namespace hle::videoout {
@@ -103,12 +104,37 @@ constexpr UINT_PTR kTitleTimer = 1;
 // Fase 60: tela cheia sem bordas (janela WS_POPUP do tamanho do monitor). O swapchain acompanha o novo
 // tamanho como num redimensionamento comum. F11 alterna; --fullscreen abre assim.
 std::atomic<bool> g_start_fullscreen{false};
-// Fase 61: tamanho da area util da janela (--resolution LxA). O jogo continua desenhando em 1920x1080 e a
-// imagem e escalada para a janela, como no tamanho padrao.
 std::atomic<u32> g_window_width{1920}, g_window_height{1080};
 bool g_fullscreen = false;
-std::atomic<bool> g_stats_overlay{false}; // Fase 65: contador de FPS / info (--stats-overlay, F10)
+std::atomic<bool> g_stats_overlay{false};
+std::atomic<bool> g_video_menu_open{false};
+int g_menu_selected = 0;
+int g_save_confirm_timer = 0;
 WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};
+
+struct MenuItem {
+    std::string label;
+    std::vector<std::string> options;
+    int selected = 0;
+};
+
+static std::vector<MenuItem> g_menu_items = {
+    {"RESOLUCAO", {"1280X720", "1600X900", "1920X1080", "2560X1440", "3840X2160"}, 2},
+    {"MODO DE TELA", {"TELA CHEIA", "JANELA"}, 0},
+    {"ANTI-ALIASING", {"DESLIGADO", "MSAA 2X", "MSAA 4X", "MSAA 8X"}, 2},
+    {"LIMITE FPS", {"60 FPS", "30 FPS", "DESBLOQUEADO"}, 0},
+    {"CONTADOR FPS (F10)", {"DESLIGADO", "LIGADO"}, 0},
+    {"ICONES CONTROLE", {"AUTO", "PS4", "XBOX", "SWITCH"}, 0}
+};
+
+static void WriteLauncherIni(const wchar_t* key, const wchar_t* val) {
+    wchar_t exe[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+        std::filesystem::path root = std::filesystem::path(exe).parent_path();
+        if (root.filename() == L"build") root = root.parent_path();
+        WritePrivateProfileStringW(L"launcher", key, val, (root / L"launcher.ini").wstring().c_str());
+    }
+}
 
 void SetFullscreen(HWND hwnd, bool enabled) {
     if (enabled == g_fullscreen) {
@@ -116,11 +142,11 @@ void SetFullscreen(HWND hwnd, bool enabled) {
     }
     if (enabled) {
         GetWindowPlacement(hwnd, &g_windowed_placement);
-        MONITORINFO monitor{sizeof(monitor)};
-        GetMonitorInfoA(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
-        const RECT& r = monitor.rcMonitor;
+        int screen_w = GetSystemMetrics(SM_CXSCREEN);
+        int screen_h = GetSystemMetrics(SM_CYSCREEN);
+        if (screen_w <= 0 || screen_h <= 0) { screen_w = 1920; screen_h = 1080; }
         SetWindowLongPtrA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-        SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, screen_w, screen_h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
     } else {
         SetWindowLongPtrA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
         SetWindowPlacement(hwnd, &g_windowed_placement);
@@ -129,6 +155,154 @@ void SetFullscreen(HWND hwnd, bool enabled) {
     g_fullscreen = enabled;
     log::Tagged("JANELA", "%s", enabled ? "tela cheia" : "janela");
     render::VulkanRenderer::Instance().RequestSwapchainRebuild();
+}
+
+void SetWindowResolution(u32 width, u32 height) {
+    g_window_width = width;
+    g_window_height = height;
+    HWND hwnd = static_cast<HWND>(WindowHandle());
+    if (hwnd && !g_fullscreen) {
+        RECT rect{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+        AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        int win_w = rect.right - rect.left;
+        int win_h = rect.bottom - rect.top;
+        int screen_w = GetSystemMetrics(SM_CXSCREEN);
+        int screen_h = GetSystemMetrics(SM_CYSCREEN);
+        int x = (screen_w > win_w) ? (screen_w - win_w) / 2 : 0;
+        int y = (screen_h > win_h) ? (screen_h - win_h) / 2 : 0;
+        SetWindowPos(hwnd, nullptr, x, y, win_w, win_h, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    render::VulkanRenderer::Instance().RequestSwapchainRebuild();
+}
+
+static void ApplyAndSaveVideoSettings() {
+    HWND hwnd = static_cast<HWND>(WindowHandle());
+    
+    // Resolucao
+    static const u32 kResW[] = {1280, 1600, 1920, 2560, 3840};
+    static const u32 kResH[] = {720, 900, 1080, 1440, 2160};
+    static const wchar_t* const kResStr[] = {L"1280x720", L"1600x900", L"1920x1080", L"2560x1440", L"3840x2160"};
+    int r = g_menu_items[0].selected;
+    if (r >= 0 && r < 5) {
+        WriteLauncherIni(L"resolucao", kResStr[r]);
+        SetWindowResolution(kResW[r], kResH[r]);
+    }
+    
+    // Modo de Tela
+    bool want_full = (g_menu_items[1].selected == 0);
+    WriteLauncherIni(L"telacheia", want_full ? L"1" : L"0");
+    if (hwnd) {
+        SetFullscreen(hwnd, want_full);
+    }
+    
+    // Anti-Aliasing (MSAA)
+    static const wchar_t* const kMsaaStr[] = {L"1", L"2", L"4", L"8"};
+    int m = g_menu_items[2].selected;
+    if (m >= 0 && m < 4) {
+        WriteLauncherIni(L"msaa", kMsaaStr[m]);
+    }
+    
+    // Limite FPS
+    int f = g_menu_items[3].selected;
+    WriteLauncherIni(L"fps60", f == 0 ? L"1" : L"0");
+    SetForce60Hz(f == 0);
+    
+    // Contador FPS
+    bool stats = (g_menu_items[4].selected == 1);
+    SetStatsOverlay(stats);
+    
+    // Icones
+    static const char* const kIconsAnsi[] = {"auto", "ps4", "xboxone", "wiiu"};
+    static const wchar_t* const kIconsStr[] = {L"auto", L"ps4", L"xboxone", L"wiiu"};
+    int ic = g_menu_items[5].selected;
+    if (ic >= 0 && ic < 4) {
+        WriteLauncherIni(L"icones", kIconsStr[ic]);
+        gnm::SetButtonIcons(kIconsAnsi[ic]);
+    }
+    
+    g_save_confirm_timer = 90;
+}
+
+static void InitMenuDefaults() {
+    static bool s_init = false;
+    if (s_init) return;
+    s_init = true;
+    wchar_t exe[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+        std::filesystem::path root = std::filesystem::path(exe).parent_path();
+        if (root.filename() == L"build") root = root.parent_path();
+        std::filesystem::path ini = root / L"launcher.ini";
+        wchar_t buf[64]{};
+        
+        GetPrivateProfileStringW(L"launcher", L"resolucao", L"1920x1080", buf, 64, ini.wstring().c_str());
+        if (wcsstr(buf, L"1280x720")) g_menu_items[0].selected = 0;
+        else if (wcsstr(buf, L"1600x900")) g_menu_items[0].selected = 1;
+        else if (wcsstr(buf, L"1920x1080")) g_menu_items[0].selected = 2;
+        else if (wcsstr(buf, L"2560x1440")) g_menu_items[0].selected = 3;
+        else if (wcsstr(buf, L"3840x2160")) g_menu_items[0].selected = 4;
+        
+        GetPrivateProfileStringW(L"launcher", L"telacheia", L"1", buf, 64, ini.wstring().c_str());
+        g_menu_items[1].selected = (_wcsicmp(buf, L"0") == 0) ? 1 : 0;
+        
+        GetPrivateProfileStringW(L"launcher", L"msaa", L"4", buf, 64, ini.wstring().c_str());
+        if (wcsstr(buf, L"1")) g_menu_items[2].selected = 0;
+        else if (wcsstr(buf, L"2")) g_menu_items[2].selected = 1;
+        else if (wcsstr(buf, L"4")) g_menu_items[2].selected = 2;
+        else if (wcsstr(buf, L"8")) g_menu_items[2].selected = 3;
+        
+        GetPrivateProfileStringW(L"launcher", L"fps60", L"1", buf, 64, ini.wstring().c_str());
+        g_menu_items[3].selected = (_wcsicmp(buf, L"0") == 0) ? 1 : 0;
+        
+        g_menu_items[4].selected = g_stats_overlay.load() ? 1 : 0;
+        
+        GetPrivateProfileStringW(L"launcher", L"icones", L"auto", buf, 64, ini.wstring().c_str());
+        if (wcsstr(buf, L"ps4") || wcsstr(buf, L"ps3")) g_menu_items[5].selected = 1;
+        else if (wcsstr(buf, L"xbox")) g_menu_items[5].selected = 2;
+        else if (wcsstr(buf, L"wiiu") || wcsstr(buf, L"switch")) g_menu_items[5].selected = 3;
+        else g_menu_items[5].selected = 0;
+    }
+}
+
+void ToggleVideoSettingsMenu() {
+    InitMenuDefaults();
+    g_video_menu_open = !g_video_menu_open;
+    log::Tagged("VIDEO-MENU", "%s", g_video_menu_open ? "aberto" : "fechado");
+}
+
+bool IsVideoSettingsMenuOpen() {
+    return g_video_menu_open.load();
+}
+
+void HandleVideoMenuController(u32 pressed) {
+    if (!g_video_menu_open) return;
+    static auto last_nav = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration<float, std::milli>(now - last_nav).count() < 160.0f) {
+        return;
+    }
+    // kUp = 0x10, kRight = 0x20, kDown = 0x40, kLeft = 0x80
+    // kCross = 0x4000, kCircle = 0x2000
+    if (pressed & 0x10) { // Up
+        g_menu_selected = (g_menu_selected - 1 + static_cast<int>(g_menu_items.size())) % g_menu_items.size();
+        last_nav = now;
+    } else if (pressed & 0x40) { // Down
+        g_menu_selected = (g_menu_selected + 1) % g_menu_items.size();
+        last_nav = now;
+    } else if (pressed & 0x80) { // Left
+        auto& item = g_menu_items[g_menu_selected];
+        item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
+        last_nav = now;
+    } else if (pressed & 0x20) { // Right
+        auto& item = g_menu_items[g_menu_selected];
+        item.selected = (item.selected + 1) % item.options.size();
+        last_nav = now;
+    } else if (pressed & 0x4000) { // Cross (Enter / Apply)
+        ApplyAndSaveVideoSettings();
+        last_nav = now;
+    } else if (pressed & 0x2000) { // Circle (Back / Close)
+        g_video_menu_open = false;
+        last_nav = now;
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -172,24 +346,59 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return 0;
     }
     case WM_KEYDOWN:
-        if (wparam == VK_F11 && !(lparam & (1 << 30))) { // Fase 60: F11 alterna a tela cheia (sem repeticao)
+        if (wparam == VK_F2 && !(lparam & (1 << 30))) {
+            ToggleVideoSettingsMenu();
+            return 0;
+        }
+        if (g_video_menu_open.load()) {
+            if (wparam == VK_UP) {
+                g_menu_selected = (g_menu_selected - 1 + static_cast<int>(g_menu_items.size())) % g_menu_items.size();
+                return 0;
+            }
+            if (wparam == VK_DOWN) {
+                g_menu_selected = (g_menu_selected + 1) % g_menu_items.size();
+                return 0;
+            }
+            if (wparam == VK_LEFT) {
+                auto& item = g_menu_items[g_menu_selected];
+                item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
+                return 0;
+            }
+            if (wparam == VK_RIGHT) {
+                auto& item = g_menu_items[g_menu_selected];
+                item.selected = (item.selected + 1) % item.options.size();
+                return 0;
+            }
+            if (wparam == VK_RETURN) {
+                ApplyAndSaveVideoSettings();
+                return 0;
+            }
+            if (wparam == VK_ESCAPE) {
+                g_video_menu_open = false;
+                return 0;
+            }
+            return 0;
+        }
+        if (wparam == VK_F11 && !(lparam & (1 << 30))) {
             SetFullscreen(hwnd, !g_fullscreen);
             return 0;
         }
-        if (wparam == VK_F10 && !(lparam & (1 << 30))) { // Fase 65: F10 liga / desliga o contador de FPS / info
+        if (wparam == VK_F10 && !(lparam & (1 << 30))) {
             SetStatsOverlay(!g_stats_overlay);
             return 0;
         }
         return DefWindowProcA(hwnd, msg, wparam, lparam);
     case WM_SETCURSOR:
         if (g_fullscreen && LOWORD(lparam) == HTCLIENT) {
-            SetCursor(nullptr); // sem seta do mouse por cima do jogo em tela cheia
+            SetCursor(nullptr);
             return TRUE;
         }
         return DefWindowProcA(hwnd, msg, wparam, lparam);
     case WM_CLOSE:
         std::printf("\nJanela fechada pelo usuario.\n");
-        log::Shutdown(0);
+        render::VulkanRenderer::Instance().SavePipelineCache();
+        TerminateProcess(GetCurrentProcess(), 0);
+        return 0;
     default:
         return DefWindowProcA(hwnd, msg, wparam, lparam);
     }
@@ -207,34 +416,27 @@ void WindowThread() {
     RegisterClassA(&wc);
     const u32 target_w = g_window_width.load();
     const u32 target_h = g_window_height.load();
-    RECT rect{0, 0, static_cast<LONG>(target_w), static_cast<LONG>(target_h)};
-    RECT work{};
-    bool borderless_fit = false;
-    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0) && work.right > work.left) {
-        const u32 work_w = static_cast<u32>(work.right - work.left);
-        const u32 work_h = static_cast<u32>(work.bottom - work.top);
-        if (target_w >= work_w && target_h >= work_h) {
-            borderless_fit = true;
-        } else {
-            const RECT frame = [] { RECT r{0, 0, 0, 0}; AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE); return r; }();
-            const double room_w = (work.right - work.left) - (frame.right - frame.left);
-            const double room_h = (work.bottom - work.top) - (frame.bottom - frame.top);
-            if (rect.right > room_w || rect.bottom > room_h) {
-                const double scale = std::min({1.0, room_w / rect.right, room_h / rect.bottom});
-                rect.right = static_cast<LONG>(rect.right * scale);
-                rect.bottom = static_cast<LONG>(rect.bottom * scale);
-            }
-        }
-    }
     HWND hwnd = nullptr;
-    if (borderless_fit && !g_start_fullscreen.load()) {
+    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    if (screen_w <= 0 || screen_h <= 0) {
+        screen_w = 1920;
+        screen_h = 1080;
+    }
+    if (g_start_fullscreen.load()) {
         hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_POPUP | WS_VISIBLE,
-                             0, 0, target_w, target_h, nullptr, nullptr, wc.hInstance, nullptr);
+                             0, 0, screen_w, screen_h, nullptr, nullptr, wc.hInstance, nullptr);
+        g_fullscreen = true;
     } else {
+        RECT rect{0, 0, static_cast<LONG>(target_w ? target_w : 1920), static_cast<LONG>(target_h ? target_h : 1080)};
         AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+        int win_w = rect.right - rect.left;
+        int win_h = rect.bottom - rect.top;
+        int x = (screen_w > win_w) ? (screen_w - win_w) / 2 : CW_USEDEFAULT;
+        int y = (screen_h > win_h) ? (screen_h - win_h) / 2 : CW_USEDEFAULT;
         hwnd = CreateWindowA(wc.lpszClassName, "[LEGO Dimensions PC]", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                             CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, nullptr,
-                             nullptr, wc.hInstance, nullptr);
+                             x, y, win_w, win_h, nullptr, nullptr, wc.hInstance, nullptr);
+        g_fullscreen = false;
     }
     if (!hwnd) {
         std::printf("AVISO: nao foi possivel criar a janela (erro %lu)\n", GetLastError());
@@ -242,7 +444,7 @@ void WindowThread() {
     }
     g_hwnd.store(hwnd);
     if (g_start_fullscreen.load()) {
-        SetFullscreen(hwnd, true); // antes do Vulkan: o swapchain ja nasce do tamanho do monitor
+        SetFullscreen(hwnd, true);
     }
     // Backend grafico: superficie do Vulkan presa a esta janela. Se falhar, a janela continua
     // como antes (preta, com o texto por GDI).
@@ -485,7 +687,15 @@ const u8* Glyph(char c) {
     static const u8 kSlash[7] = {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10}, kPercent[7] = {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03},
                     kColon[7] = {0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00}, kDot[7] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C},
                     kDash[7] = {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}, kSpace[7] = {},
-                    kDegree[7] = {0x0C, 0x12, 0x12, 0x0C, 0x00, 0x00, 0x00}; // Fase 65: '^' = grau
+                    kDegree[7] = {0x0C, 0x12, 0x12, 0x0C, 0x00, 0x00, 0x00},
+                    kLeftAngle[7] = {0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02},
+                    kRightAngle[7] = {0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08},
+                    kLeftBracket[7] = {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E},
+                    kRightBracket[7] = {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E},
+                    kLeftParen[7] = {0x04, 0x08, 0x10, 0x10, 0x10, 0x08, 0x04},
+                    kRightParen[7] = {0x04, 0x02, 0x01, 0x01, 0x01, 0x02, 0x04},
+                    kPlus[7] = {0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00},
+                    kEqual[7] = {0x00, 0x1F, 0x00, 0x00, 0x1F, 0x00, 0x00};
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     if (c >= 'A' && c <= 'Z') return kLetters[c - 'A'];
     if (c >= '0' && c <= '9') return kDigits[c - '0'];
@@ -496,6 +706,14 @@ const u8* Glyph(char c) {
     case '.': return kDot;
     case '-': return kDash;
     case '^': return kDegree;
+    case '<': return kLeftAngle;
+    case '>': return kRightAngle;
+    case '[': return kLeftBracket;
+    case ']': return kRightBracket;
+    case '(': return kLeftParen;
+    case ')': return kRightParen;
+    case '+': return kPlus;
+    case '=': return kEqual;
     default: return kSpace;
     }
 }
@@ -634,10 +852,12 @@ void QueueStatsOverlay() {
     }
     HWND hwnd = static_cast<HWND>(WindowHandle());
     RECT client{};
-    if (!g_stats_overlay || !hwnd || !GetClientRect(hwnd, &client) || client.right < 64 || client.bottom < 64) {
+    if (!hwnd || !GetClientRect(hwnd, &client) || client.right < 64 || client.bottom < 64) {
         return;
     }
-    const runtime::hwmon::Snapshot s = runtime::hwmon::Get();
+    if (!g_stats_overlay.load() && !g_video_menu_open.load()) {
+        return;
+    }
     static std::vector<LoadingVertex> vertices;
     vertices.clear();
     OverlayCanvas c{vertices, static_cast<float>(client.right), static_cast<float>(client.bottom)};
@@ -699,23 +919,75 @@ void QueueStatsOverlay() {
         const float py = gy1 - (gy1 - gy0) * t;
         c.Rect(px, py - p * 0.5f, px + (gx1 - gx0) / kFrames + 0.5f, py + p * 0.5f, kGray);
     }
-    render::DrawCall draw;
-    draw.vertex_data = vertices.data();
-    draw.vertex_count = static_cast<u32>(vertices.size());
-    draw.stride = sizeof(LoadingVertex);
-    draw.position_offset = 0;
-    draw.position_format = render::DrawCall::kFloat3;
-    draw.has_color = true;
-    draw.color_offset = 12;
-    draw.primitive = render::DrawCall::kTriangleList;
-    draw.blend = false;
-    draw.uv_format = render::DrawCall::kUvNone;
-    static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    std::memcpy(draw.mvp, kIdentity, sizeof(kIdentity));
-    draw.viewport[0] = draw.viewport[1] = 0.0f;
-    draw.viewport[2] = draw.target_size[0] = c.w;
-    draw.viewport[3] = draw.target_size[1] = c.h;
-    render::VulkanRenderer::Instance().QueueDraw(draw);
+    if (g_video_menu_open.load()) {
+        constexpr u32 kBg = 0xEE121216, kBorder = 0xFF00D000, kTitleYellow = 0xFF00E0FF, kHiBg = 0xAA303038;
+        constexpr u32 kWhite = 0xFFFFFFFF, kGray = 0xFFA0A0A0, kCyan = 0xFFE0C040;
+        
+        float scale_ui = client.bottom >= 1400 ? 1.5f : (client.bottom >= 1000 ? 1.0f : 0.75f);
+        float box_w = 700.0f * scale_ui;
+        float box_h = 420.0f * scale_ui;
+        float box_x0 = (client.right - box_w) / 2.0f;
+        float box_y0 = (client.bottom - box_h) / 2.0f;
+        float box_x1 = box_x0 + box_w;
+        float box_y1 = box_y0 + box_h;
+        
+        c.Rect(box_x0 - 4.0f, box_y0 - 4.0f, box_x1 + 4.0f, box_y1 + 4.0f, kBorder);
+        c.Rect(box_x0, box_y0, box_x1, box_y1, kBg);
+        
+        const std::string title = "CONFIGURACOES DE VIDEO";
+        float font_title = 3.5f * scale_ui;
+        c.Write(title, box_x0 + (box_w - TextWidth(title, font_title)) / 2.0f, box_y0 + 20.0f * scale_ui, font_title, kTitleYellow);
+        
+        c.Rect(box_x0 + 20.0f * scale_ui, box_y0 + 55.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y0 + 57.0f * scale_ui, kGray);
+        
+        float row_y = box_y0 + 75.0f * scale_ui;
+        float font_item = 2.4f * scale_ui;
+        for (size_t i = 0; i < g_menu_items.size(); ++i) {
+            const auto& item = g_menu_items[i];
+            const bool is_sel = (static_cast<int>(i) == g_menu_selected);
+            if (is_sel) {
+                c.Rect(box_x0 + 16.0f * scale_ui, row_y - 4.0f * scale_ui, box_x1 - 16.0f * scale_ui, row_y + 26.0f * scale_ui, kHiBg);
+            }
+            c.Write(is_sel ? ("> " + item.label) : ("  " + item.label), box_x0 + 24.0f * scale_ui, row_y, font_item, is_sel ? kTitleYellow : kWhite);
+            
+            std::string val_str = "< " + item.options[item.selected] + " >";
+            float val_w = TextWidth(val_str, font_item);
+            c.Write(val_str, box_x1 - val_w - 32.0f * scale_ui, row_y, font_item, is_sel ? kCyan : kGray);
+            
+            row_y += 38.0f * scale_ui;
+        }
+        
+        c.Rect(box_x0 + 20.0f * scale_ui, box_y1 - 60.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y1 - 58.0f * scale_ui, kGray);
+        if (g_save_confirm_timer > 0) {
+            --g_save_confirm_timer;
+            const std::string saved_msg = "CONFIGURACOES SALVAS COM SUCESSO!";
+            c.Write(saved_msg, box_x0 + (box_w - TextWidth(saved_msg, font_item)) / 2.0f, box_y1 - 42.0f * scale_ui, font_item, kBorder);
+        } else {
+            const std::string footer = "[CIMA/BAIXO] NAVEGAR  [ESQ/DIR] ALTERAR  [ENTER/A] SALVAR  [F2/ESC/B] SAIR";
+            float font_foot = 1.7f * scale_ui;
+            c.Write(footer, box_x0 + (box_w - TextWidth(footer, font_foot)) / 2.0f, box_y1 - 40.0f * scale_ui, font_foot, kGray);
+        }
+    }
+
+    if (!vertices.empty()) {
+        render::DrawCall draw;
+        draw.vertex_data = vertices.data();
+        draw.vertex_count = static_cast<u32>(vertices.size());
+        draw.stride = sizeof(LoadingVertex);
+        draw.position_offset = 0;
+        draw.position_format = render::DrawCall::kFloat3;
+        draw.has_color = true;
+        draw.color_offset = 12;
+        draw.primitive = render::DrawCall::kTriangleList;
+        draw.blend = true;
+        draw.uv_format = render::DrawCall::kUvNone;
+        static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        std::memcpy(draw.mvp, kIdentity, sizeof(kIdentity));
+        draw.viewport[0] = draw.viewport[1] = 0.0f;
+        draw.viewport[2] = draw.target_size[0] = c.w;
+        draw.viewport[3] = draw.target_size[1] = c.h;
+        render::VulkanRenderer::Instance().QueueDraw(draw);
+    }
 }
 
 bool OpenWindowEarly(u32 timeout_ms) {

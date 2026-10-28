@@ -261,6 +261,7 @@ public:
 
     void Shutdown();
     void RequestSwapchainRebuild();
+    void SavePipelineCache();
 
     bool Active() const;
     const std::string& LastError() const;

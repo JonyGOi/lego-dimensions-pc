@@ -659,6 +659,23 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
     ReadKeyboard(in);
     ReadScript(in);
 
+    // Menu de Configuracoes de Video (L3 + R3 no controle)
+    static bool s_menu_combo_held = false;
+    const bool menu_combo_now = ((in.buttons & (kL3 | kR3)) == (kL3 | kR3));
+    if (menu_combo_now && !s_menu_combo_held) {
+        videoout::ToggleVideoSettingsMenu();
+    }
+    s_menu_combo_held = menu_combo_now;
+
+    if (videoout::IsVideoSettingsMenuOpen()) {
+        videoout::HandleVideoMenuController(in.buttons);
+        in.buttons = 0;
+        in.lx = 128;
+        in.ly = 128;
+        in.rx = 128;
+        in.ry = 128;
+    }
+
     std::memset(data, 0, sizeof(*data));
     data->buttons = in.buttons;
     data->left_x = in.lx;
