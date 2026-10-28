@@ -56,7 +56,7 @@ std::atomic<u64> g_validation_errors{0}, g_validation_warnings{0};
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence)                  \
     X(vkWaitForFences) X(vkGetFenceStatus) X(vkResetFences) X(vkQueueSubmit) X(vkCreateBuffer) X(vkDestroyBuffer)      \
     X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory) X(vkBindBufferMemory)     \
-    X(vkMapMemory) X(vkCreateShaderModule) X(vkDestroyShaderModule) X(vkCreatePipelineLayout)      \
+    X(vkMapMemory) X(vkUnmapMemory) X(vkCreateShaderModule) X(vkDestroyShaderModule) X(vkCreatePipelineLayout)      \
     X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)                   \
     X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)                   \
     X(vkCmdBindPipeline) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdPushConstants)              \
