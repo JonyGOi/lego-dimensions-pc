@@ -159,7 +159,7 @@ def known_pairs():
         with open(path) as f:
             text = f.read()
         m = PAIR_RE.match(text)
-        if m and m.group(5) == 'sim':
+        if m and m.group(5) in ('sim', 'yes'):
             out[(m.group(1), m.group(2), m.group(3))] = text
     return out
 

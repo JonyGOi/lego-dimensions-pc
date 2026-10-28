@@ -28,6 +28,7 @@
 #include <vector>
 
 #include <windows.h>
+#include "../../src/common/shader_metadata.h"
 
 #include "shader_recompiler/backend/bindings.h"
 #include <magic_enum/magic_enum.hpp>
@@ -932,7 +933,7 @@ int main(int argc, char** argv) {
                 }
             }
             const std::array<StageSnapshot, 2>* snapshot = &patched;
-            std::string specialized = "no";
+            std::string specialized = shader_metadata::DescriptorFlag(false);
             if (vs_ok && ps_ok) {
                 Shader::Backend::Bindings real{};
                 Result vs_real, ps_real;
@@ -943,7 +944,7 @@ int main(int argc, char** argv) {
                 if (real_ok && real == shared) {
                     vs_result.spv = vs_real.spv;
                     ps_result.spv = ps_real.spv;
-                    specialized = "yes";
+                    specialized = shader_metadata::DescriptorFlag(true);
                     ++pairs_real;
                     // Formato (dst_sel + tipo numerico + formato de dados do V#) com que cada
                     // atributo foi especializado: o jogo so usa o par se o draw tiver o mesmo.

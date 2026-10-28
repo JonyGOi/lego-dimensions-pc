@@ -41,6 +41,7 @@
 #include <psapi.h>
 
 #include "hle/hle_perf.h"
+#include "common/shader_metadata.h"
 #include "hle/overrides/hle_equeue.h"
 #include "hle/overrides/hle_override.h"
 #include "hle/overrides/hle_videoout.h"
@@ -2808,7 +2809,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
             // plataforma do seletor de mundos em Vorton saia preta. Agora conta como inexistente: usa o
             // pacote AOT, ou vai ao recompilador ao vivo, que regrava o arquivo com os descritores reais.
             char first[512] = {};
-            if (!std::fgets(first, sizeof(first), f) || !std::strstr(first, "actual yes")) {
+            if (!std::fgets(first, sizeof(first), f) || !shader_metadata::HasActualDescriptors(first)) {
                 std::fclose(f);
                 f = nullptr;
                 static std::atomic<u32> logged{0};
@@ -2864,7 +2865,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
         u32 x = 0, y = 0, z = 0, mask = 0;
         GamePairInfo::Resource r{};
         if (!std::strncmp(line, "pair ", 5)) {
-            real = std::strstr(line, " actual yes") != nullptr;
+            real = shader_metadata::HasActualDescriptors(line);
         } else if (std::sscanf(line, "stage %63s hash %*s first_binding %*u first_user_data %u ud_mask %u", a, &y, &mask) == 3) {
             stage = !std::strcmp(a, "ps");
             info->first_ud[stage] = y;

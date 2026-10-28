@@ -115,6 +115,16 @@ to the repository.
 Asset-free checks: `python tools/test_english_output.py`,
 `python tools/test_vulkan_headers.py`, and
 `python tools/test_pkg_extractor_jobs.py --exe <pkg_extractor.exe>`.
+Shader cache regression checks are `python tools/test_shader_metadata.py` and
+the CMake/CTest target `shader_metadata_test` (`BUILD_TESTING=ON`). The latter
+can also read owner-supplied pair `.txt` files passed as arguments.
+
+Shader metadata is a serialized format: its `real sim` / `real nao` flags stay
+unchanged regardless of log language. Both disk and packed AOT pairs use the
+same runtime flag reader; `real yes` from the early English-beta compiler is
+also accepted. English diagnostic output does not require rebuilding existing
+prepared shaders. Translating the flag itself caused audio with a blank game
+window because every prepared pair was rejected before drawing.
 The built-in `lego_dimensions.exe --selftest <prepared-ELF>` checks HLE behavior
 and requires an owner-supplied ELF plus `--app0 <dump>` for its Fios tests.
 Use a separate `--root <test-directory>` to keep test saves out of the normal
