@@ -23,8 +23,12 @@ jobs:
 
       - name: Install Vulkan SDK via Chocolatey
         run: |
-          choco install vulkan-sdk -y
-          $vk = Get-ChildItem "C:\VulkanSDK" | Sort-Object Name -Descending | Select-Object -First 1
+          for ($i=1; $i -le 3; $i++) {
+              choco install vulkan-sdk -y
+              if (Test-Path "C:\VulkanSDK") { break }
+              Start-Sleep -Seconds 5
+          }
+          $vk = Get-ChildItem "C:\VulkanSDK" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
           if ($vk) {
               echo "VULKAN_SDK=$($vk.FullName)" >> $env:GITHUB_ENV
               echo "$($vk.FullName)\bin" >> $env:GITHUB_PATH
