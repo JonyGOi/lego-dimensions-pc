@@ -80,7 +80,7 @@ bool HandleCommand(SOCKET s) {
         return true;
     }
     if (pad < 1 || pad > 3 || index >= toypad::kSlotCount) {
-        std::printf("[TOYPAD-APP] pedido recusado: cmd %u pad %u indice %u\n", cmd, pad, index);
+        std::printf("[TOYPAD-APP] request refused: cmd %u pad %u index %u\n", cmd, pad, index);
         return false;
     }
     TakeToypadExternalControl();
@@ -114,8 +114,8 @@ bool HandleCommand(SOCKET s) {
         if (const auto added = toypad::LoadTag(pad, index, tag, from_file ? path : std::string(), &id)) {
             events.push_back(*added);
         }
-        std::printf("[TOYPAD-APP] LOAD pad %u indice %u: id %u, uid %02x %02x %02x %02x %02x %02x %02x%s%s\n", pad, index, id, tag[0], tag[1],
-                    tag[2], tag[4], tag[5], tag[6], tag[7], from_file ? ", arquivo " : "", from_file ? path.c_str() : "");
+        std::printf("[TOYPAD-APP] LOAD pad %u index %u: id %u, uid %02x %02x %02x %02x %02x %02x %02x%s%s\n", pad, index, id, tag[0], tag[1],
+                    tag[2], tag[4], tag[5], tag[6], tag[7], from_file ? ", file " : "", from_file ? path.c_str() : "");
         Announce(events);
         break;
     }
@@ -124,18 +124,18 @@ bool HandleCommand(SOCKET s) {
         if (const auto removed = toypad::RemoveIndex(index)) {
             events.push_back(*removed);
         }
-        std::printf("[TOYPAD-APP] REMOVE pad %u indice %u%s\n", pad, index, events.empty() ? " (ja estava vazio)" : "");
+        std::printf("[TOYPAD-APP] REMOVE pad %u index %u%s\n", pad, index, events.empty() ? " (already empty)" : "");
         Announce(events);
         break;
     }
     case 3: { // MOVE
         const u8 old_pad = header[3], old_index = header[4];
         if (old_pad < 1 || old_pad > 3 || old_index >= toypad::kSlotCount) {
-            std::printf("[TOYPAD-APP] MOVE recusado: origem pad %u indice %u\n", old_pad, old_index);
+            std::printf("[TOYPAD-APP] MOVE refused: source pad %u index %u\n", old_pad, old_index);
             return true;
         }
         std::vector<toypad::Packet> events = toypad::MoveIndex(pad, index, old_index);
-        std::printf("[TOYPAD-APP] MOVE %u/%u -> %u/%u%s\n", old_pad, old_index, pad, index, events.empty() ? " (origem vazia)" : "");
+        std::printf("[TOYPAD-APP] MOVE %u/%u -> %u/%u%s\n", old_pad, old_index, pad, index, events.empty() ? " (empty source)" : "");
         if (events.size() > 1) { // "removida" (e o que ocupava o destino) agora, "colocada" depois do intervalo
             const toypad::Packet placed = events.back();
             events.pop_back();
@@ -147,7 +147,7 @@ bool HandleCommand(SOCKET s) {
         break;
     }
     default:
-        std::printf("[TOYPAD-APP] comando desconhecido 0x%02x\n", cmd);
+        std::printf("[TOYPAD-APP] unknown command 0x%02x\n", cmd);
         return false; // tamanho desconhecido: o proximo cabecalho se perde
     }
     return true;
@@ -163,7 +163,7 @@ void HandleClient(SOCKET s) {
 void ListenerThread(int port) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        std::printf("[TOYPAD-APP] WSAStartup falhou\n");
+        std::printf("[TOYPAD-APP] WSAStartup failed\n");
         return;
     }
     const SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -173,15 +173,15 @@ void ListenerThread(int port) {
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // so a propria maquina
     if (listener == INVALID_SOCKET || bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
         listen(listener, 4) != 0) {
-        std::printf("[TOYPAD-APP] nao foi possivel escutar em 127.0.0.1:%d (erro %d). A porta esta em uso? (o ShadToypadBridge usa a "
-                    "mesma)\n",
+        std::printf("[TOYPAD-APP] could not listen on 127.0.0.1:%d (error %d). Port in use? (ShadToypadBridge uses "
+                    "same)\n",
                     port, WSAGetLastError());
         if (listener != INVALID_SOCKET) {
             closesocket(listener);
         }
         return;
     }
-    std::printf("[TOYPAD-APP] listener do LegoToypad ativo em 127.0.0.1:%d\n", port);
+    std::printf("[TOYPAD-APP] LegoToypad listener active on 127.0.0.1:%d\n", port);
     for (;;) {
         const SOCKET client = accept(listener, nullptr, nullptr);
         if (client == INVALID_SOCKET) {

@@ -32,12 +32,19 @@ public:
     void Open(const std::filesystem::path& path, FileAccessMode mode) {
         Close();
         _wfopen_s(&file, path.c_str(), mode == FileAccessMode::Read ? L"rb" : L"wb");
+        if (file && mode == FileAccessMode::Write) {
+            write_buffer.resize(1024 * 1024);
+            std::setvbuf(file, write_buffer.data(), _IOFBF, write_buffer.size());
+        }
     }
-    void Close() {
+    bool Close() {
+        bool ok = true;
         if (file) {
-            std::fclose(file);
+            ok = std::fclose(file) == 0;
             file = nullptr;
         }
+        write_buffer.clear();
+        return ok;
     }
     bool IsOpen() const {
         return file != nullptr;
@@ -88,6 +95,8 @@ public:
 
 private:
     std::FILE* file = nullptr;
+    // The buffer must outlive fclose, including its final write/flush.
+    std::vector<char> write_buffer;
 };
 
 } // namespace Common::FS

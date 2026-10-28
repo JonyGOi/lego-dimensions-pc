@@ -50,7 +50,7 @@ int Setup(const stdfs::path& manifest) {
             const stdfs::path dir = Utf8Path(f[1]);
             if (stdfs::is_directory(dir, ec)) {
                 overlays.push_back(dir);
-                std::printf("[MODS] arquivos soltos por cima do jogo: %s\n", f[1].c_str());
+                std::printf("[MODS] loose files overlaying game: %s\n", f[1].c_str());
             }
         } else if (f.size() == 7 && f[0] == "pacote") {
             // pacote <TAB> nome <TAB> .HDR do jogo <TAB> .HDR mudado <TAB> .DAT do jogo <TAB> tamanho dele <TAB> cauda
@@ -64,10 +64,10 @@ int Setup(const stdfs::path& manifest) {
             // o cache vale para o .DAT daquele tamanho; se o jogo mudou (outra pasta, outra versao) o launcher refaz
             if (!stdfs::is_regular_file(r.cache_hdr, ec) || !stdfs::is_regular_file(r.tail, ec) ||
                 stdfs::file_size(r.real_dat, ec) != r.real_size) {
-                std::printf("[MODS] %s: cache desatualizado, fica sem mods (abra pelo launcher para refazer)\n", r.pack.c_str());
+                std::printf("[MODS] %s: stale cache, mods disabled (open via launcher to rebuild)\n", r.pack.c_str());
                 continue;
             }
-            std::printf("[MODS] %s: %llu bytes de arquivos de mod\n", r.pack.c_str(),
+            std::printf("[MODS] %s: %llu bytes of mod files\n", r.pack.c_str(),
                         static_cast<unsigned long long>(stdfs::file_size(r.tail, ec)));
             redirects.push_back(std::move(r));
         } else if (f.size() == 4 && f[0] == "anomaly") {
@@ -75,7 +75,7 @@ int Setup(const stdfs::path& manifest) {
             const stdfs::path hdr = Utf8Path(f[2]);
             const stdfs::path dat = Utf8Path(f[3]);
             if (!stdfs::is_regular_file(hdr, ec) || !stdfs::is_regular_file(dat, ec)) {
-                std::printf("[MODS] Anomaly: %s sumiu da pasta de mods, fica de fora\n", f[1].c_str());
+                std::printf("[MODS] Anomaly: %s disappeared from mods folder, skipped\n", f[1].c_str());
                 continue;
             }
             std::string key = f[1];
@@ -85,7 +85,7 @@ int Setup(const stdfs::path& manifest) {
             anomaly_files["mods/" + key + ".hdr"] = hdr;
             anomaly_files["mods/" + key + ".dat"] = dat;
             anomaly_names.push_back(f[1]);
-            std::printf("[MODS] Anomaly: pacote %s (%s)\n", f[1].c_str(), f[3].c_str());
+            std::printf("[MODS] Anomaly: pack %s (%s)\n", f[1].c_str(), f[3].c_str());
         }
     }
     const int active = static_cast<int>(overlays.size() + redirects.size() + anomaly_names.size());

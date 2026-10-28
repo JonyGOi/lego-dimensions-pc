@@ -55,4 +55,3 @@ jobs:
             tools/dist/build/LegoDimensionsLauncher.exe
             tools/dist/build/LD_PC_Transfer.exe
             tools/dist/build/installer_stub.exe
-

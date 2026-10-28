@@ -38,6 +38,18 @@ inline bool Pt() {
 }
 inline const wchar_t* T(const wchar_t* pt, const wchar_t* en) { return Pt() ? pt : en; }
 
+// Keep script protocol tokens compatible; translate only their displayed labels.
+inline std::wstring LogText(const std::wstring& text) {
+    if (Pt()) return text;
+    for (const auto& pair : {std::pair{L"ERRO ",L"ERROR "},std::pair{L"AVISO ",L"WARNING "},
+         std::pair{L"INSTALADO ",L"INSTALLED "},std::pair{L"GRAVADO ",L"WRITTEN "},
+         std::pair{L"ATUALIZADO ",L"UPDATED "},std::pair{L"PRONTO ",L"READY "}}) {
+        const size_t n=wcslen(pair.first);
+        if(text.compare(0,n,pair.first)==0)return std::wstring(pair.second)+text.substr(n);
+    }
+    return text;
+}
+
 // ---- DPI ----
 inline float g_scale = 1.0f;
 inline int S(float v) { return static_cast<int>(v * g_scale + 0.5f); }

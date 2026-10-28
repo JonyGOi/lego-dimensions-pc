@@ -44,7 +44,7 @@ void* Hook(u64 offset, const void* replacement) {
         ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
         if (ZYAN_FAILED(ZydisDecoderDecodeFull(&decoder, target + length, 32, &insn, ops)) ||
             (insn.attributes & ZYDIS_ATTRIB_IS_RELATIVE)) {
-            std::printf("[ANOMALY] eboot+0x%llx: comeco da funcao diferente do esperado, gancho nao posto\n",
+            std::printf("[ANOMALY] eboot+0x%llx: unexpected function prologue, hook not installed\n",
                         static_cast<u64>(offset));
             return nullptr;
         }
@@ -153,7 +153,7 @@ HLE_SYSV_ABI int FindHash(int* file_table, unsigned int file_hash, char* file_pa
     // diagnostico (LD_ANOMALY_FALTANDO=1): arquivos que o jogo pede e nenhum pacote tem
     static const bool log_missing = std::getenv("LD_ANOMALY_FALTANDO") != nullptr;
     if (log_missing && found < 0 && file_path) {
-        std::printf("[ANOMALY] pedido e nao achado: %s\n", file_path);
+        std::printf("[ANOMALY] requested but not found: %s\n", file_path);
     }
     return found;
 }
@@ -172,7 +172,7 @@ HLE_SYSV_ABI int LoadCsv(char* path, s64* p2, u64 p3, u8* label, int p5, int p6,
         while (!layerable->is_loaded) {
             result = g_load_csv(path, p2, p3, label, p5, p6, p7, p8, p9);
             if (log_layers) {
-                std::printf("[ANOMALY] text.csv camada %d -> %d\n", layerable->last_collisions_index, result);
+                std::printf("[ANOMALY] text.csv layer %d -> %d\n", layerable->last_collisions_index, result);
             }
             if (!cleared) {
                 PATCH(0x004ef7b4, "\x90\x90\x90\x90\x90"); // nao limpa a tabela antes do proximo
@@ -237,7 +237,7 @@ HLE_SYSV_ABI s64* OpenIndividual(s64 device, char* filename, int counter);
 void LoadMods(s64 device) {
     for (const std::string& path : g_paths) {
         s64* dat = OpenIndividual(0, const_cast<char*>(path.c_str()), -1);
-        std::printf("[ANOMALY] %s: %s\n", path.c_str(), dat ? "carregado" : "o jogo nao abriu");
+        std::printf("[ANOMALY] %s: %s\n", path.c_str(), dat ? "carregado" : "the game did not start");
         if (!dat) {
             continue;
         }
@@ -297,7 +297,7 @@ bool Install(u8* base) {
     const char* marker = reinterpret_cast<const char*>(base + 0x2421EBD);
     const size_t len = strnlen(marker, 256);
     if (len < 9 || _strnicmp(marker + len - 9, "_PATCH11C", 9) != 0) {
-        std::printf("[ANOMALY] eboot que nao e o 1.24: mods do Anomaly desligados\n");
+        std::printf("[ANOMALY] eboot is not version 1.24: Anomaly mods disabled\n");
         return false;
     }
     g_open_individual = reinterpret_cast<OpenIndividualFn>(Hook(0x5adc70, reinterpret_cast<const void*>(&OpenIndividual)));
@@ -308,7 +308,7 @@ bool Install(u8* base) {
     PATCH(0x0cb9286, "\x90\x90\x90\x90\x90"); // mantem a entrada "trocar perfil" do menu, que vira o aviso do Anomaly
     g_about_to_show = reinterpret_cast<AboutToShowFn>(Hook(0xcb9430, reinterpret_cast<const void*>(&AboutToShow)));
     const bool ok = g_open_individual && g_find_hash && g_get_filename && g_load_csv && g_import_collection && g_about_to_show;
-    std::printf("[ANOMALY] Anomaly v1.1 (connorh315): %s, %zu pacote(s) de mod\n", ok ? "ganchos postos" : "FALHOU",
+    std::printf("[ANOMALY] Anomaly v1.1 (connorh315): %s, %zu mod pack(s)\n", ok ? "hooks installed" : "FAILED",
                 g_names.size());
     return ok;
 }

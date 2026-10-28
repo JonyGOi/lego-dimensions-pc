@@ -122,9 +122,9 @@ HLE_IMPL(int, sceKernelAllocateDirectMemory, s64 search_start, s64 search_end, u
         }
     }
     HLE_TRACE("busca=[0x%" PRIx64 ", 0x%" PRIx64 ") len=0x%" PRIx64 " (%.1f MiB) align=0x%" PRIx64
-              " tipo=%d -> %s fis=0x%" PRIx64,
+              " type=%d -> %s phys=0x%" PRIx64,
               (u64)search_start, (u64)search_end, len, len / 1048576.0, alignment, memory_type,
-              result ? "ERRO" : "OK", phys);
+              result ? "ERROR" : "OK", phys);
     return result;
 }
 HLE_OVERRIDE(sceKernelAllocateDirectMemory);
@@ -152,10 +152,10 @@ HLE_IMPL(int, sceKernelMapDirectMemory, void** addr, u64 len, int prot, int flag
             result = err::kENOMEM;
         }
     }
-    HLE_TRACE("pedido=0x%" PRIx64 " len=0x%" PRIx64 " (%.1f MiB) prot=0x%x flags=0x%x fis=0x%" PRIx64
+    HLE_TRACE("pedido=0x%" PRIx64 " len=0x%" PRIx64 " (%.1f MiB) prot=0x%x flags=0x%x phys=0x%" PRIx64
               " align=0x%" PRIx64 " -> %s virt=%p",
               requested, len, len / 1048576.0, prot, flags, (u64)phys_start, alignment,
-              result ? "ERRO" : "OK", mapped);
+              result ? "ERROR" : "OK", mapped);
     return result;
 }
 HLE_OVERRIDE(sceKernelMapDirectMemory);
@@ -187,7 +187,7 @@ HLE_IMPL(int, sceKernelMunmap, void* addr, u64 len) {
         std::lock_guard lock(g_mutex);
         result = (!addr || !len) ? err::kEINVAL : UnmapLocked(reinterpret_cast<u64>(addr), len);
     }
-    HLE_TRACE("addr=%p len=0x%" PRIx64 " -> %s", addr, len, result ? "ERRO" : "OK");
+    HLE_TRACE("addr=%p len=0x%" PRIx64 " -> %s", addr, len, result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceKernelMunmap);
@@ -217,7 +217,7 @@ HLE_IMPL(int, sceKernelReleaseDirectMemory, s64 start, u64 len) {
             }
         }
     }
-    HLE_TRACE("fis=0x%" PRIx64 " len=0x%" PRIx64 " -> %d faixas liberadas, %d mapeamentos desfeitos",
+    HLE_TRACE("fis=0x%" PRIx64 " len=0x%" PRIx64 " -> %d ranges freed, %d mappings removed",
               (u64)start, len, released, unmapped);
     return err::OK;
 }
@@ -241,7 +241,7 @@ HLE_IMPL(int, sceKernelDirectMemoryQuery, s64 offset, int flags, DirectMemoryQue
             }
         }
     }
-    HLE_TRACE("offset=0x%" PRIx64 " flags=0x%x -> %s", (u64)offset, flags, result ? "nao encontrado" : "OK");
+    HLE_TRACE("offset=0x%" PRIx64 " flags=0x%x -> %s", (u64)offset, flags, result ? "not found" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceKernelDirectMemoryQuery);

@@ -4,10 +4,10 @@ project(lego_dimensions_pc LANGUAGES C CXX RC)
 # Os stubs HLE usam __attribute__((sysv_abi)) e o salto para o entry point usa asm inline GNU:
 # so Clang (clang++ ou clang-cl) serve no Windows.
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    message(FATAL_ERROR "Este projeto exige Clang (clang++ / clang-cl). Compilador atual: ${CMAKE_CXX_COMPILER_ID}")
+    message(FATAL_ERROR "This project requires Clang (clang++ / clang-cl). Current compiler: ${CMAKE_CXX_COMPILER_ID}")
 endif()
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "Alvo suportado: Windows x64")
+    message(FATAL_ERROR "Supported target: Windows x64")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -38,9 +38,22 @@ endif()
 # ---- Executavel ----------------------------------------------------------
 include(src/hle/generated/sources.cmake)
 
+# Optional artwork supplied by the owner, outside the source tree.
+set(LD_APP_ICON "" CACHE FILEPATH "Owner-supplied application .ico file")
+set(LD_ICON_RESOURCE tools/dist/app.rc)
+if(LD_APP_ICON)
+    if(NOT EXISTS "${LD_APP_ICON}")
+        message(FATAL_ERROR "Application icon does not exist: ${LD_APP_ICON}")
+    endif()
+    get_filename_component(LD_APP_ICON_RC "${LD_APP_ICON}" ABSOLUTE)
+    file(TO_CMAKE_PATH "${LD_APP_ICON_RC}" LD_APP_ICON_RC)
+    configure_file(tools/dist/icon.rc.in "${CMAKE_CURRENT_BINARY_DIR}/application.rc" @ONLY)
+    set(LD_ICON_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/application.rc")
+endif()
+
 add_executable(lego_dimensions
     src/main.cpp
-    tools/dist/app.rc # Fase 50: icone
+    ${LD_ICON_RESOURCE}
     src/loader/elf_pie_loader.cpp
     src/patcher/fs_tls_patcher.cpp
     src/runtime/orbis_tls.cpp
@@ -86,10 +99,9 @@ target_link_libraries(lego_dimensions PRIVATE ${CMAKE_SOURCE_DIR}/externals/sdl3
 
 # Vulkan: so os cabecalhos sao necessarios para compilar (vulkan-1.dll e carregada em tempo de
 # execucao). Usa o Vulkan SDK se estiver instalado; senao, os cabecalhos em externals/.
-# Fase 19: o Vulkan SDK e exigido (cabecalhos e, em tempo de execucao, as camadas de validacao).
-# O CMake o encontra pela variavel de ambiente VULKAN_SDK, criada pelo instalador.
-find_package(Vulkan REQUIRED)
-message(STATUS "Vulkan SDK: ${Vulkan_INCLUDE_DIRS} (versao ${Vulkan_VERSION})")
+# O SDK continua opcional para camadas de validacao e necessario para compilar
+# o tradutor de shaders. O port usa os headers incluidos quando nao ha SDK.
+include(cmake/VulkanHeaders.cmake)
 target_link_libraries(lego_dimensions PRIVATE Vulkan::Headers)
 target_link_libraries(lego_dimensions PRIVATE Zydis winmm user32 gdi32 xinput dbghelp)
 target_compile_definitions(lego_dimensions PRIVATE
@@ -124,3 +136,16 @@ target_compile_definitions(pkg_extractor PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMA
 target_link_libraries(pkg_extractor PRIVATE bcrypt)
 target_link_options(pkg_extractor PRIVATE "/PDBALTPATH:%_PDB%")
 set_property(TARGET pkg_extractor PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded") # sem DLL do runtime, como o launcher
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(shader_metadata_test tools/shader_metadata_test.cpp)
+    target_include_directories(shader_metadata_test PRIVATE src)
+    add_test(NAME shader_metadata_test COMMAND shader_metadata_test)
+    add_executable(region_patch_test tools/region_patch_test.cpp)
+    target_include_directories(region_patch_test PRIVATE src)
+    add_test(NAME region_patch_test COMMAND region_patch_test)
+    add_executable(pkg_io_test tools/pkg_extractor/io_test.cpp)
+    target_compile_definitions(pkg_io_test PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_test(NAME pkg_io_test COMMAND pkg_io_test)
+endif()

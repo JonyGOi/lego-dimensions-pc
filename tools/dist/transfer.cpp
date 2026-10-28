@@ -91,7 +91,7 @@ std::wstring Quote(const std::wstring& s) { return L"\"" + s + L"\""; }
 void AppendLog(const std::wstring& text) {
     const int end = GetWindowTextLengthW(g_log);
     SendMessageW(g_log, EM_SETSEL, end, end);
-    SendMessageW(g_log, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>((text + L"\r\n").c_str()));
+    SendMessageW(g_log, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>((ui::LogText(text) + L"\r\n").c_str()));
 }
 
 const Target& CurrentTarget() { return kTargets[g_target_index]; }

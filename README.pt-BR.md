@@ -61,16 +61,16 @@ Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 Requer:
 - Visual Studio 2022 ou mais novo, com as ferramentas C++ e o **clang-cl**;
 - CMake;
-- [Vulkan SDK](https://vulkan.lunarg.com/) 1.4;
+- Os cabeçalhos Vulkan estão incluídos. Um [Vulkan SDK](https://vulkan.lunarg.com/) instalado é usado quando disponível; é opcional para compilar o port e continua necessário para o tradutor de shaders abaixo;
 - Python 3.
 
 ```bat
-set VULKAN_SDK=C:\VulkanSDK\1.4.363.0
 build.bat                    :: o port -> build\lego_dimensions.exe
 tools\dist\build_dist.bat    :: launcher e instalador
 ```
 
 **Tradutor de shaders** (`tools/shader_compiler_tool`): usa o recompilador de shaders do [shadPS4](https://github.com/shadps4-emu/shadPS4), sem modificações, no commit [`eeecd10`](https://github.com/shadps4-emu/shadPS4/commit/eeecd103f648572b249b422e759e76799274b34c). A única troca é `override/resource_patching_pass.cpp`, que fica nesta pasta.
+Instale o Vulkan SDK 1.4 e defina `VULKAN_SDK` para compilar esse tradutor separado.
 1. Compile esse commit do shadPS4 (Release, clang-cl).
 2. Aponte `SHADPS4_DIR` para ele.
 3. Rode `tools\shader_compiler_tool\build.bat`.

@@ -202,11 +202,11 @@ HLE_IMPL(void*, fopen, const char* path, const char* mode) {
         bin_mode += 'b'; // o Orbis nao traduz fim de linha
     }
     std::FILE* fp = nullptr;
-    const char* status = "NAO ENCONTRADO";
+    const char* status = "NOT FOUND";
     if (!resolved.mounted) {
-        status = "SEM MOUNT";
+        status = "NO MOUNT";
     } else if (resolved.read_only && writes) {
-        status = "SOMENTE LEITURA (/app0)";
+        status = "READ ONLY (/app0)";
     } else if ((fp = _wfopen(resolved.host.c_str(), std::wstring(bin_mode.begin(), bin_mode.end()).c_str())) != nullptr) { // Fase 60: caminho largo
         status = "OK";
     }
@@ -216,7 +216,7 @@ HLE_IMPL(void*, fopen, const char* path, const char* mode) {
         file->fp = fp;
         file->path = fs::PathText(resolved.host);
     }
-    log::Fs("fopen \"%s\" modo \"%s\" -> %s  [%s]", path ? path : "(null)", mode ? mode : "", status,
+    log::Fs("fopen \"%s\" mode \"%s\" -> %s  [%s]", path ? path : "(null)", mode ? mode : "", status,
             fs::PathText(resolved.host).c_str());
     HLE_QUIET("\"%s\", \"%s\"", path, mode);
     return file;

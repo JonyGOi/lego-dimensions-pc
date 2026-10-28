@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'nu2_shader_extractor'))
 import nu2toc  # noqa: E402
 
 GAME_PACK = re.compile(r'^(PATCHSTREAM|DLCSTREAM|STREAM|PATCH|GAME)\d*$', re.IGNORECASE)
-LANG = 'pt'
+LANG = 'en'
 # Dados de build de cada pacote (idiomas, SKU, versao), nao conteudo de mod: num pacote do jogo editado vem os da versao
 # de quem fez o mod. O ttbmetadata.xml do PATCH de um mod sem ru-ru derruba a v1.24 no boot (sem memoria, eboot+0x4a8797).
 BUILD_INFO = {'\\STUFF\\TTBMETADATA.XML'}
@@ -195,11 +195,11 @@ def toc_positions_old(hdr):
 def write_entry(block, pos, archive_id, version, offset, zsize, usize, packed):
     if block[4:8] != b'.CC4':  # formato antigo, little-endian
         if archive_id == -1:
-            raise ValueError('pacote sem offsets deslocados')
+            raise ValueError('pack without relocated offsets')
         struct.pack_into('<IIII', block, pos, offset >> 8, zsize, usize, ((offset & 0xFF) << 24) | (2 if packed else 0))
         return
     if version < 2 or archive_id > -10:
-        raise ValueError('formato de tabela desconhecido')
+        raise ValueError('unknown table format')
     if archive_id <= -13:
         struct.pack_into('>QII', block, pos, offset | ((2 << 56) if packed else 0), zsize, usize)
     else:
@@ -232,11 +232,11 @@ def add_files_cc4(block, items):
     items: (nome, offset, tamanho guardado, tamanho real, comprimido). Devolve (tabela nova, nomes postos)."""
     archive_id, version, file_count, name_count, names_size = struct.unpack_from('>iiIII', block, 12)
     if version < 2 or archive_id > -10:
-        raise ValueError('formato de tabela desconhecido')
+        raise ValueError('unknown table format')
     tree = 36 + names_size
     q = tree + 12 * name_count
     if struct.unpack_from('>iI', block, q) != (archive_id, file_count):
-        raise ValueError('tabela fora do esperado')
+        raise ValueError('unexpected table layout')
     entries_at = q + 8
     hashes_at = entries_at + 16 * file_count
     rest = bytes(block[hashes_at + 4 * file_count:])
@@ -248,10 +248,10 @@ def add_files_cc4(block, items):
     for name, pos in list(positions.items())[:200]:
         index = (pos - entries_at) // 16
         if old[index][0] and old[index][0] != nu2toc.fnv(name[1:], 32, 1677619):
-            raise ValueError('hash da tabela diferente do esperado')
+            raise ValueError('table hash differs from expected')
         checked += 1
     if not checked:
-        raise ValueError('tabela sem nomes conferiveis')
+        raise ValueError('table has no verifiable names')
     taken = {h for h, _, _ in old}
     new, added = [], []
     for name, offset, zsize, usize, packed in items:
@@ -273,7 +273,7 @@ def add_files_cc4(block, items):
         if struct.unpack_from('>I', out, at)[0] != 0xFFFFFFFF and (struct.unpack_from('>H', out, at + 10)[0] or i == name_count - 1):
             struct.pack_into('>H', out, at + 6, remap[struct.unpack_from('>H', out, at + 6)[0]])
     if len(rows) > 0xFFFF:
-        raise ValueError('arquivos demais para o indice de 16 bits')
+        raise ValueError('too many files for 16-bit index')
     struct.pack_into('>I', out, q + 4, len(rows))
     struct.pack_into('>I', out, 20, len(rows))
     out += b''.join(r[1] for r in rows)
@@ -1498,16 +1498,16 @@ def install(archive, mods_dir):
 def main():
     global LANG
     parser = argparse.ArgumentParser(description='LEGO Dimensions PC: mods')
-    parser.add_argument('--instalar', help='extrai um mod (.zip, .rar ou .7z) na pasta de mods')
+    parser.add_argument('--instalar', help='extract a mod (.zip, .rar or .7z) into mods folder')
     parser.add_argument('--root')
     parser.add_argument('--app0')
     parser.add_argument('--patch', default='')
-    parser.add_argument('--lingua', default='pt')
-    parser.add_argument('--mods', help='pasta dos mods (padrao: <root>/mods)')
+    parser.add_argument('--lingua', default='en')
+    parser.add_argument('--mods', help='mods folder (default: <root>/mods)')
     parser.add_argument('--cache', help='saida (padrao: <root>/assets/mods_cache)')
-    parser.add_argument('--addcont', default='', help='pasta das DLCs (uma subpasta por DLC)')
+    parser.add_argument('--addcont', default='', help='DLC folder (one subfolder per DLC)')
     parser.add_argument('--carregador', default='anomaly', choices=('anomaly', 'port'),
-                        help='pacotes de mod com nome proprio: pelo Anomaly (connorh315, padrao) ou pelo carregador do port')
+                        help='named mod packs: Anomaly (connorh315, default) or port loader')
     args = parser.parse_args()
     LANG = 'en' if args.lingua.lower().startswith('en') else 'pt'
     try:

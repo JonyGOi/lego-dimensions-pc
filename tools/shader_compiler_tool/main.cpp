@@ -28,6 +28,7 @@
 #include <vector>
 
 #include <windows.h>
+#include "../../src/common/shader_metadata.h"
 
 #include "shader_recompiler/backend/bindings.h"
 #include <magic_enum/magic_enum.hpp>
@@ -421,7 +422,7 @@ void Recompile(const Job& job) {
     std::vector<u32> words, fetch_words;
     size_t dwords = 0, fetch_dwords = 0;
     if (!LoadWords(job.shader_dir / (entry.stage + "_" + entry.hash + ".bin"), &words, &dwords)) {
-        result.reason = "arquivo .bin nao encontrado";
+        result.reason = ".bin file not found";
         return;
     }
     const auto& bininfo = AmdGpu::SearchBinaryInfo(words.data());
@@ -449,7 +450,7 @@ void Recompile(const Job& job) {
         std::memcpy(&user_data[job.fetch_sgpr], &pointer, sizeof(pointer));
     } else if (job.fetch) {
         if (!LoadWords(job.shader_dir / ("fs_" + job.fetch->fetch_hash + ".bin"), &fetch_words, &fetch_dwords)) {
-            result.reason = "fetch shader .bin nao encontrado";
+            result.reason = "fetch shader .bin not found";
             return;
         }
         const u32* pointer = fetch_words.data();
@@ -515,7 +516,7 @@ void Recompile(const Job& job) {
     }
     result.translation_failed = info.translation_failed;
     if (result.spv.size() < 5 || result.spv[0] != 0x07230203) {
-        result.reason = "SPIR-V vazio ou sem numero magico";
+        result.reason = "SPIR-V empty or missing magic number";
         return;
     }
     result.metadata = Metadata(entry, job.fetch, info, rt, bindings, result.spv.size() * 4);
@@ -579,7 +580,7 @@ void RecompileThunk(void* job) {
         typed.result->reason = std::string("excecao: ") + e.what();
     } catch (...) {
         typed.result->ok = false;
-        typed.result->reason = "excecao desconhecida";
+        typed.result->reason = "unknown exception";
     }
 }
 
@@ -676,11 +677,11 @@ int main(int argc, char** argv) {
     fs::create_directories(out_dir, ec);
     tool::InitLogCapture();
     if (!MapProbeMemory()) {
-        std::printf("ERRO: nao reservou a memoria de sondagem\n");
+        std::printf("ERROR: could not reserve probe memory\n");
         return 1;
     }
     if (!MapFakeUserData()) {
-        std::printf("ERRO: nao reservou a memoria de mentira em 0x%llx\n", static_cast<unsigned long long>(kFakeBase));
+        std::printf("ERROR: could not reserve fake memory at 0x%llx\n", static_cast<unsigned long long>(kFakeBase));
         return 1;
     }
 
@@ -688,7 +689,7 @@ int main(int argc, char** argv) {
     {
         std::ifstream in(shader_dir / "index.tsv");
         if (!in) {
-            std::printf("ERRO: nao abriu %s\n", (shader_dir / "index.tsv").string().c_str());
+            std::printf("ERROR: could not open %s\n", (shader_dir / "index.tsv").string().c_str());
             return 1;
         }
         std::set<std::string> seen;
@@ -733,7 +734,7 @@ int main(int argc, char** argv) {
     if (!live) {
         report.open(out_dir / "recompile_report.tsv");
     }
-    report << "arquivo\tstatus\tspirv_bytes\tmotivo\n";
+    report << "file\tstatus\tspirv_bytes\treason\n";
     struct Totals {
         u32 shaders = 0, ok = 0, failed = 0, skipped = 0, modules = 0, modules_ok = 0;
     };
@@ -763,8 +764,8 @@ int main(int argc, char** argv) {
             }
             if (variants.empty()) {
                 ++t.skipped;
-                ++reasons["vs: fetch shader nao capturado (o VS nao apareceu em nenhum draw da execucao)"];
-                report << entry.stage << "_" << entry.hash << "\tsem_fetch\t0\tfetch shader nao capturado\n";
+                ++reasons["vs: fetch shader not captured (VS did not appear in any draw during this run)"];
+                report << entry.stage << "_" << entry.hash << "\tsem_fetch\t0\tfetch shader not captured\n";
                 continue;
             }
         } else {
@@ -780,8 +781,8 @@ int main(int argc, char** argv) {
             tool::TakeLog();
             if (!Guarded(RecompileThunk, &job, &seh)) {
                 char text[112];
-                std::snprintf(text, sizeof(text), "excecao do sistema 0x%08x lendo %s", seh,
-                              g_fault_address < 0x10000 ? "ponteiro nulo" : g_fault_address >= kFakeBase && g_fault_address < kFakeBase + (1ull << 32) ? "alem da memoria de mentira" : "endereco do jogo");
+                std::snprintf(text, sizeof(text), "system exception 0x%08x reading %s", seh,
+                              g_fault_address < 0x10000 ? "null pointer" : g_fault_address >= kFakeBase && g_fault_address < kFakeBase + (1ull << 32) ? "beyond fake memory" : "game address");
                 result.ok = false;
                 result.reason = text;
             }
@@ -932,7 +933,7 @@ int main(int argc, char** argv) {
                 }
             }
             const std::array<StageSnapshot, 2>* snapshot = &patched;
-            std::string specialized = "nao";
+            std::string specialized = shader_metadata::DescriptorFlag(false);
             if (vs_ok && ps_ok) {
                 Shader::Backend::Bindings real{};
                 Result vs_real, ps_real;
@@ -943,7 +944,7 @@ int main(int argc, char** argv) {
                 if (real_ok && real == shared) {
                     vs_result.spv = vs_real.spv;
                     ps_result.spv = ps_real.spv;
-                    specialized = "sim";
+                    specialized = shader_metadata::DescriptorFlag(true);
                     ++pairs_real;
                     // Formato (dst_sel + tipo numerico + formato de dados do V#) com que cada
                     // atributo foi especializado: o jogo so usa o par se o draw tiver o mesmo.
@@ -991,8 +992,8 @@ int main(int argc, char** argv) {
                     }
                     ps_layout += formats.str();
                 } else {
-                    std::printf("  par %s: traducao com descritores reais falhou (%s)\n", name.c_str(),
-                                !real_ok ? (vs_real.ok ? ps_real.reason : vs_real.reason).c_str() : "bindings diferentes da sondagem");
+                    std::printf("  pair %s: translation with actual descriptors failed (%s)\n", name.c_str(),
+                                !real_ok ? (vs_real.ok ? ps_real.reason : vs_real.reason).c_str() : "bindings differ from probe");
                 }
             }
             if (vs_ok && ps_ok) {
@@ -1006,23 +1007,23 @@ int main(int argc, char** argv) {
                     << " real " << specialized << "\n"
                     << vs_layout << ps_layout;
             } else {
-                std::printf("  par %s: falhou no %s (%s)\n", name.c_str(), vs_ok ? "PS" : "VS", (vs_ok ? ps_result.reason : vs_result.reason).c_str());
+                std::printf("  pair %s: failed in %s (%s)\n", name.c_str(), vs_ok ? "PS" : "VS", (vs_ok ? ps_result.reason : vs_result.reason).c_str());
             }
         }
-        std::printf("PARES de interface: %u de %u compilados com bindings continuos, %u com os descritores reais -> %s\n", pairs_ok,
+        std::printf("UI PAIRS: %u of %u compiled with contiguous bindings, %u with actual descriptors -> %s\n", pairs_ok,
                     pairs, pairs_real, (out_dir / "pairs").string().c_str());
     }
 
     u32 shaders = 0, ok = 0, failed = 0, skipped = 0;
     for (const auto& [stage, t] : totals) {
-        std::printf("%s: %u shaders -> %u traduzidos, %u com falha, %u sem fetch shader capturado  (%u modulos SPIR-V de %u tentados)\n",
+        std::printf("%s: %u shaders -> %u translated, %u failed, %u without captured fetch shader  (%u SPIR-V modules of %u attempted)\n",
                     stage.c_str(), t.shaders, t.ok, t.failed, t.skipped, t.modules_ok, t.modules);
         shaders += t.shaders;
         ok += t.ok;
         failed += t.failed;
         skipped += t.skipped;
     }
-    std::printf("TOTAL: %u shaders, %u traduzidos para SPIR-V, %u com falha, %u pulados; %.1f KiB de SPIR-V em %s\n", shaders, ok,
+    std::printf("TOTAL: %u shaders, %u translated to SPIR-V, %u failed, %u skipped; %.1f KiB of SPIR-V in %s\n", shaders, ok,
                 failed, skipped, spv_bytes / 1024.0, out_dir.string().c_str());
     if (!reasons.empty()) {
         std::printf("Motivos:\n");

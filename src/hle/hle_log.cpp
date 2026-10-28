@@ -59,7 +59,7 @@ void CountLine() {
     // exemplo), o log em disco ainda mostra ate onde o jogo chegou.
     std::fflush(stdout);
     if (++g_lines >= g_max_lines) {
-        std::printf("\nLimite de %" PRIu64 " linhas de log HLE atingido (--max-calls). Encerrando.\n",
+        std::printf("\nLimit of %" PRIu64 " HLE log lines reached (--max-calls). Exiting.\n",
                     g_max_lines);
         Shutdown(0);
     }
@@ -98,7 +98,7 @@ bool AllowLine(const char* tag, const char* text) {
     const auto now = std::chrono::steady_clock::now();
     if (now - entry.window >= std::chrono::seconds(1)) {
         if (entry.suppressed) {
-            std::printf("[LOG] %" PRIu64 " linha(s) repetida(s) suprimida(s) no ultimo segundo: [%s] %.60s...\n", entry.suppressed,
+            std::printf("[LOG] %" PRIu64 " repeated line(s) suppressed in the last second: [%s] %.60s...\n", entry.suppressed,
                         tag, text);
             entry.suppressed = 0;
         }
@@ -144,7 +144,7 @@ void StubLogger(const StubCall& c) {
     std::printf("[%04" PRIu64 " %s] STUB %s  <- %s  rdi=%" PRIx64 " rsi=%" PRIx64 " rdx=%" PRIx64
                 " rcx=%" PRIx64 " r8=%" PRIx64 " r9=%" PRIx64 "%s\n",
                 g_lines + 1, runtime::CurrentThreadName(), key.c_str(), from.c_str(), c.rdi, c.rsi, c.rdx, c.rcx, c.r8, c.r9,
-                seen == kStubRepeatLimit && !g_verbose ? "  (proximas ocorrencias silenciadas)" : "");
+                seen == kStubRepeatLimit && !g_verbose ? "  (further occurrences silenced)" : "");
     CountLine();
 }
 
@@ -267,31 +267,31 @@ u64 SuppressedLines() {
 void DumpHistory() {
     std::unique_lock lock(g_mutex, std::try_to_lock);
     const u64 shown = std::min<u64>(g_history_count, kHistory);
-    std::printf("Ultimas chamadas HLE registradas (%" PRIu64 " de %" PRIu64 "):\n", shown,
+    std::printf("Last recorded HLE calls (%" PRIu64 " of %" PRIu64 "):\n", shown,
                 g_history_count);
     for (u64 i = g_history_count - shown; i < g_history_count; ++i) {
         std::printf("  %s\n", g_history[i % kHistory].c_str());
     }
     if (!shown) {
-        std::printf("  (nenhuma)\n");
+        std::printf("  (none)\n");
     }
 }
 
 void PrintSummary() {
     std::unique_lock lock(g_mutex, std::try_to_lock);
-    std::printf("\n------------------------- RESUMO HLE -------------------------\n");
+    std::printf("\n------------------------- HLE SUMMARY -------------------------\n");
 
     std::vector<std::pair<u64, std::string>> stubs;
     for (const auto& [name, count] : g_stub_counts) {
         stubs.emplace_back(count, name);
     }
     std::sort(stubs.rbegin(), stubs.rend());
-    std::printf("Stubs SEM implementacao que o jogo chamou (%zu):\n", stubs.size());
+    std::printf("UNIMPLEMENTED stubs called by the game (%zu):\n", stubs.size());
     for (const auto& [count, name] : stubs) {
         std::printf("  %8" PRIu64 "x  %s\n", count, name.c_str());
     }
     if (stubs.empty()) {
-        std::printf("  (nenhum)\n");
+        std::printf("  (none)\n");
     }
 
     std::vector<std::pair<u64, const char*>> quiet;
@@ -301,9 +301,9 @@ void PrintSummary() {
         quiet_total += c->count.load();
     }
     std::sort(quiet.rbegin(), quiet.rend());
-    std::printf("Limitador de repeticao do log: %" PRIu64 " linha(s) suprimida(s) (mais de %u iguais por segundo)\n", g_spam_total,
+    std::printf("Log repetition limiter: %" PRIu64 " line(s) suppressed (more than %u identical lines per second)\n", g_spam_total,
                 kSpamPerSecond);
-    std::printf("Chamadas silenciadas de overrides de alta frequencia: %" PRIu64 " em %zu funcoes\n",
+    std::printf("Silenced calls from high-frequency overrides: %" PRIu64 " in %zu functions\n",
                 quiet_total, quiet.size());
     int col = 0;
     for (const auto& [count, name] : quiet) {
@@ -320,10 +320,10 @@ void PrintSummary() {
         ++c.second;
         c.first += sym.overridden;
     }
-    std::printf("Overrides instalados por biblioteca (so as que tem algum):\n");
+    std::printf("Installed overrides by library (nonempty libraries only):\n");
     for (const auto& [lib, c] : coverage) {
         if (c.first) {
-            std::printf("  %-16s %3u de %3u simbolos\n", lib.c_str(), c.first, c.second);
+            std::printf("  %-16s %3u of %3u symbols\n", lib.c_str(), c.first, c.second);
         }
     }
     gnm::PrintStats();

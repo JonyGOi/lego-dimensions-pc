@@ -80,7 +80,7 @@ HLE_IMPL(int, sceKernelCreateSema, Sema** out, const char* name, u32 attr, s32 i
         *out = sema;
     }
     HLE_TRACE("\"%s\" attr=0x%x init=%d max=%d -> %s", name ? name : "", attr, init_count, max_count,
-              result ? "ERRO" : "OK");
+              result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceKernelCreateSema);
@@ -144,7 +144,7 @@ HLE_IMPL(int, sceKernelCreateEventFlag, EventFlag** out, const char* name, u32 a
         *out = flag;
     }
     HLE_TRACE("\"%s\" attr=0x%x init=0x%" PRIx64 " -> %s", name ? name : "", attr, init_pattern,
-              result ? "ERRO" : "OK");
+              result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceKernelCreateEventFlag);
@@ -188,7 +188,7 @@ HLE_OVERRIDE(sceKernelClearEventFlag);
 
 HLE_IMPL(int, sceKernelWaitEventFlag, EventFlag* flag, u64 bits, u32 wait_mode, u64* result_pattern,
          u32* timeout_us) {
-    HLE_QUIET("\"%s\" bits=0x%" PRIx64 " modo=0x%x", flag ? flag->name : "", bits, wait_mode);
+    HLE_QUIET("\"%s\" bits=0x%" PRIx64 " mode=0x%x", flag ? flag->name : "", bits, wait_mode);
     if (!flag || flag->magic != kEventMagic) {
         return kESRCH;
     }
@@ -267,7 +267,7 @@ HLE_IMPL(int, sceKernelWaitEqueue, Equeue* eq, equeue::KernelEvent* events, int 
     if (!events || max_events < 1) {
         return err::kEINVAL;
     }
-    static perf::Counter perf_counter("WaitEqueue (inclui o tempo bloqueado)");
+    static perf::Counter perf_counter("WaitEqueue (includes blocking time)");
     const perf::Scope perf_scope(perf_counter);
     runtime::WaitScope waiting("sceKernelWaitEqueue");
     std::unique_lock lock(eq->mutex);
@@ -509,7 +509,7 @@ int ParseRfc3339(RtcTick* tick, const char* text) {
 
 HLE_IMPL(int, sceRtcParseRFC3339, RtcTick* tick, const char* text) {
     const int result = ParseRfc3339(tick, text);
-    HLE_TRACE("\"%s\" -> %s", text ? text : "", result ? "ERRO" : "OK");
+    HLE_TRACE("\"%s\" -> %s", text ? text : "", result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceRtcParseRFC3339);
@@ -517,7 +517,7 @@ HLE_OVERRIDE(sceRtcParseRFC3339);
 // O Orbis aceita varios formatos aqui (RFC 2822, ISO 8601...); so o RFC 3339 esta implementado.
 HLE_IMPL(int, sceRtcParseDateTime, RtcTick* tick, const char* text) {
     const int result = ParseRfc3339(tick, text);
-    HLE_TRACE("\"%s\" -> %s", text ? text : "", result ? "ERRO (so RFC 3339 e suportado)" : "OK");
+    HLE_TRACE("\"%s\" -> %s", text ? text : "", result ? "ERROR (only RFC 3339 supported)" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceRtcParseDateTime);

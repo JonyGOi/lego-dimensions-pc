@@ -11,39 +11,23 @@ import glob
 import os
 import struct
 import zlib
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import game_regions
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 DEFAULT_APP0 = r'C:\Jogos\CUSA01176'
 # Fase 47: DLCs (uma pasta por DLC com DLCnn.DAT2 + DLCnn.HDR2), a mesma pasta de addcont do shadPS4
-def _default_addcont():
-    appdata = os.environ.get('APPDATA', '')
-    if not appdata:
-        return ''
-    for tid in ('CUSA00935', 'CUSA01176'):
-        p = os.path.join(appdata, 'shadPS4', 'addcont', tid)
-        if os.path.isdir(p):
-            return p
-    return os.path.join(appdata, 'shadPS4', 'addcont', 'CUSA01176')
-
-DEFAULT_ADDCONT = _default_addcont()
+DEFAULT_ADDCONT = None
 INDEX_DIR = os.path.join(ROOT, 'tools', 'data', 'dat_index')
 
 
 def find_patch(app0):
-    """Fase 58: atualizacao numa pasta separada (formato do shadPS4: CUSA01176-patch), dentro da pasta do jogo
-    ou ao lado dela. '' = nenhuma."""
-    app0 = os.path.normpath(app0)
-    name = os.path.basename(app0)
-    parent = os.path.dirname(app0)
-    for d in (os.path.join(app0, name + '-patch'), os.path.join(parent, name + '-patch'),
-              os.path.join(app0, 'CUSA01176-patch'), os.path.join(parent, 'CUSA01176-patch'),
-              os.path.join(app0, 'CUSA00935-patch'), os.path.join(parent, 'CUSA00935-patch')):
-        if os.path.isfile(os.path.join(d, 'eboot.bin')) or os.path.isfile(os.path.join(d, 'sce_sys', 'param.sfo')):
-            return d
-    return ''
+    return game_regions.find_patch(app0)
 
 
 def find_dats(app0, addcont=None, patch=None):
+    addcont = game_regions.default_addcont(app0) if addcont is None else addcont
     dats = {os.path.basename(p).upper()[:-4]: p for p in glob.glob(os.path.join(app0, 'data', 'chunk*', '*.DAT'))}
     patch = find_patch(app0) if patch is None else patch
     if patch and os.path.isdir(patch):  # Fase 58: os .DAT da atualizacao vencem os de mesmo nome do jogo base
@@ -61,7 +45,7 @@ def unpack(raw, size):
         packed, real = struct.unpack_from('<II', raw, pos + 4)
         body = raw[pos + 12:pos + 12 + packed]
         if magic != b'DFLT':
-            raise ValueError('bloco desconhecido %r' % magic)
+            raise ValueError('unknown block %r' % magic)
         if packed == real:
             out += body
         else:
@@ -116,7 +100,7 @@ def entries(pack, suffix='.ps4_shaders', dat_path=None):
         try:
             own = read_tsv(local_index(pack, dat_path), suffix)
         except Exception as e:  # formato inesperado: fica o indice que vem com o port, como antes
-            print('AVISO: tabela de %s nao lida (%s): usando o indice que vem com o port' % (pack, e), flush=True)
+            print('WARNING: could not read %s table (%s): using index bundled with port' % (pack, e), flush=True)
     seen = {row[0] for row in own}
     yield from own
     yield from (row for row in shipped if row[0] not in seen)
@@ -132,7 +116,7 @@ def iter_files(app0, suffix='.ps4_shaders', addcont=None, errors=None, patch=Non
             for name, size, packed, offset, method in entries(pack, suffix, dats[pack]):
                 if offset + packed > size_on_disk:
                     if errors is None:
-                        raise ValueError('%s: %s fora do pacote' % (pack, name))
+                        raise ValueError('%s: %s outside pack' % (pack, name))
                     errors[pack] += 1
                     continue
                 f.seek(offset)

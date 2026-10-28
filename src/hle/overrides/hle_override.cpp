@@ -22,7 +22,7 @@ OverrideStats InstallOverrides() {
             ++stats.installed;
         } else {
             ++stats.not_imported;
-            std::printf("AVISO: override '%s' nao corresponde a nenhum simbolo importado\n", reg->name);
+            std::printf("WARNING: override '%s' does not match any imported symbol\n", reg->name);
         }
     }
     return stats;

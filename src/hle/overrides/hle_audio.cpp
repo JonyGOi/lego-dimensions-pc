@@ -233,7 +233,7 @@ int CreateRack(System* system, u32 rack_id, Rack** out) {
 HLE_IMPL(int, sceNgs2RackCreate, System* system, u32 rack_id, const void* option, const ContextBufferInfo* info,
          Rack** out) {
     const int result = CreateRack(system, rack_id, out);
-    HLE_TRACE("rack=0x%x -> %s", rack_id, result ? "ERRO" : "OK");
+    HLE_TRACE("rack=0x%x -> %s", rack_id, result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceNgs2RackCreate);
@@ -241,7 +241,7 @@ HLE_OVERRIDE(sceNgs2RackCreate);
 HLE_IMPL(int, sceNgs2RackCreateWithAllocator, System* system, u32 rack_id, const void* option,
          const void* allocator, Rack** out) {
     const int result = CreateRack(system, rack_id, out);
-    HLE_TRACE("rack=0x%x -> %s", rack_id, result ? "ERRO" : "OK");
+    HLE_TRACE("rack=0x%x -> %s", rack_id, result ? "ERROR" : "OK");
     return result;
 }
 HLE_OVERRIDE(sceNgs2RackCreateWithAllocator);
@@ -262,7 +262,7 @@ HLE_IMPL(int, sceNgs2RackDestroy, Rack* rack, ContextBufferInfo* info) {
 HLE_OVERRIDE(sceNgs2RackDestroy);
 
 HLE_IMPL(int, sceNgs2RackGetVoiceHandle, Rack* rack, u32 voice_index, Voice** out) {
-    HLE_QUIET("%p, voz %u", static_cast<void*>(rack), voice_index);
+    HLE_QUIET("%p, voice %u", static_cast<void*>(rack), voice_index);
     if (!rack || rack->magic != kRackMagic) {
         return kNgs2ErrorInvalidHandle;
     }
@@ -562,11 +562,11 @@ struct Device {
         if (waveOutOpen(&handle, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
             handle = nullptr;
             g_audio_stats.device_failed = true;
-            std::printf("[AUDIO] waveOutOpen falhou: sem dispositivo de som (o jogo segue mudo)\n");
+            std::printf("[AUDIO] waveOutOpen failed: no audio device (game will run without sound)\n");
             return false;
         }
         g_audio_stats.device_open = true;
-        std::printf("[AUDIO] dispositivo de som aberto: %u Hz, estereo, 16 bits (waveOut)\n", rate);
+        std::printf("[AUDIO] audio device opened: %u Hz, stereo, 16-bit (waveOut)\n", rate);
         return true;
     }
 
@@ -667,8 +667,8 @@ void VoiceLog(Voice& voice, const char* what) {
     }
     char text[48];
     const double played = voice.sample_rate ? static_cast<double>(voice.decoded_samples) / voice.sample_rate : 0.0;
-    log::Tagged("NGS2_VOICE", "t=%.2fs rack 0x%x voz %u %s: estado=0x%02x %s, tocado %.2fs (%" PRIu64 " amostras, %" PRIu64
-                " bytes; stream de %" PRIu64 " amostras), blocos na fila %zu, tipo 0x%x %u Hz x%u pitch %.2f",
+    log::Tagged("NGS2_VOICE", "t=%.2fs rack 0x%x voice %u %s: state=0x%02x %s, played %.2fs (%" PRIu64 " samples, %" PRIu64
+                " bytes; stream of %" PRIu64 " samples), queued blocks %zu, type 0x%x %u Hz x%u pitch %.2f",
                 AudioSeconds(), voice.rack->rack_id, voice.index, what, flags, FlagsText(flags, text, sizeof(text)), played,
                 voice.decoded_samples, voice.decoded_bytes, voice.total_samples, voice.blocks.size(), voice.waveform_type,
                 voice.sample_rate,
@@ -742,7 +742,7 @@ void Advance(Voice& voice) {
             ++g_voice_stats.starved_out;
         }
         ++g_voice_stats.finished;
-        Finish(voice, voice.starving ? "FIM (fila seca alem da tolerancia)" : "FIM DOS DADOS");
+        Finish(voice, voice.starving ? "END (queue empty beyond tolerance)" : "END OF DATA");
         voice.starving = false;
         voice.finished_dry = true;
     }
@@ -760,7 +760,7 @@ void DumpParam(const Voice& voice, const u8* param, u16 size, u32 id) {
         std::snprintf(item, sizeof(item), "%08x ", ParamField<u32>(param, i));
         hex += item;
     }
-    log::Tagged("NGS2_VOICE", "rack 0x%x voz %u param 0x%08x (%u bytes): %s", voice.rack->rack_id, voice.index, id, size, hex.c_str());
+    log::Tagged("NGS2_VOICE", "rack 0x%x voice %u param 0x%08x (%u bytes): %s", voice.rack->rack_id, voice.index, id, size, hex.c_str());
     if (id == kParamSamplerBlocks && size >= 0x20) {
         const u32 count = ParamField<u32>(param, 20);
         const u8* blocks = ParamField<const u8*>(param, 24);
@@ -770,7 +770,7 @@ void DumpParam(const Voice& voice, const u8* param, u16 size, u32 id) {
                 std::snprintf(item, sizeof(item), "%08x ", ParamField<u32>(blocks + b * 0x20, i));
                 hex += item;
             }
-            log::Tagged("NGS2_VOICE", "    bloco %u: %s", b, hex.c_str());
+            log::Tagged("NGS2_VOICE", "    block %u: %s", b, hex.c_str());
         }
     }
 }
@@ -822,7 +822,7 @@ void ApplyParam(Voice& voice, const u8* param, u16 size, u32 id) {
             VoiceLog(voice, "RESUME");
             break;
         default:
-            log::Tagged("NGS2_VOICE", "rack 0x%x voz %u: evento DESCONHECIDO %u", voice.rack->rack_id, voice.index, event);
+            log::Tagged("NGS2_VOICE", "rack 0x%x voice %u: UNKNOWN event %u", voice.rack->rack_id, voice.index, event);
             break;
         }
     } else if (id == kParamSamplerSetup && size >= 0x20) {
@@ -906,7 +906,7 @@ void ApplyParam(Voice& voice, const u8* param, u16 size, u32 id) {
             voice.clock = voice.last_block;
             g_active.insert(&voice);
             ++g_voice_stats.revived;
-            VoiceLog(voice, "RETOMADA (blocos novos depois de a fila secar)");
+            VoiceLog(voice, "RESUMED (new blocks after queue ran dry)");
         }
     } else if (id == kParamSamplerPitch && size >= 0x0C) {
         const float ratio = ParamField<float>(param, 8);
@@ -935,7 +935,7 @@ void ApplyParam(Voice& voice, const u8* param, u16 size, u32 id) {
             static u32 shown = 0;
             if (shown < 10) {
                 ++shown;
-                std::printf("[AUDIO] matriz de volume: voz %u, %u canais de entrada x %u de saida, id %u:", voice.index, in_channels,
+                std::printf("[AUDIO] volume matrix: voice %u, %u input x %u output channels, id %u:", voice.index, in_channels,
                             out_channels, ParamField<u32>(param, 8));
                 for (u32 i = 0; i < count && i < 16; ++i) {
                     std::printf(" %.3f", levels[i]);
@@ -997,7 +997,7 @@ HLE_OVERRIDE(sceNgs2VoiceControl);
 
 HLE_IMPL(int, sceNgs2VoiceGetState, Voice* voice, void* state, u64 state_size) {
     HLE_QUIET("%p, %" PRIu64 " bytes", static_cast<void*>(voice), state_size);
-    static perf::Counter perf_counter("Ngs2 VoiceGetState (relogio de voz)");
+    static perf::Counter perf_counter("Ngs2 VoiceGetState (voice clock)");
     const perf::Scope perf_scope(perf_counter);
     if (!voice || voice->magic != kVoiceMagic) {
         return kNgs2ErrorInvalidHandle;
@@ -1117,7 +1117,7 @@ HLE_IMPL(int, sceAudioOutOpen, int user_id, int type, int index, u32 samples, u3
         handle = g_next_port++;
         g_ports[handle] = {samples ? samples : 256, frequency ? frequency : 48000, std::chrono::steady_clock::now(), format & 0xFF};
     }
-    HLE_TRACE("user=%d tipo=%d indice=%d amostras=%u freq=%u formato=%u -> porta %d", user_id, type, index, samples,
+    HLE_TRACE("user=%d type=%d index=%d samples=%u freq=%u format=%u -> port %d", user_id, type, index, samples,
               frequency, format, handle);
     if (g_audio_enabled) { // abrir aqui, e nao no primeiro Output: waveOutOpen leva dezenas de ms
         std::lock_guard device(g_device_mutex);
@@ -1131,7 +1131,7 @@ HLE_OVERRIDE(sceAudioOutOpen);
 // leva para tocar (256 amostras a 48 kHz = 5,33 ms). O prazo e absoluto, para a thread de som
 // manter o ritmo real mesmo com o jitter do Sleep; a fila do dispositivo absorve a diferenca.
 HLE_IMPL(int, sceAudioOutOutput, int handle, const void* buffer) {
-    HLE_QUIET("porta %d, %p", handle, buffer);
+    HLE_QUIET("port %d, %p", handle, buffer);
     std::chrono::steady_clock::time_point deadline;
     u32 samples;
     {
@@ -1250,20 +1250,20 @@ void SetAudioOutput(bool enabled) {
 
 void PrintAudioStats() {
     FinishAudioDump();
-    std::printf("  audio (Fase 30): VAG %llu pacotes, %llu com preditor fora da tabela classica (HEVAG) | %llu amostras na faixa do limitador\n",
+    std::printf("  audio (Phase 30): VAG %llu packets, %llu with predictor outside classic table (HEVAG) | %llu samples in limiter range\n",
                 static_cast<unsigned long long>(g_audio_stats.vag_packets), static_cast<unsigned long long>(g_audio_stats.vag_extended),
                 static_cast<unsigned long long>(g_audio_stats.limited_samples));
     const AudioStats& s = g_audio_stats;
     const double seconds = s.frames_mixed / 48000.0;
     const double rms = s.frames_mixed ? std::sqrt(s.energy / (2.0 * s.frames_mixed)) : 0.0;
-    std::printf("  audio (Fase 24): %s | dispositivo %s, %" PRIu64 " buffers enviados, %" PRIu64 " descartados (fila cheia), %" PRIu64
-                " recomecos (fila seca)\n",
-                g_audio_enabled ? "ligado" : "desligado (--no-audio)",
-                s.device_open ? "aberto" : s.device_failed ? "FALHOU ao abrir" : "nao aberto", s.device_buffers, s.device_dropped,
+    std::printf("  audio (Phase 24): %s | device %s, %" PRIu64 " buffers submitted, %" PRIu64 " discarded (queue full), %" PRIu64
+                " restarts (queue empty)\n",
+                g_audio_enabled ? "enabled" : "disabled (--no-audio)",
+                s.device_open ? "opened" : s.device_failed ? "FAILED to open" : "not opened", s.device_buffers, s.device_dropped,
                 s.device_underruns);
-    std::printf("    blocos decodificados %" PRIu64 " (%.1f s de som), ilegiveis %" PRIu64 ", formato nao tratado %" PRIu64
-                " | mixagem: %.1f s em %" PRIu64 " chamadas, ate %" PRIu64 " vozes juntas, pico %.3f, RMS %.4f | matriz de volume: %" PRIu64
-                " aplicadas, %" PRIu64 " ignoradas\n",
+    std::printf("    decoded blocks %" PRIu64 " (%.1f s of audio), unreadable %" PRIu64 ", unsupported format %" PRIu64
+                " | mixing: %.1f s in %" PRIu64 " calls, up to %" PRIu64 " concurrent voices, peak %.3f, RMS %.4f | volume matrix: %" PRIu64
+                " applied, %" PRIu64 " ignored\n",
                 s.blocks_decoded, s.frames_decoded / 48000.0, s.blocks_unreadable, s.formats_unknown, seconds, s.renders, s.voices_mixed_max,
                 s.peak, rms, s.matrix_params, s.matrix_ignored);
 }
@@ -1289,65 +1289,65 @@ void PrintNgs2VoiceReport() {
         r[2] += v->in_use && v->playing && !v->paused;
         playing += v->rack->rack_id == 0x1000 && v->in_use && v->playing;
     }
-    std::printf("---- Ngs2: %zu vozes alocadas;", voices.size());
+    std::printf("---- Ngs2: %zu voices allocated;", voices.size());
     for (const auto& [id, r] : racks) {
-        std::printf("  rack 0x%x: %u alocadas, %u em uso, %u tocando;", id, r[0], r[1], r[2]);
+        std::printf("  rack 0x%x: %u allocated, %u in use, %u playing;", id, r[0], r[1], r[2]);
     }
-    std::printf("\n     vozes do sampler (rack 0x1000) em uso: (as demais estao LIVRES/TERMINADAS)\n");
+    std::printf("\n     sampler voices (rack 0x1000) in use: (all others are FREE/FINISHED)\n");
     u32 shown = 0;
     for (const Voice* v : voices) {
         if (v->rack->rack_id != 0x1000 || !v->in_use) {
             continue;
         }
         if (++shown > 64) {
-            std::printf("     ... (mais vozes omitidas)\n");
+            std::printf("     ... (more voices omitted)\n");
             break;
         }
         char text[48];
         const u32 flags = StateFlags(*v);
         const double played = v->sample_rate ? static_cast<double>(v->decoded_samples) / v->sample_rate : 0.0;
         const double total = v->sample_rate ? static_cast<double>(v->total_samples) / v->sample_rate : 0.0;
-        std::printf("     voz %3u  %-22s %s ha %.1fs; decodificou %.2fs", v->index, FlagsText(flags, text, sizeof(text)),
-                    v->playing ? (v->paused ? "PAUSADA, PLAY" : "PLAY") : "sem PLAY, ultimo PLAY", ago(v->play_start), played);
+        std::printf("     voice %3u  %-22s %s for %.1fs; decoded %.2fs", v->index, FlagsText(flags, text, sizeof(text)),
+                    v->playing ? (v->paused ? "PAUSED, PLAY" : "PLAY") : "no PLAY, last PLAY", ago(v->play_start), played);
         if (v->total_samples) {
-            std::printf(" de %.2fs (stream)", total);
+            std::printf(" of %.2fs (stream)", total);
         }
-        std::printf("; fila %zu bloco(s)%s; %u remessa(s), ultima ha %.1fs; ultima consulta ha %.1fs (%llu); tipo 0x%x %u Hz x%u\n",
-                    v->blocks.size(), v->starving ? " [FILA SECA, aguardando dados]" : "", v->block_submissions, ago(v->last_block),
+        std::printf("; queue %zu block(s)%s; %u batch(es), last %.1fs ago; last query %.1fs ago (%llu); type 0x%x %u Hz x%u\n",
+                    v->blocks.size(), v->starving ? " [QUEUE EMPTY, waiting for data]" : "", v->block_submissions, ago(v->last_block),
                     ago(v->last_query), static_cast<unsigned long long>(v->queries), v->waveform_type, v->sample_rate, v->channels);
     }
     if (!shown) {
-        std::printf("     (nenhuma: nao ha voz de sampler em uso)\n");
+        std::printf("     (none: no sampler voice in use)\n");
     }
-    std::printf("     total: %u voz(es) de sampler com PLAY ativo\n", playing);
+    std::printf("     total: %u sampler voice(s) with PLAY active\n", playing);
 }
 
 void PrintNgs2Stats() {
     PrintAudioStats();
     std::lock_guard lock(g_voice_mutex);
     const VoiceStats& st = g_voice_stats;
-    std::printf("Ngs2 vozes : relogio virtual %s; %llu consultas de estado, %llu PLAY, %llu STOP, %llu terminaram sozinhas, "
-                "pico de %llu ativas; %llu blocos (%.1f MiB), %llu dimensionados pelos bytes, %llu underruns de stream\n",
-                g_voice_clock ? "LIGADO" : "desligado (--ngs2-static)", static_cast<unsigned long long>(st.queries),
+    std::printf("Ngs2 voices: virtual clock %s; %llu state queries, %llu PLAY, %llu STOP, %llu finished automatically, "
+                "peak %llu active; %llu blocks (%.1f MiB), %llu sized by bytes, %llu stream underruns\n",
+                g_voice_clock ? "ENABLED" : "disabled (--ngs2-static)", static_cast<unsigned long long>(st.queries),
                 static_cast<unsigned long long>(st.plays), static_cast<unsigned long long>(st.stops),
                 static_cast<unsigned long long>(st.finished), static_cast<unsigned long long>(st.max_active),
                 static_cast<unsigned long long>(st.blocks), st.block_bytes / 1048576.0,
                 static_cast<unsigned long long>(st.samples_guessed), static_cast<unsigned long long>(st.underruns));
-    std::printf("             alimentacao continua: %llu vez(es) a fila secou com a voz mantida em PLAYING, %llu terminaram por passar "
-                "da tolerancia de 0,5 s, %llu retomadas por blocos novos depois do fim\n",
+    std::printf("             continuous feed: %llu time(s) the queue ran dry with the voice kept PLAYING, %llu ended after exceeding "
+                "the 0.5 s tolerance, %llu resumed after new blocks arrived after ending\n",
                 static_cast<unsigned long long>(st.starved), static_cast<unsigned long long>(st.starved_out),
                 static_cast<unsigned long long>(st.revived));
-    std::printf("             %llu parametro(s) generico(s) recebidos por vozes do sampler ja terminadas (ignorados: nao voltam a INUSE)\n",
+    std::printf("             %llu generic parameter(s) received by already-finished sampler voices (ignored: do not return to INUSE)\n",
                 static_cast<unsigned long long>(st.params_on_free));
-    std::printf("             parametros (id=vezes):");
+    std::printf("             parameters (id=count):");
     for (const auto& [id, count] : st.params) {
         std::printf(" 0x%x=%llu", id, static_cast<unsigned long long>(count));
     }
-    std::printf("\n             eventos (id=vezes):");
+    std::printf("\n             events (id=count):");
     for (const auto& [id, count] : st.events) {
         std::printf(" %u=%llu", id, static_cast<unsigned long long>(count));
     }
-    std::printf("\n             formatos de waveform (tipo=vozes):");
+    std::printf("\n             waveform formats (type=voices):");
     for (const auto& [id, count] : st.formats) {
         std::printf(" 0x%x=%llu", id, static_cast<unsigned long long>(count));
     }

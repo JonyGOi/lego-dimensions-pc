@@ -6,6 +6,7 @@
 #include "io_file.h"
 #include "miniz_tinfl.h"
 #include "pkg.h"
+#include "read_window.h"
 #include "pkg_type.h"
 
 // LEGO Dimensions PC: inflate do zlib trocado pelo tinfl do miniz (mesmo formato: zlib com cabecalho).
@@ -410,9 +411,11 @@ void PKG::ExtractFiles(const int index) {
 
         Common::FS::IOFile inflated;
         inflated.Open(extractPaths[inode_number], Common::FS::FileAccessMode::Write);
+        if (!inflated.IsOpen()) throw std::runtime_error("Cannot open extracted output file");
 
         Common::FS::IOFile pkgFile; // Open the file for each iteration to avoid conflict.
         pkgFile.Open(pkgpath, Common::FS::FileAccessMode::Read);
+        PkgReadWindow source(pkgFile);
 
         int size_decompressed = 0;
         std::vector<char> compressedData;
@@ -434,8 +437,12 @@ void PKG::ExtractFiles(const int index) {
             int sectorOffsetMask = (sectorOffset + pfsc_offset) & 0xFFFFF000;
             int previousData = (sectorOffset + pfsc_offset) - sectorOffsetMask;
 
-            pkgFile.Seek(fileOffset - previousData);
-            pkgFile.Read(pfsc);
+            if (previousData < 0 || sectorSize > 0x10000 || static_cast<u64>(previousData)+sectorSize > pfsc.size()) {
+                throw std::runtime_error("Invalid PFS sector extent");
+            }
+            if (source.Read(fileOffset-previousData,pfsc) < static_cast<u64>(previousData)+sectorSize) {
+                throw std::runtime_error("Truncated source PFS sector");
+            }
 
             PKG::crypto.decryptPFS(dataKey, tweakKey, pfsc, pfs_decrypted, currentSector1);
 
@@ -450,14 +457,18 @@ void PKG::ExtractFiles(const int index) {
             size_decompressed += 0x10000;
 
             if (j < nblocks - 1) {
-                inflated.WriteRaw<u8>(decompressedData.data(), decompressedData.size());
+                if (inflated.WriteRaw<u8>(decompressedData.data(), decompressedData.size()) != decompressedData.size()) {
+                    throw std::runtime_error("Cannot write extracted output file");
+                }
             } else {
                 // This is to remove the zeros at the end of the file.
                 const u32 write_size = decompressedData.size() - (size_decompressed - bsize);
-                inflated.WriteRaw<u8>(decompressedData.data(), write_size);
+                if (write_size > decompressedData.size() || inflated.WriteRaw<u8>(decompressedData.data(), write_size) != write_size) {
+                    throw std::runtime_error("Cannot write final extracted output block");
+                }
             }
         }
         pkgFile.Close();
-        inflated.Close();
+        if (!inflated.Close()) throw std::runtime_error("Cannot flush extracted output file");
     }
 }

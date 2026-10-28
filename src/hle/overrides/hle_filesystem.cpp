@@ -90,18 +90,18 @@ int LastErrorToOrbis() {
 const char* ErrorName(int error) {
     switch (error) {
     case 0: return "OK";
-    case kENOENT: return "NAO ENCONTRADO";
-    case kEEXIST: return "JA EXISTE";
-    case kEISDIR: return "E DIRETORIO";
-    case kENOTDIR: return "NAO E DIRETORIO";
-    case kEROFS: return "SOMENTE LEITURA (/app0)";
-    default: return "ERRO DE E/S";
+    case kENOENT: return "NOT FOUND";
+    case kEEXIST: return "ALREADY EXISTS";
+    case kEISDIR: return "IS A DIRECTORY";
+    case kENOTDIR: return "NOT A DIRECTORY";
+    case kEROFS: return "READ ONLY (/app0)";
+    default: return "I/O ERROR";
     }
 }
 
 void LogAccess(const char* api, const char* guest, const Resolved& r, int error, const char* extra = "") {
     if (!r.mounted) {
-        log::Fs("%s \"%s\" -> SEM MOUNT (fora de /app0, /temp0, /download0 e de um save montado)", api, guest ? guest : "(null)");
+        log::Fs("%s \"%s\" -> NO MOUNT (outside /app0, /temp0, /download0 and mounted saves)", api, guest ? guest : "(null)");
     } else {
         log::Fs("%s \"%s\" -> %s%s  [%s]", api, guest, ErrorName(error), extra, PathText(r.host).c_str());
     }
@@ -432,7 +432,7 @@ std::shared_ptr<File> Open(const char* api, const char* guest_path, OpenMode mod
         if (mode.append) {
             file->Seek(0, 2);
         }
-        std::snprintf(extra, sizeof(extra), " (%s, %" PRId64 " bytes)", wants_write ? "escrita" : "leitura",
+        std::snprintf(extra, sizeof(extra), " (%s, %" PRId64 " bytes)", wants_write ? "write" : "read",
                       file->Size());
     }
     LogAccess(api, guest_path, r, err, extra);
@@ -526,7 +526,7 @@ int ListDirectory(const char* api, const char* guest_path, std::vector<DirEntry>
     }
     char extra[32] = "";
     if (!err) {
-        std::snprintf(extra, sizeof(extra), " (%zu entradas)", out->size());
+        std::snprintf(extra, sizeof(extra), " (%zu entries)", out->size());
     }
     LogAccess(api, guest_path, r, err, extra);
     return err;
@@ -558,7 +558,7 @@ int Rename(const char* api, const char* from, const char* to) {
         err = LastErrorToOrbis();
     }
     LogAccess(api, from, a, err);
-    log::Fs("%s    para \"%s\"", api, to ? to : "(null)");
+    log::Fs("%s    to \"%s\"", api, to ? to : "(null)");
     return err;
 }
 

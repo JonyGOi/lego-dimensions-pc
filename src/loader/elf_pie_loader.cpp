@@ -38,24 +38,24 @@ bool ElfPieLoader::Fail(std::string msg) {
 bool ElfPieLoader::Load(const std::filesystem::path& path, u64 base) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) {
-        return Fail("nao foi possivel abrir " + path.string());
+        return Fail("could not open " + path.string());
     }
     file_.resize(static_cast<size_t>(in.tellg()));
     in.seekg(0);
     in.read(reinterpret_cast<char*>(file_.data()), static_cast<std::streamsize>(file_.size()));
 
     if (file_.size() < sizeof(Elf64_Ehdr) || std::memcmp(file_.data(), "\x7f" "ELF", 4) != 0) {
-        return Fail("arquivo nao e um ELF (rode tools/check_binaries.py para extrair o FSELF)");
+        return Fail("file is not an ELF (run tools/check_binaries.py to extract FSELF)");
     }
     std::memcpy(&ehdr_, file_.data(), sizeof(ehdr_));
     if (ehdr_.e_machine != EM_X86_64 || ehdr_.e_phentsize != sizeof(Elf64_Phdr)) {
-        return Fail("ELF nao e x86-64");
+        return Fail("ELF is not x86-64");
     }
     if (ehdr_.e_type != ET_SCE_DYNEXEC) {
-        return Fail("ELF nao e PIE do Orbis (ET_SCE_DYNEXEC)");
+        return Fail("ELF is not Orbis PIE (ET_SCE_DYNEXEC)");
     }
     if (ehdr_.e_phoff + u64(ehdr_.e_phnum) * sizeof(Elf64_Phdr) > file_.size()) {
-        return Fail("program headers fora do arquivo");
+        return Fail("program headers outside file");
     }
     phdrs_.resize(ehdr_.e_phnum);
     std::memcpy(phdrs_.data(), file_.data() + ehdr_.e_phoff, phdrs_.size() * sizeof(Elf64_Phdr));
@@ -66,7 +66,7 @@ bool ElfPieLoader::Load(const std::filesystem::path& path, u64 base) {
         case PT_LOAD:
         case PT_SCE_RELRO:
             if (ph.p_offset + ph.p_filesz > file_.size() || ph.p_filesz > ph.p_memsz) {
-                return Fail("segmento carregavel invalido");
+                return Fail("invalid loadable segment");
             }
             segments_.push_back({ph.p_type, ph.p_flags, ph.p_vaddr, ph.p_memsz, ph.p_filesz});
             image_size_ = std::max(image_size_, ph.p_vaddr + ph.p_memsz);
@@ -90,11 +90,11 @@ bool ElfPieLoader::Load(const std::filesystem::path& path, u64 base) {
     }
     image_size_ = AlignUp(image_size_, kPageSize);
     if (segments_.empty() || image_size_ > kReserveSize) {
-        return Fail("imagem nao cabe na regiao reservada de 64 MiB");
+        return Fail("image does not fit in reserved 64 MiB region");
     }
     if (!dynamic || !dynlib_size_ || dynlib_offset_ + dynlib_size_ > file_.size() ||
         dynamic->p_offset + dynamic->p_filesz > file_.size()) {
-        return Fail("PT_DYNAMIC / PT_SCE_DYNLIBDATA ausentes ou invalidos");
+        return Fail("PT_DYNAMIC / PT_SCE_DYNLIBDATA missing or invalid");
     }
 
     // Uma unica regiao contigua: a imagem no inicio, o resto fica livre para trampolins.
@@ -102,7 +102,7 @@ bool ElfPieLoader::Load(const std::filesystem::path& path, u64 base) {
                                           MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     if (!base_) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "VirtualAlloc em 0x%llx falhou (erro %lu)",
+        std::snprintf(buf, sizeof(buf), "VirtualAlloc at 0x%llx failed (error %lu)",
                       static_cast<unsigned long long>(base), GetLastError());
         return Fail(buf);
     }
@@ -137,7 +137,7 @@ bool ElfPieLoader::Load(const std::filesystem::path& path, u64 base) {
     }
     if (strtab_ + strsz_ > dynlib_size_ || symtab_ + symtabsz_ > dynlib_size_ ||
         rela_ + relasz_ > dynlib_size_ || jmprel_ + pltrelsz_ > dynlib_size_) {
-        return Fail("tabelas dinamicas fora de PT_SCE_DYNLIBDATA");
+        return Fail("dynamic tables outside PT_SCE_DYNLIBDATA");
     }
     return true;
 }
@@ -238,7 +238,7 @@ bool ElfPieLoader::ApplyRelocations(u64 table_offset, u64 table_size, bool is_pl
 
 bool ElfPieLoader::Relocate() {
     if (!base_) {
-        return Fail("Relocate() antes de Load()");
+        return Fail("Relocate() before Load()");
     }
     ApplyRelocations(rela_, relasz_, false);
     ApplyRelocations(jmprel_, pltrelsz_, true);
@@ -252,7 +252,7 @@ bool ElfPieLoader::Protect() {
         const u32 flags = seg.type == PT_SCE_RELRO ? PF_R : seg.flags;
         DWORD old;
         if (!VirtualProtect(base_ + begin, end - begin, ToWinProtect(flags), &old)) {
-            return Fail("VirtualProtect falhou");
+            return Fail("VirtualProtect failed");
         }
     }
     FlushInstructionCache(GetCurrentProcess(), base_, image_size_);

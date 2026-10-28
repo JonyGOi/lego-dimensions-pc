@@ -97,7 +97,7 @@ def cmd_extract(args):
                 pairs[(h0, h1)] += 1
                 first_file.setdefault((h0, h1), name)
         if files % 500 == 0:
-            print('  %d arquivos, %d shaders, %d pares (%.0f s)' % (files, len(seen), len(pairs), time.time() - t0), flush=True)
+            print('  %d files, %d shaders, %d pairs (%.0f s)' % (files, len(seen), len(pairs), time.time() - t0), flush=True)
     with open(os.path.join(BIN, 'index.tsv'), 'w', newline='\n') as f:
         f.writelines(index_lines)
     with open(os.path.join(AOT, 'shaders.tsv'), 'w', newline='\n') as f:
@@ -112,11 +112,11 @@ def cmd_extract(args):
         for (vs, ps), n in sorted(pairs.items()):
             f.write('%s\t%s\t%d\t%s\n' % (vs, ps, n, first_file[(vs, ps)]))
     vs_count = sum(1 for s, _ in seen.values() if s == gcn.STAGE_VS)
-    print('EXTRAIDO: %d arquivos .ps4_shaders, %d shaders unicos (%d VS, %d PS), %d pares (VS, PS) em %.0f s'
+    print('EXTRACTED: %d .ps4_shaders files, %d unique shaders (%d VS, %d PS), %d pairs (VS, PS) in %.0f s'
           % (files, len(seen), vs_count, len(seen) - vs_count, len(pairs), time.time() - t0))
-    print('  arquivos por origem: ' + ', '.join('%s %d' % kv for kv in sorted(packs.items())))
+    print('  files by source: ' + ', '.join('%s %d' % kv for kv in sorted(packs.items())))
     if nu2dat_errors:  # Fase 49: indice de outra versao do pacote
-        print('AVISO: arquivos ilegiveis por pacote (indice de outra versao do jogo?): ' +
+        print('WARNING: unreadable files by pack (index from another game version?): ' +
               ', '.join('%s %d' % kv for kv in sorted(nu2dat_errors.items())))
 
 
@@ -159,7 +159,7 @@ def known_pairs():
         with open(path) as f:
             text = f.read()
         m = PAIR_RE.match(text)
-        if m and m.group(5) == 'sim':
+        if m and m.group(5) in ('sim', 'yes'):
             out[(m.group(1), m.group(2), m.group(3))] = text
     return out
 
@@ -425,7 +425,7 @@ def cmd_export_dictionary(args):
     fetch_alt, ps_types = learn_from_snapshots(shaders)  # Fase 52
     data['fetch_alt'] = {gen: [[['%08x' % w for w in real], list(c)] for real, cs in alts.items() for c in cs] for gen, alts in fetch_alt.items()}
     data['ps_types'] = {ps: {k: int(v) for k, v in per.items()} for ps, per in ps_types.items()}
-    print('  leituras de vertice aprendidas: %d fetches gerados com alternativa | tipos de textura reais de %d PS' % (len(fetch_alt), len(ps_types)))
+    print('  learned vertex fetches: %d fetch shaders generated with fallback | actual texture types from %d PS' % (len(fetch_alt), len(ps_types)))
     with open(DICTIONARY_JSON, 'w', newline='\n') as f:
         json.dump(data, f, separators=(',', ':'))
     print('DICIONARIO: %d VS, %d layouts, %d atributos -> %s' % (len(dictionary.by_vs), len(dictionary.by_layout), len(dictionary.by_attr),
@@ -511,7 +511,7 @@ def cmd_export_reais(args):
             f.write('real %s %s\n' % (vs, variant[0]))
             f.writelines(l + '\n' for l in lines)
             kept += 1
-    print('LEITURAS REAIS: %d (VS, leitura) -> %s' % (kept, REAIS_TXT))
+    print('ACTUAL FETCHES: %d (VS, fetch) -> %s' % (kept, REAIS_TXT))
 
 
 def cmd_plan(args):
@@ -526,9 +526,9 @@ def cmd_plan(args):
             data = json.load(f)
         if not known:  # Fase 49: instalacao nova, sem pares compilados
             dictionary.merge_json(data)
-            print('  dicionario de formatos de vertice: %s' % DICTIONARY_JSON)
+            print('  vertex format dictionary: %s' % DICTIONARY_JSON)
         merge_learned(fetch_alt, ps_types, data)  # Fase 52: o que veio com o port
-    print('  aprendido dos retratos: %d fetches gerados com leitura alternativa, tipos reais de textura de %d PS' % (len(fetch_alt), len(ps_types)))
+    print('  learned from snapshots: %d fetch shaders generated with fallback, actual texture types from %d PS' % (len(fetch_alt), len(ps_types)))
     if os.path.isdir(WORK):
         shutil.rmtree(WORK)
     os.makedirs(WORK)
@@ -621,7 +621,7 @@ def cmd_plan(args):
             f.writelines(plan_lines)
     for key, value in sorted(stats.items()):
         print('  %-50s %d' % (key, value))
-    print('PLANO: %d lotes em %s' % (n_chunks, WORK))
+    print('PLAN: %d batches in %s' % (n_chunks, WORK))
 
 
 # ======================= compile + pacote =======================
@@ -736,7 +736,7 @@ def cmd_compile(args):
             done[0] += 1
             for line in fails:
                 failures[re.sub(r'par pair_\w+: ', '', line)[:120]] += 1
-            print('  lote %d/%d: %d pares empacotados | %s | %.0f s' % (done[0], len(snaps), added, summary.split('->')[0].strip(),
+            print('  batch %d/%d: %d pairs packed | %s | %.0f s' % (done[0], len(snaps), added, summary.split('->')[0].strip(),
                                                                         time.time() - t0), flush=True)
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -748,7 +748,7 @@ def cmd_compile(args):
             os.replace(final, final + '.antigo')
         os.replace(tmp_name + ext, final)
     pak_mb = os.path.getsize(os.path.join(AOT, 'aot_pairs.pak')) / 2 ** 20
-    print('COMPILADO: %d pares em %.0f s | %d blocos unicos, %.0f MB de SPIR-V/texto -> %.0f MB no pacote'
+    print('COMPILED: %d pairs in %.0f s | %d unique blocks, %.0f MB of SPIR-V/text -> %.0f MB in pack'
           % (writer.pairs, time.time() - t0, len(writer.blobs), writer.raw_bytes / 2 ** 20, pak_mb))
     if failures:
         print('Falhas mais comuns:')
@@ -816,8 +816,7 @@ def cmd_validate(args):
             diff_txt += ta != tb
             if len(examples) < 6:
                 examples.append(name)
-    print('VALIDACAO: %d pares com retrato sintetico | identicos ao do jogo: %d | VS diferente: %d | PS diferente: %d | '
-          'descricao diferente: %d | nao compilou: %d' % (usable, same, diff_vs, diff_ps, diff_txt, missing))
+    print('VALIDATION: %d pairs with synthetic snapshot | identical to game: %d | VS differs: %d | PS differs: %d | description differs: %d | did not compile: %d' % (usable, same, diff_vs, diff_ps, diff_txt, missing))
     for key, value in sorted(hits.items()):
         print('  %-60s %d' % (key, value))
     for e in examples:
@@ -829,17 +828,17 @@ def main():
     sub = ap.add_subparsers(dest='cmd', required=True)
     p = sub.add_parser('extract')
     p.add_argument('--app0', default=nu2dat.DEFAULT_APP0)
-    p.add_argument('--patch', default='', help='pasta da atualizacao separada (padrao: procura CUSA01176-patch)')
-    p.add_argument('--addcont', default=nu2dat.DEFAULT_ADDCONT, help='pasta dos DLCs (vazio = so o jogo base)')
+    p.add_argument('--patch', default='', help='separate update folder (default: auto-detect CUSA01176-patch)')
+    p.add_argument('--addcont', default=nu2dat.DEFAULT_ADDCONT, help='DLC folder (empty = base game only)')
     p = sub.add_parser('plan')
-    p.add_argument('--variants', type=int, default=4, help='tuplas de classe candidatas por VS')
+    p.add_argument('--variants', type=int, default=4, help='candidate class tuples per VS')
     p.add_argument('--chunk', type=int, default=1500)
     p.add_argument('--skip-packed', action='store_true', help='pula as variantes que ja estao em aot_pairs.idx')
-    p.add_argument('--reais', default='', help='leituras de vertice reais (padrao: tools/data/vs_reais.txt, se existir)')
+    p.add_argument('--reais', default='', help='actual vertex fetches (default: tools/data/vs_reais.txt, if present)')
     p = sub.add_parser('compile')
     p.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 4) - 2))
     p.add_argument('--limit', type=int, default=0)
-    p.add_argument('--append', action='store_true', help='acrescenta ao pacote existente em vez de refazer')
+    p.add_argument('--append', action='store_true', help='append to existing pack instead of rebuilding')
     p = sub.add_parser('validate')
     p.add_argument('--dictionary', action='store_true')
     sub.add_parser('export-dictionary')

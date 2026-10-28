@@ -77,12 +77,11 @@ def stage():
     for d in (S('build'), S('tools', 'shader_compiler_tool', 'build')):
         for dll in VC_DLLS:
             copy(os.path.join(REDIST, dll), os.path.join(d, dll))
-    if os.path.isfile(R('tools', 'LegoToypad.exe')):
-        copy(R('tools', 'LegoToypad.exe'), S('tools', 'LegoToypad.exe'))
     # ferramentas de preparacao
     for f in ('nu2_shader_extractor.py', 'gcn.py', 'nu2dat.py', 'nu2toc.py', 'winpack.py'):  # Fase 60: nu2toc le a tabela do .DAT
         copy(R('tools', 'nu2_shader_extractor', f), S('tools', 'nu2_shader_extractor', f))
     copy(R('tools', 'check_binaries.py'), S('tools', 'check_binaries.py'))
+    copy(R('tools', 'game_regions.py'), S('tools', 'game_regions.py'))
     copy(R('tools', 'setup', 'preparar.py'), S('tools', 'setup', 'preparar.py'))
     copy(R('tools', 'setup', 'atualizar.py'), S('tools', 'setup', 'atualizar.py'))  # Fase 61: botao Atualizar do launcher
     copy(R('tools', 'setup', 'botoes.py'), S('tools', 'setup', 'botoes.py'))  # Fase 62: icones dos botoes de outras plataformas

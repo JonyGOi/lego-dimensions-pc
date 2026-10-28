@@ -137,7 +137,7 @@ HLE_IMPL(int, scePthreadMutexattrDestroy, GuestMutexAttr* attr) {
 HLE_OVERRIDE(scePthreadMutexattrDestroy);
 
 HLE_IMPL(int, scePthreadMutexattrSettype, GuestMutexAttr* attr, int type) {
-    HLE_QUIET("%p tipo=%d", static_cast<void*>(attr), type);
+    HLE_QUIET("%p type=%d", static_cast<void*>(attr), type);
     if (!attr || !*attr || type < kTypeErrorCheck || type > kTypeAdaptive) {
         return err::kEINVAL;
     }
@@ -153,7 +153,7 @@ HLE_IMPL(int, scePthreadMutexInit, GuestMutex* mutex, const GuestMutexAttr* attr
     }
     const int type = (attr && *attr) ? (*attr)->type : kTypeErrorCheck;
     *mutex = CreateMutex_(type, name);
-    HLE_QUIET("%p tipo=%d nome=%s", static_cast<void*>(mutex), type, name ? name : "(sem nome)");
+    HLE_QUIET("%p type=%d name=%s", static_cast<void*>(mutex), type, name ? name : "(unnamed)");
     return err::OK;
 }
 HLE_OVERRIDE(scePthreadMutexInit);
@@ -197,7 +197,7 @@ int LockImpl(HostMutex* m, bool try_only) {
             return err::kEBUSY;
         }
         if (m->type != kTypeErrorCheck) {
-            log::Call("scePthreadMutexLock", 0, "AVISO: relock de mutex nao recursivo '%s' (deadlock no Orbis)",
+            log::Call("scePthreadMutexLock", 0, "WARNING: relocking non-recursive mutex '%s' (deadlock on Orbis)",
                       m->name);
         }
         return err::kEDEADLK;
@@ -270,7 +270,7 @@ HLE_IMPL(int, scePthreadCondInit, GuestCond* cond, const void* attr, const char*
         std::strncpy(c->name, name, sizeof(c->name) - 1);
     }
     *cond = c;
-    HLE_QUIET("%p nome=%s", static_cast<void*>(cond), name ? name : "(sem nome)");
+    HLE_QUIET("%p name=%s", static_cast<void*>(cond), name ? name : "(unnamed)");
     return err::OK;
 }
 HLE_OVERRIDE(scePthreadCondInit);
@@ -436,12 +436,12 @@ DWORD WINAPI ThreadTrampoline(void* param) {
     thread->registry = runtime::RegisterCurrentThread(thread->name);
     // Antes de qualquer instrucao do jogo: TCB/TLS proprio no slot que o patcher de FS le.
     if (!runtime::SetupTlsForCurrentThread()) {
-        log::Fatal("thread '%s': nao foi possivel montar o TLS do Orbis", thread->name);
+        log::Fatal("thread '%s': could not initialize Orbis TLS", thread->name);
     }
-    log::Call("scePthreadCreate", reinterpret_cast<u64>(thread->entry), "thread '%s' iniciou, tcb=%p, arg=%p",
+    log::Call("scePthreadCreate", reinterpret_cast<u64>(thread->entry), "thread '%s' started, tcb=%p, arg=%p",
               thread->name, static_cast<void*>(runtime::CurrentTcb()), thread->arg);
     void* result = thread->entry(thread->arg);
-    log::Call("scePthreadCreate", reinterpret_cast<u64>(thread->entry), "thread '%s' retornou %p", thread->name,
+    log::Call("scePthreadCreate", reinterpret_cast<u64>(thread->entry), "thread '%s' returned %p", thread->name,
               result);
     FinishThread(thread, result);
     return 0;
@@ -455,7 +455,7 @@ HLE_IMPL(int, scePthreadCreate, HostThread** out, const GuestThreadAttr* attr, T
     auto* thread = new HostThread;
     thread->entry = entry;
     thread->arg = arg;
-    std::strncpy(thread->name, name && *name ? name : "sem-nome", sizeof(thread->name) - 1);
+    std::strncpy(thread->name, name && *name ? name : "unnamed", sizeof(thread->name) - 1);
     const u64 requested = (attr && *attr) ? (*attr)->stack_size : 0;
     const u64 stack = requested > kMinHostStack ? requested : kMinHostStack;
     // Suspensa ate *out estar gravado: a thread pode ler o proprio handle logo no inicio.
@@ -466,11 +466,11 @@ HLE_IMPL(int, scePthreadCreate, HostThread** out, const GuestThreadAttr* attr, T
     thread->handle = CreateThread(nullptr, stack, ThreadTrampoline, thread, CREATE_SUSPENDED, nullptr);
     if (!thread->handle) {
         delete thread;
-        HLE_TRACE("\"%s\" -> CreateThread falhou (%lu)", name ? name : "", GetLastError());
+        HLE_TRACE("\"%s\" -> CreateThread failed (%lu)", name ? name : "", GetLastError());
         return err::kEAGAIN;
     }
     *out = thread;
-    HLE_TRACE("\"%s\" entry=%p arg=%p stack pedido=0x%" PRIx64 " (host 0x%" PRIx64 ")", thread->name,
+    HLE_TRACE("\"%s\" entry=%p arg=%p requested stack=0x%" PRIx64 " (host 0x%" PRIx64 ")", thread->name,
               reinterpret_cast<void*>(entry), arg, requested, stack);
     ResumeThread(thread->handle);
     return err::OK;
@@ -499,7 +499,7 @@ HLE_OVERRIDE(scePthreadJoin);
 HLE_IMPL(void, scePthreadExit, void* result) {
     HLE_TRACE("%p", result);
     if (!t_self) {
-        std::printf("\nA thread principal chamou scePthreadExit.\n");
+        std::printf("\nThe main thread called scePthreadExit.\n");
         log::Shutdown(0);
     }
     FinishThread(t_self, result);
@@ -509,7 +509,7 @@ HLE_OVERRIDE(scePthreadExit);
 
 // Prioridades do Orbis nao sao mapeadas: todas as threads rodam com prioridade normal.
 HLE_IMPL(int, scePthreadSetprio, HostThread* thread, int priority) {
-    HLE_TRACE("\"%s\" prio=%d (ignorada)", thread && thread->magic == kThreadMagic ? thread->name : "?", priority);
+    HLE_TRACE("\"%s\" prio=%d (ignored)", thread && thread->magic == kThreadMagic ? thread->name : "?", priority);
     return err::OK;
 }
 HLE_OVERRIDE(scePthreadSetprio);

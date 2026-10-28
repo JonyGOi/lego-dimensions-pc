@@ -41,6 +41,7 @@
 #include <psapi.h>
 
 #include "hle/hle_perf.h"
+#include "common/shader_metadata.h"
 #include "hle/overrides/hle_equeue.h"
 #include "hle/overrides/hle_override.h"
 #include "hle/overrides/hle_videoout.h"
@@ -276,7 +277,7 @@ void Refuse(const char* packet, u64 address, u64 size, u32 control) {
     ++g_bad_writes;
     if (g_logged_refusals < 6) {
         ++g_logged_refusals;
-        log::Call("PM4", 0, "%s RECUSADO: destino 0x%" PRIx64 " (%" PRIu64 " bytes) nao e gravavel; controle=0x%08x",
+        log::Call("PM4", 0, "%s REFUSED: destination 0x%" PRIx64 " (%" PRIu64 " bytes) is not writable; control=0x%08x",
                   packet, address, size, control);
     }
 }
@@ -292,7 +293,7 @@ void WriteLabel(const char* packet, u64 address, const void* data, u64 size) {
         ++g_logged_labels;
         u64 value = 0;
         std::memcpy(&value, data, size < 8 ? size : 8);
-        log::Call("PM4", 0, "%s escreveu %" PRIu64 " bytes em 0x%" PRIx64 " (valor 0x%" PRIx64 ")", packet, size,
+        log::Call("PM4", 0, "%s wrote %" PRIu64 " bytes at 0x%" PRIx64 " (value 0x%" PRIx64 ")", packet, size,
                   address, value);
     }
 }
@@ -540,8 +541,8 @@ void CollectTextures(const u32* regs, std::set<TextureInfo>* found) {
 //                  pos-processo que cobre a tela
 //   nao analisado  formato de posicao desconhecido, draw grande demais ou memoria ilegivel
 enum GeometryClass : u32 { kGeo3D, kGeoPlane, kGeoUi2D, kGeoNoBuffer, kGeoUnknown };
-const char* const kGeometryNames[] = {"Geometria 3D", "plano (Z linear)", "UI 2D", "tela cheia (triangulo unico de pos-processo)",
-                                      "nao analisado"};
+const char* const kGeometryNames[] = {"3D geometry", "plane (linear Z)", "UI 2D", "fullscreen (single post-processing triangle)",
+                                      "not analyzed"};
 
 float HalfToFloat(u16 h) {
     const u32 exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
@@ -638,7 +639,7 @@ std::string VertexFormatName(u32 format) {
     case 0x7: return "packed11_11_10";
     case 0x8: return std::string(kNum[num]) + "10_10_10_2";
     case 0x9: return std::string(kNum[num]) + "2_10_10_10";
-    default: return "desconhecido";
+    default: return "unknown";
     }
     return std::string(kNum[num]) + std::to_string(bits) + "x" + std::to_string(count);
 }
@@ -650,10 +651,10 @@ s32 FetchSgprOfVertexShader(u64 vs_address); // definido junto do extrator de sh
 void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
     auto not_analysed = [&](const char* why) {
         ++st.geometry[kGeoUnknown];
-        std::fprintf(st.file, "            geometria: nao analisado (%s)\n", why);
+        std::fprintf(st.file, "            geometry: not analyzed (%s)\n", why);
     };
     if (!count || count > kMaxClassifyIndices) {
-        not_analysed(count ? "draw grande demais" : "contagem desconhecida");
+        not_analysed(count ? "draw too large" : "unknown count");
         return;
     }
     // Arquivos brutos: geometria 3D so para draws pequenos de telas pequenas; draws das classes
@@ -666,7 +667,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
     if (index_address) {
         const u64 bytes = static_cast<u64>(count) * st.index_size;
         if (!Readable(index_address, bytes)) {
-            not_analysed("indices ilegiveis");
+            not_analysed("unreadable indices");
             return;
         }
         min_index = ~0u;
@@ -678,7 +679,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
             min_index = std::min(min_index, index);
         }
         if (max_index > 0x3FFFFF) {
-            not_analysed("indice fora da faixa");
+            not_analysed("index out of range");
             return;
         }
         index_bytes = bytes;
@@ -759,10 +760,10 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
         st.depth_test_draws += depth_test;
         if (vertex_sources.empty()) {
             ++st.geometry[kGeoNoBuffer];
-            std::fprintf(st.file, "            geometria: %s  depth teste=%d escrita=%d\n", kGeometryNames[kGeoNoBuffer], depth_test,
+            std::fprintf(st.file, "            geometry: %s  depth test=%d write=%d\n", kGeometryNames[kGeoNoBuffer], depth_test,
                          depth_write);
         } else if (!position) {
-            not_analysed("nenhum atributo de posicao com formato conhecido no offset 0");
+            not_analysed("no position attribute with known format at offset 0");
         } else {
             double lo[3] = {1e30, 1e30, 1e30}, hi[3] = {-1e30, -1e30, -1e30}, sum[3] = {}, product[3][3] = {};
             u64 used = 0, rejected = 0;
@@ -786,7 +787,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
                 }
             }
             if (used < 3 || rejected > used) {
-                not_analysed("posicoes invalidas (o atributo no offset 0 nao e posicao?)");
+                not_analysed("invalid positions (attribute at offset 0 is not position?)");
             } else {
                 // Covariancia das posicoes: determinante ~0 = vertices coplanares.
                 double c[3][3];
@@ -807,8 +808,8 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
                 ++st.geometry[kind];
                 draw_class = kind;
                 std::fprintf(st.file,
-                             "            geometria: %s  X[%.3f, %.3f] Y[%.3f, %.3f] Z[%.3f, %.3f]  %llu vertices (%s em +0, stride %u, "
-                             "origem %s)  achatamento %.2e  depth teste=%d escrita=%d\n",
+                             "            geometry: %s  X[%.3f, %.3f] Y[%.3f, %.3f] Z[%.3f, %.3f]  %llu vertices (%s at +0, stride %u, "
+                             "source %s)  flatness %.2e  depth test=%d write=%d\n",
                              kGeometryNames[kind], lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], static_cast<unsigned long long>(used),
                              PositionFormatName(position->v.format), position->v.stride, position->label, flatness, depth_test,
                              depth_write);
@@ -860,7 +861,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
             std::fwrite(reinterpret_cast<const void*>(base.address), 1, bytes, f);
             std::fclose(f);
         }
-        std::fprintf(st.file, "            vertices: %s  %u elementos @0x%" PRIx64 "  origem %s  atributos (offset:formato):%s\n", name,
+        std::fprintf(st.file, "            vertices: %s  %u elements @0x%" PRIx64 "  source %s  attributes (offset:format):%s\n", name,
                      base.count, base.address, vertex_sources[i].label, attributes.c_str());
         written_buffers.push_back({base.address, base.stride, name});
     }
@@ -930,7 +931,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
         for (Row& row : rows) {
             const u32 num = (row.v.format >> 12) & 7, data = (row.v.format >> 15) & 0xF;
             if (row.attribute.semantic == 0) {
-                row.role = "posicao";
+                row.role = "position";
             } else if (data == 0xA && num <= 1) {
                 // Pode haver mais de um atributo de 4 bytes (o vertice da interface tem dois: um
                 // que muda a cada vertice e a tinta, igual no draw inteiro ou quase). A cor e o
@@ -971,13 +972,13 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
         }
         for (const Row& row : rows) {
             std::fprintf(st.file,
-                         "            layout: sem=%u arquivo=%s stride=%u offset=%u formato=%s carregados=%u papel=%s  (V# em "
+                         "            layout: semantic=%u file=%s stride=%u offset=%u format=%s loaded=%u role=%s  (V# at "
                          "s%u+%u, 0x%08x)\n",
                          row.attribute.semantic, row.file.c_str(), row.v.stride, row.offset, VertexFormatName(row.v.format).c_str(),
                          row.attribute.components, row.role, row.attribute.table_sgpr, row.attribute.dword_offset, row.v.format);
         }
         if (rows.empty()) {
-            std::fprintf(st.file, "            layout: (sem fetch shader conhecido para este draw)\n");
+            std::fprintf(st.file, "            layout: (no known fetch shader for this draw)\n");
         }
     }
     for (u32 stage = 0; stage < 2; ++stage) {
@@ -994,7 +995,7 @@ void DumpGeometry(DumpState& st, u32 count, u64 index_address) {
                 std::fwrite(reinterpret_cast<const void*>(source.v.address), 1, elements * 16ull, f);
                 std::fclose(f);
             }
-            std::fprintf(st.file, "            constantes %s: %s  %u elementos @0x%" PRIx64 "  origem %s\n", stage == 0 ? "VS" : "PS", name,
+            std::fprintf(st.file, "            constants %s: %s  %u elements @0x%" PRIx64 "  source %s\n", stage == 0 ? "VS" : "PS", name,
                          source.v.count, source.v.address, source.label);
         }
     }
@@ -1024,7 +1025,7 @@ void DumpDraw(DumpState& st, const char* op, u32 count, u64 index_address = 0) {
     const float w = 2.0f * std::fabs(vp[0]), h = 2.0f * std::fabs(vp[2]);
     const u64 target = static_cast<u64>(st.ctx[0x318]) << 8;
     char viewport[96];
-    std::snprintf(viewport, sizeof(viewport), "viewport %.0fx%.0f em (%.0f,%.0f) alvo 0x%" PRIx64, w, h, vp[1] - std::fabs(vp[0]),
+    std::snprintf(viewport, sizeof(viewport), "viewport %.0fx%.0f at (%.0f,%.0f) target 0x%" PRIx64, w, h, vp[1] - std::fabs(vp[0]),
                   vp[3] - std::fabs(vp[2]), target);
     ++st.viewports[viewport];
 
@@ -1032,13 +1033,13 @@ void DumpDraw(DumpState& st, const char* op, u32 count, u64 index_address = 0) {
     CollectTextures(&st.sh[0x0C], &found); // pixel shader
     const size_t ps_count = found.size();
     CollectTextures(&st.sh[0x4C], &found); // vertex shader
-    std::fprintf(st.file, "draw %3u  %-16s %6u %s  prim=%u  %s  texturas: %zu (PS %zu)\n", st.draw_index, op, count,
-                 count % 6 == 0 && count >= 6 ? "(multiplo de 6: quads)" : "", st.prim_type, viewport, found.size(), ps_count);
+    std::fprintf(st.file, "draw %3u  %-16s %6u %s  prim=%u  %s  textures: %zu (PS %zu)\n", st.draw_index, op, count,
+                 count % 6 == 0 && count >= 6 ? "(multiple of 6: quads)" : "", st.prim_type, viewport, found.size(), ps_count);
     for (const TextureInfo& t : found) {
         ++st.textures[t];
-        std::fprintf(st.file, "            %5ux%-5u %-12s numfmt %u tipo 0x%x niveis %u tiling %u pitch %u @0x%" PRIx64 " swizzle=%s%s\n",
+        std::fprintf(st.file, "            %5ux%-5u %-12s numfmt %u type 0x%x levels %u tiling %u pitch %u @0x%" PRIx64 " swizzle=%s%s\n",
                      t.width, t.height, FormatName(t.format), t.num_format, t.type, t.levels, t.tiling, t.pitch, t.address,
-                     SwizzleName(t.swizzle).c_str(), t.width >= 4 * t.height ? "  <- larga (texto/botao?)" : "");
+                     SwizzleName(t.swizzle).c_str(), t.width >= 4 * t.height ? "  <- wide (text/button?)" : "");
     }
     // Estado de blend do alvo de cor 0, como o jogo programou por SET_CONTEXT_REG neste frame:
     //   CB_BLEND0_CONTROL (0xA1E0): fatores e funcao; bit 30 = blend ligado
@@ -1050,9 +1051,9 @@ void DumpDraw(DumpState& st, const char* op, u32 count, u64 index_address = 0) {
         const bool separate = (blend >> 29) & 1;
         const u32 tl = st.ctx[0x90], br = st.ctx[0x91];
         std::fprintf(st.file,
-                     "            blend: %s cor src=%s dst=%s func=%s | alfa src=%s dst=%s func=%s | controle=0x%08x color_control=0x%08x "
-                     "mascara=0x%x depth_control=0x%08x scissor=(%u,%u)-(%u,%u)\n",
-                     enabled ? "LIGADO" : "desligado", BlendFactor(blend & 0x1F), BlendFactor((blend >> 8) & 0x1F),
+                     "            blend: %s color src=%s dst=%s func=%s | alpha src=%s dst=%s func=%s | control=0x%08x color_control=0x%08x "
+                     "mask=0x%x depth_control=0x%08x scissor=(%u,%u)-(%u,%u)\n",
+                     enabled ? "ENABLED" : "disabled", BlendFactor(blend & 0x1F), BlendFactor((blend >> 8) & 0x1F),
                      BlendFunction((blend >> 5) & 0x7), BlendFactor(separate ? (blend >> 16) & 0x1F : blend & 0x1F),
                      BlendFactor(separate ? (blend >> 24) & 0x1F : (blend >> 8) & 0x1F),
                      BlendFunction(separate ? (blend >> 21) & 0x7 : (blend >> 5) & 0x7), blend, st.ctx[0x202], st.ctx[0x8E] & 0xF,
@@ -1152,7 +1153,7 @@ void DumpWalk(DumpState& st, const u32* cmd, u64 size_bytes) {
 
 // Chamado com g_mutex, logo depois de processar o ultimo buffer do frame.
 void DumpFrame(u64 draws) {
-    static perf::Counter perf_counter("dump de frame");
+    static perf::Counter perf_counter("frame dump");
     const perf::Scope perf_scope(perf_counter);
     g_window_had_dump = true;
     std::error_code ec;
@@ -1167,10 +1168,10 @@ void DumpFrame(u64 draws) {
     st.frame_draws = draws;
     st.file = _wfopen(path.c_str(), L"w");
     if (!st.file) {
-        log::Tagged("FRAME DUMP", "nao abriu %s", path.string().c_str());
+        log::Tagged("FRAME DUMP", "could not open %s", path.string().c_str());
         return;
     }
-    std::fprintf(st.file, "Frame estavel de %llu draws, t=%.1fs, submit %llu, %zu command buffer(s)\n\n",
+    std::fprintf(st.file, "Stable frame with %llu draws, t=%.1fs, submit %llu, %zu command buffer(s)\n\n",
                  static_cast<unsigned long long>(draws), seconds, static_cast<unsigned long long>(g_submits), g_frame_buffers.size());
     for (const SubmittedBuffer& buffer : g_frame_buffers) {
         DumpWalk(st, buffer.cmd, buffer.size_bytes);
@@ -1182,7 +1183,7 @@ void DumpFrame(u64 draws) {
         ranked.emplace_back(uses, texture);
     }
     std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-    std::fprintf(st.file, "\n==== %zu texturas distintas ====\n", ranked.size());
+    std::fprintf(st.file, "\n==== %zu distinct textures ====\n", ranked.size());
     u32 raw_written = 0;
     for (const auto& [uses, t] : ranked) {
         char raw_name[96] = "";
@@ -1196,18 +1197,18 @@ void DumpFrame(u64 draws) {
                 ++raw_written;
             }
         }
-        std::fprintf(st.file, "%4u draw(s)  %5ux%-5u %-12s tipo 0x%x niveis %u tiling %u @0x%" PRIx64 "  %s\n", uses, t.width, t.height,
+        std::fprintf(st.file, "%4u draw(s)  %5ux%-5u %-12s type 0x%x levels %u tiling %u @0x%" PRIx64 "  %s\n", uses, t.width, t.height,
                      FormatName(t.format), t.type, t.levels, t.tiling, t.address, raw_name);
     }
-    std::fprintf(st.file, "\n==== radar de geometria ====\n");
+    std::fprintf(st.file, "\n==== geometry radar ====\n");
     for (u32 kind = 0; kind < st.geometry.size(); ++kind) {
         std::fprintf(st.file, "%4u draw(s)  %s\n", st.geometry[kind], kGeometryNames[kind]);
     }
-    std::fprintf(st.file, "%4u draw(s)  com teste de profundidade ligado\n", st.depth_test_draws);
-    const char* verdict = st.geometry[kGeo3D] ? "CENA 3D" : st.geometry[kGeoUi2D] ? "so interface 2D" : "sem geometria reconhecida";
-    std::fprintf(st.file, "veredito: %s\n", verdict);
-    log::Tagged("GEO RADAR", "t=%.0fs frame de %llu draws: %u Geometria 3D, %u plano, %u UI 2D, %u tela cheia (pos-processo), %u nao "
-                             "analisado; %u com teste de profundidade -> %s",
+    std::fprintf(st.file, "%4u draw(s)  with depth testing enabled\n", st.depth_test_draws);
+    const char* verdict = st.geometry[kGeo3D] ? "3D SCENE" : st.geometry[kGeoUi2D] ? "2D interface only" : "no recognized geometry";
+    std::fprintf(st.file, "verdict: %s\n", verdict);
+    log::Tagged("GEO RADAR", "t=%.0fs frame with %llu draws: %u 3D geometry, %u plane, %u 2D UI, %u fullscreen (post-processing), %u not "
+                             "analyzed; %u with depth testing -> %s",
                 seconds, static_cast<unsigned long long>(draws), st.geometry[kGeo3D], st.geometry[kGeoPlane], st.geometry[kGeoUi2D],
                 st.geometry[kGeoNoBuffer], st.geometry[kGeoUnknown], st.depth_test_draws, verdict);
     std::fprintf(st.file, "\n==== viewports ====\n");
@@ -1216,7 +1217,7 @@ void DumpFrame(u64 draws) {
     }
     std::fclose(st.file);
 
-    log::Tagged("FRAME DUMP", "t=%.0fs tela parada com %llu draws: %u draws lidos, %zu texturas distintas -> %s", seconds,
+    log::Tagged("FRAME DUMP", "t=%.0fs static screen with %llu draws: %u draws read, %zu distinct textures -> %s", seconds,
                 static_cast<unsigned long long>(draws), st.draw_index, ranked.size(), path.string().c_str());
     // No terminal a lista so sai para telas novas: contagens vizinhas (+-3) de uma tela ja
     // listada sao quase sempre a mesma tela com um elemento a mais ou a menos.
@@ -1231,11 +1232,11 @@ void DumpFrame(u64 draws) {
     u32 shown = 0;
     for (const auto& [uses, t] : ranked) {
         if (shown++ >= 14) {
-            log::Tagged("FRAME DUMP", "  ... e mais %zu (ver arquivo)", ranked.size() - 14);
+            log::Tagged("FRAME DUMP", "  ... and %zu more (see file)", ranked.size() - 14);
             break;
         }
-        log::Tagged("FRAME DUMP", "  %3u draw(s)  %5ux%-5u %-10s %u nivel(is)%s", uses, t.width, t.height, FormatName(t.format), t.levels,
-                    t.width >= 4 * t.height ? "  <- larga (texto/botao?)" : "");
+        log::Tagged("FRAME DUMP", "  %3u draw(s)  %5ux%-5u %-10s %u level(s)%s", uses, t.width, t.height, FormatName(t.format), t.levels,
+                    t.width >= 4 * t.height ? "  <- wide (text/button?)" : "");
     }
 }
 
@@ -1272,7 +1273,7 @@ void CutsceneWatchdogThread() {
         }
         if (profile) {
             char title[96];
-            std::snprintf(title, sizeof(title), "t=%.0f s, frame de %llu draws", NowMs() / 1000.0,
+            std::snprintf(title, sizeof(title), "t=%.0f s, frame with %llu draws", NowMs() / 1000.0,
                           static_cast<unsigned long long>(g_stable_count_seen.load()));
             log::FlushGameText();
             if (const char* deep = std::getenv("LD_PROFILE_DEEP")) { // Fase 59: pilha inteira de uma thread (ex.: Render)
@@ -1302,21 +1303,21 @@ void CutsceneWatchdogThread() {
         const double since_frame = (now - g_wd_last_frame_ms.load()) / 1000.0;
         log::FlushGameText();
         char title[128];
-        std::snprintf(title, sizeof(title), "WATCHDOG DE CUTSCENE #%u: %llu draws/frame ha %.0f s (t=%.0f s)", reports,
+        std::snprintf(title, sizeof(title), "CUTSCENE WATCHDOG #%u: %llu draws/frame for %.0f s (t=%.0f s)", reports,
                       static_cast<unsigned long long>(draws), stuck, now / 1000.0);
         runtime::DumpAllThreads(title);
-        std::printf("---- frames: ultimo frame submetido ha %.2f s (%s)\n", since_frame,
-                    since_frame > 2.0 ? "O JOGO PAROU DE SUBMETER FRAMES" : "o jogo continua renderizando a mesma tela");
+        std::printf("---- frames: last frame submitted %.2f s ago (%s)\n", since_frame,
+                    since_frame > 2.0 ? "THE GAME STOPPED SUBMITTING FRAMES" : "the game keeps rendering the same screen");
         PrintNgs2VoiceReport();
         std::string detail;
         const u64 av = log::StubCallsWithPrefix("libSceAvPlayer", &detail);
         const u64 vd = log::StubCallsWithPrefix("libSceVideodec", &detail) + log::StubCallsWithPrefix("libSceVideoCore", &detail);
-        std::printf("---- video: libSceAvPlayer %llu chamada(s), libSceVideodec/VideoCore %llu chamada(s)%s%s\n",
+        std::printf("---- video: libSceAvPlayer %llu call(s), libSceVideodec/VideoCore %llu call(s)%s%s\n",
                     static_cast<unsigned long long>(av), static_cast<unsigned long long>(vd), detail.empty() ? "" : ": ",
                     detail.c_str());
-        std::printf("     (o eboot importa libSceAvPlayer, todo em stubs; nao importa libSceVideodec. Zero chamadas = nao ha "
-                    "FMV em andamento)\n");
-        std::printf("======================== fim do watchdog #%u ========================\n", reports);
+        std::printf("     (eboot imports libSceAvPlayer, all stubbed; does not import libSceVideodec. Zero calls = no "
+                    "FMV in progress)\n");
+        std::printf("======================== end of watchdog #%u ========================\n", reports);
         std::fflush(stdout);
     }
 }
@@ -1347,7 +1348,7 @@ void EndFrame() {
     if (!g_dump_dir.empty() && (forced || (g_stable_frames == kStableFrames && draws >= 1 && draws <= kMaxDumpDraws &&
                                            g_dumped_counts.size() < kMaxDumps && g_dumped_counts.insert(draws).second))) {
         if (forced) {
-            log::Tagged("FRAME DUMP", "dump pedido por horario (--frame-dump-at), frame de %llu draws",
+            log::Tagged("FRAME DUMP", "dump requested by time (--frame-dump-at), frame with %llu draws",
                         static_cast<unsigned long long>(draws));
         }
         DumpFrame(draws);
@@ -1643,7 +1644,7 @@ bool LoadIconSheets() {
             }
         }
         g_icons.ok = g_icons.ok && !g_icons.rgba[0].empty();
-        log::Tagged("ICONES", g_icons.ok ? "folhas de icones carregadas (%s)" : "sem folhas de icones em %s (rode o Preparar)",
+        log::Tagged("ICONS", g_icons.ok ? "icon sheets loaded (%s)" : "no icon sheets at %s (run Prepare)",
                     dir.string().c_str());
     });
     return g_icons.ok;
@@ -1688,7 +1689,7 @@ void ReplaceIconSheet(const GuestTexture& t, PixelVector* out, render::TextureDa
     g_icon_applied = wanted;
     static std::atomic<u32> logged{0};
     if (logged.fetch_add(1) < 4) {
-        log::Tagged("ICONES", "folha de icones do jogo em 0x%llx: enviada com os icones \"%s\"", static_cast<unsigned long long>(t.address),
+        log::Tagged("ICONS", "game icon sheet at 0x%llx: submitted with \"%s\" icons", static_cast<unsigned long long>(t.address),
                     kIconPlatforms[wanted]);
     }
 }
@@ -2061,7 +2062,7 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
             data.bytes = g_icons.rgba[wanted].size();
             if (renderer.UpdateTexture(key, data)) {
                 g_icon_applied = wanted;
-                log::Tagged("ICONES", "controle mudou: icones \"%s\"", kIconPlatforms[wanted]);
+                log::Tagged("ICONS", "controller changed: \"%s\" icons", kIconPlatforms[wanted]);
             }
         }
     }
@@ -2137,9 +2138,9 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
         const double read_ms = std::chrono::duration<double, std::milli>(t1 - t0).count(),
                      send_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
         if (read_ms + send_ms > 3.0) {
-            std::printf("[TEXTURA-NA-HORA] 0x%llx %ux%ux%u formato 0x%x tiling %u (%s): leitura %.1f ms, envio %.1f ms, %llu bytes\n",
+            std::printf("[TEXTURE-ON-DEMAND] 0x%llx %ux%ux%u format 0x%x tiling %u (%s): read %.1f ms, upload %.1f ms, %llu bytes\n",
                         static_cast<unsigned long long>(texture.address), texture.width, texture.height, texture.depth, texture.format,
-                        texture.tiling, small_linear ? "linear pequena" : "sem threads", read_ms, send_ms,
+                        texture.tiling, small_linear ? "small linear" : "no threads", read_ms, send_ms,
                         static_cast<unsigned long long>(data.bytes));
         }
         if (sent) {
@@ -2197,7 +2198,7 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
                 static u32 logged = 0;
                 if (logged < 30) {
                     ++logged;
-                    std::printf("[TEXTURA] 0x%llx %ux%u formato 0x%x: o jogo reescreveu o conteudo depois do primeiro envio; relida pelas threads\n",
+                    std::printf("[TEXTURE] 0x%llx %ux%u format 0x%x: game rewrote content after first upload; reread by threads\n",
                                 static_cast<unsigned long long>(texture.address), texture.width, texture.height, texture.format);
                 }
                 g_tex_pending_key = key;
@@ -2214,7 +2215,7 @@ u64 EnsureGuestTexture(const GuestTexture& texture) {
                     static u32 logged = 0;
                     if (logged < 30) {
                         ++logged;
-                        std::printf("[TEXTURA] 0x%llx %ux%u formato 0x%x: o jogo reescreveu o conteudo depois do primeiro envio; reenviada\n",
+                        std::printf("[TEXTURE] 0x%llx %ux%u format 0x%x: game rewrote content after first upload; uploaded again\n",
                                     static_cast<unsigned long long>(texture.address), texture.width, texture.height, texture.format);
                     }
                 }
@@ -2513,7 +2514,7 @@ u32 RemapFragmentInputs(std::vector<u32>& words, const u32* input_cntl, u32 num_
     return changed;
 }
 
-constexpr const char* kPairNotCompiled = "par nao recompilado (sem .txt)";
+constexpr const char* kPairNotCompiled = "pair not recompiled (no .txt)";
 
 // ---- Fase 37: pacote AOT (assets/shaders_aot/aot_pairs.pak + .idx) ----
 // Gerado por tools/nu2_shader_extractor a partir dos .ps4_shaders dos .DAT: ~120 mil variantes de
@@ -2575,7 +2576,7 @@ void AotLoadIndex() {
         if (idx) std::fclose(idx);
         if (g_aot.pak) std::fclose(g_aot.pak);
         g_aot.pak = nullptr;
-        log::Tagged("AOT", "pacote nao encontrado em %s (rode tools/nu2_shader_extractor)", dir.string().c_str());
+        log::Tagged("AOT", "pack not found at %s (run tools/nu2_shader_extractor)", dir.string().c_str());
         return;
     }
     if (HMODULE cabinet = LoadLibraryW(L"cabinet.dll")) {
@@ -2603,8 +2604,8 @@ void AotLoadIndex() {
     }
     std::fclose(idx);
     g_aot.load_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    log::Tagged("AOT", "%zu variantes de par no pacote (%zu blocos), indice lido em %.0f ms%s", g_aot.pairs.size(), g_aot.blobs.size(),
-                g_aot.load_ms, g_aot.decompressor ? "" : " | SEM descompressor (cabinet.dll): pacote ignorado");
+    log::Tagged("AOT", "%zu pair variants in pack (%zu blocks), index read in %.0f ms%s", g_aot.pairs.size(), g_aot.blobs.size(),
+                g_aot.load_ms, g_aot.decompressor ? "" : " | NO decompressor (cabinet.dll): pack ignored");
 }
 
 // Fase 48: durante a carga completa na abertura o pacote fica inteiro na memoria (lido uma vez, em
@@ -2751,7 +2752,7 @@ struct SlowPairLoad {
     ~SlowPairLoad() {
         const double total = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         if (total > 100.0) {
-            std::printf("[PAR LENTO] %s: %.0f ms (achar %.0f | ler e montar %.0f | reflexao %.0f ms)\n", name, total, marks[0], marks[1],
+            std::printf("[SLOW-PAIR] %s: %.0f ms (find %.0f | read and build %.0f | reflection %.0f ms)\n", name, total, marks[0], marks[1],
                         marks[2]);
         }
     }
@@ -2808,12 +2809,12 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
             // plataforma do seletor de mundos em Vorton saia preta. Agora conta como inexistente: usa o
             // pacote AOT, ou vai ao recompilador ao vivo, que regrava o arquivo com os descritores reais.
             char first[512] = {};
-            if (!std::fgets(first, sizeof(first), f) || !std::strstr(first, "real sim")) {
+            if (!std::fgets(first, sizeof(first), f) || !shader_metadata::HasActualDescriptors(first)) {
                 std::fclose(f);
                 f = nullptr;
                 static std::atomic<u32> logged{0};
                 if (logged.fetch_add(1) < 20) {
-                    std::printf("[PAR] %s: arquivo sem os descritores reais - usando o pacote AOT ou o recompilador\n", name);
+                    std::printf("[PAIR] %s: file lacks actual descriptors - using AOT pack or recompiler\n", name);
                 }
             } else {
                 std::rewind(f);
@@ -2841,7 +2842,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
             r->source = 0;
         } else {
             bad = true;
-            info->why = "origem de descritor desconhecida";
+            info->why = "unknown descriptor source";
         }
     };
     auto next_line = [&]() -> bool {
@@ -2864,7 +2865,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
         u32 x = 0, y = 0, z = 0, mask = 0;
         GamePairInfo::Resource r{};
         if (!std::strncmp(line, "pair ", 5)) {
-            real = std::strstr(line, " real sim") != nullptr;
+            real = shader_metadata::HasActualDescriptors(line);
         } else if (std::sscanf(line, "stage %63s hash %*s first_binding %*u first_user_data %u ud_mask %u", a, &y, &mask) == 3) {
             stage = !std::strcmp(a, "ps");
             info->first_ud[stage] = y;
@@ -2877,7 +2878,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
                 r.source = 3;
             } else if (std::strcmp(a, "clip_planes")) {
                 bad = true;
-                info->why = std::string("tipo de buffer nao tratado: ") + a;
+                info->why = std::string("unsupported buffer type: ") + a;
             }
             info->resources.push_back(r);
         } else if (std::sscanf(line, " srt_walker dwords %u hex", &x) == 1) {
@@ -2948,25 +2949,25 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
     for (const auto& attribute : info->attributes) {
         if (attribute.format == ~0u) {
             bad = true;
-            info->why = "atributo sem formato registrado";
+            info->why = "attribute has no registered format";
         }
     }
     if (!real) {
-        info->why = "par compilado sem os descritores reais";
+        info->why = "pair compiled without actual descriptors";
         return;
     }
     if (bad) {
         return;
     }
     if (buffers > 24 || images > 16 || samplers > 16 || info->attributes.size() > 16) {
-        info->why = "recursos demais para o backend";
+        info->why = "too many resources for backend";
         return;
     }
     if (aot.ok) {
         layout.vs_spirv = std::move(aot.vs);
         layout.ps_spirv = std::move(aot.ps);
     } else if (!LoadSpirv(base.wstring() + L".vs.spv", &layout.vs_spirv) || !LoadSpirv(base.wstring() + L".ps.spv", &layout.ps_spirv)) {
-        info->why = "arquivo .spv ausente";
+        info->why = "missing .spv file";
         return;
     }
     slow.Mark(1);
@@ -2979,11 +2980,11 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
         const u32 changed = RemapFragmentInputs(layout.ps_spirv, cntl, num_inputs, &defaults);
         static u32 logged = 0;
         if (g_target_diagnostics) {
-            std::printf("[PS-IN?] par %s: cntl %08x %08x %08x %08x %08x %08x\n", name, cntl[0], cntl[1], cntl[2], cntl[3], cntl[4], cntl[5]);
+            std::printf("[PS-IN?] pair %s: cntl %08x %08x %08x %08x %08x %08x\n", name, cntl[0], cntl[1], cntl[2], cntl[3], cntl[4], cntl[5]);
         }
         if ((changed || defaults) && logged < 40) {
             ++logged;
-            std::printf("[PS-IN] par %s: %u entrada(s) do PS religada(s) pelo SPI_PS_INPUT_CNTL, %u com valor padrao (", name, changed, defaults);
+            std::printf("[PS-IN] pair %s: %u PS input(s) reconnected by SPI_PS_INPUT_CNTL, %u using default value (", name, changed, defaults);
             for (u32 i = 0; i < 8; ++i) {
                 std::printf("%s%u", i ? " " : "", cntl[i] & 0x1F);
             }
@@ -2992,7 +2993,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
     }
     std::map<u32, u32> view_types;
     if (!ReflectImageViewTypes(layout.vs_spirv, &view_types) || !ReflectImageViewTypes(layout.ps_spirv, &view_types)) {
-        info->why = "tipo de textura nao tratado (1D, multisample ou array de cubos)";
+        info->why = "unsupported texture type (1D, multisample or cube array)";
         return;
     }
     for (auto& resource : info->resources) {
@@ -3018,7 +3019,7 @@ void LoadGamePair(u64 vs_hash, u64 ps_hash, u64 signature, const u32* cntl, Game
         registered = true;
     }
     if (!registered && !render::VulkanRenderer::Instance().RegisterGamePair(info->key, layout)) {
-        info->why = "o Vulkan recusou os modulos ou os layouts";
+        info->why = "Vulkan refused modules or layouts";
         return;
     }
     info->usable = true;
@@ -3140,7 +3141,7 @@ bool TakeReadyAot(GamePairInfo& fresh) {
     ready.vformat_count = fresh.vformat_count;
     fresh = std::move(ready);
     if (g_ready_used < 200) { // Fase 61: quais pares usaram o pronto da abertura (diagnostico das cabecas transparentes)
-        std::printf("[AOT-PRONTO] par pair_%016llx_%016llx_%016llx (canon %016llx), entradas do PS %08x\n",
+        std::printf("[AOT-READY] pair pair_%016llx_%016llx_%016llx (canon %016llx), PS inputs %08x\n",
                     static_cast<unsigned long long>(fresh.vs_hash), static_cast<unsigned long long>(fresh.ps_hash),
                     static_cast<unsigned long long>(fresh.signature), static_cast<unsigned long long>(fresh.canon_signature),
                     fresh.ps_input_mask);
@@ -3241,7 +3242,7 @@ void RunLiveCompiler(const std::vector<LiveSnapshot>& batch) {
     const auto start = std::chrono::steady_clock::now();
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr,
                         g_live_root.c_str(), &startup, &process)) {
-        log::Tagged("SHADER-LIVE", "nao iniciou o recompilador (erro %lu): %s", GetLastError(), g_live_tool.string().c_str());
+        log::Tagged("SHADER-LIVE", "could not start recompiler (error %lu): %s", GetLastError(), g_live_tool.string().c_str());
         return;
     }
     WaitForSingleObject(process.hProcess, 180000);
@@ -3252,7 +3253,7 @@ void RunLiveCompiler(const std::vector<LiveSnapshot>& batch) {
     const u64 ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
     ++g_live_runs;
     g_live_ms += ms;
-    log::Tagged("SHADER-LIVE", "%zu par(es) novo(s) enviados ao recompilador: %llu ms (codigo de saida %lu)", batch.size(),
+    log::Tagged("SHADER-LIVE", "%zu new pair(s) sent to recompiler: %llu ms (exit code %lu)", batch.size(),
                 static_cast<unsigned long long>(ms), code);
 }
 
@@ -3334,7 +3335,7 @@ void DrainPairResults() {
         } else if (missing && !d.job.after_tool && !g_live_tool.empty()) {
             target.want_snapshot = true; // o proximo draw do par manda o retrato para a ferramenta
         } else if (missing && d.job.after_tool) {
-            target.why = "o recompilador ao vivo nao conseguiu traduzir o par";
+            target.why = "live recompiler could not translate pair";
         }
     }
 }
@@ -3406,7 +3407,7 @@ GamePairInfo* FindGamePair(u64 vs_address, u64 ps_address, u64 signature) {
                 }
             } else if (g_pair_async.load(std::memory_order_relaxed)) {
                 fresh.pending = true;
-                fresh.why = "ainda carregando em segundo plano";
+                fresh.why = "still loading in background";
                 QueuePairJob(MakePairJob(fresh, &fresh, false));
             } else {
                 LoadGamePair(vs_hash, ps_hash, signature, fresh.cntl.data(), &fresh);
@@ -4025,7 +4026,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
             float clear = 0, offset[5] = {};
             std::memcpy(&clear, &g_ctx_track[0x00B], 4);
             std::memcpy(offset, &g_ctx_track[0x2DF], sizeof(offset)); // PA_SU_POLY_OFFSET_CLAMP, FRONT_SCALE/OFFSET, BACK_SCALE/OFFSET
-            std::printf("[PROF] alvo 0x%llx %ux%u cores %u | zscale %g zoffset %g | PA_CL_CLIP_CNTL %08x | depth_control %08x | "
+            std::printf("[PROF] target 0x%llx %ux%u colors %u | zscale %g zoffset %g | PA_CL_CLIP_CNTL %08x | depth_control %08x | "
                         "DB_RENDER_CONTROL %08x clear %g | SU_SC_MODE %08x poly offset clamp %g front %g/%g back %g/%g | Z_INFO %08x\n",
                         static_cast<unsigned long long>(draw.depth.address), draw.depth.width, draw.depth.height, draw.color_count, vp[4], vp[5],
                         g_ctx_track[0x204], draw.depth_control, g_ctx_track[0x000], clear, g_ctx_track[0x205], offset[0], offset[1], offset[2],
@@ -4060,8 +4061,8 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                                          static_cast<s32>(draw.viewport[2]), static_cast<s32>(draw.viewport[3]));
         if (logged.size() < 200 && logged.insert(key).second) {
             const u32* cb = &g_ctx_track[0x318];
-            std::printf("[ALVO] desenho em 0x%llx imagem %ux%u (registrador: pitch %u, altura %u, formato %u tipo %u swap %u) viewport x %.1f y %.1f "
-                        "l %.1f a %.1f scissor (%d, %d)-(%d, %d) alvos %u (1: 0x%llx, 2: 0x%llx) prof %d\n",
+            std::printf("[TARGET] draw at 0x%llx image %ux%u (register: pitch %u, height %u, format %u type %u swap %u) viewport x %.1f y %.1f "
+                        "w %.1f h %.1f scissor (%d, %d)-(%d, %d) targets %u (1: 0x%llx, 2: 0x%llx) depth %d\n",
                         static_cast<unsigned long long>(draw.colors[0].address), draw.colors[0].width, draw.colors[0].height,
                         ((cb[1] & 0x7FF) + 1) * 8, ((cb[2] & 0x3FFFFF) + 1) * 64 / (((cb[1] & 0x7FF) + 1) * 8), (cb[4] >> 2) & 0x1F, (cb[4] >> 8) & 7, (cb[4] >> 11) & 3,
                         draw.viewport[0], draw.viewport[1], draw.viewport[2], draw.viewport[3], draw.scissor[0], draw.scissor[1],
@@ -4124,8 +4125,8 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
         static std::set<std::tuple<u64, u32, u32, u32>> logged;
         const u64 ps_hash = ContentHashOfShader(1, ps_address);
         if (logged.size() < 120 && logged.insert(std::make_tuple(ps_hash, g_ctx_track[0x200], g_ctx_track[0x10C], g_ctx_track[0x10B])).second) {
-            std::printf("[ESTENCIL] VS %016llx PS %016llx depth_control %08x STENCIL_CONTROL %08x REFMASK %08x REFMASK_BF %08x Z_INFO %08x "
-                        "STENCIL_INFO %08x alvo cor 0x%llx prof 0x%llx\n",
+            std::printf("[STENCIL] VS %016llx PS %016llx depth_control %08x STENCIL_CONTROL %08x REFMASK %08x REFMASK_BF %08x Z_INFO %08x "
+                        "STENCIL_INFO %08x color target 0x%llx depth 0x%llx\n",
                         static_cast<unsigned long long>(ContentHashOfShader(0, vs_address)), static_cast<unsigned long long>(ps_hash),
                         g_ctx_track[0x200], g_ctx_track[0x10B], g_ctx_track[0x10C], g_ctx_track[0x10D], g_ctx_track[0x010], g_ctx_track[0x011],
                         static_cast<unsigned long long>(draw.color_count ? draw.colors[0].address : 0),
@@ -4186,8 +4187,8 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                 same = false;
                 static std::atomic<u32> logged{0};
                 if (logged.fetch_add(1) < 40) {
-                    std::printf("[AOT] par %016llx %016llx %016llx: imagem binding %u (estagio %u, origem %u reg %u dword %u) com T# tipo %x, "
-                                "o pacote declarou %u\n",
+                    std::printf("[AOT] pair %016llx %016llx %016llx: image binding %u (stage %u, source %u reg %u dword %u) with T# type %x, "
+                                "pack declared %u\n",
                                 static_cast<unsigned long long>(info->vs_hash), static_cast<unsigned long long>(info->ps_hash),
                                 static_cast<unsigned long long>(info->signature), r.binding, r.stage, r.source, r.reg, r.dword, type,
                                 r.view_type);
@@ -4205,7 +4206,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
             }
             info->usable = false;
             info->aot = false;
-            info->why = "pacote AOT: tipo de textura previsto errado (recompilando ao vivo)";
+            info->why = "AOT pack: wrong predicted texture type (recompiling live)";
             if (!LiveCompileNow(vs_address, ps_address, signature, info)) { // Fase 56: na hora, se couber no frame
                 if (!g_live_tool.empty()) {
                     QueueLiveSnapshot(vs_address, ps_address, signature, info);
@@ -4337,7 +4338,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
             ++dbg_attributes;
             u32 first[4] = {};
             SafeCopy(first, v.address + attribute.offset, sizeof(first));
-            std::printf("[DBG-ATR] loc %u instancia %u V# base 0x%llx stride %u elementos %u formato %05x offset %u | vertices %u | %08x %08x %08x %08x\n",
+            std::printf("[DBG-ATR] loc %u instance %u V# base 0x%llx stride %u elements %u format %05x offset %u | vertices %u | %08x %08x %08x %08x\n",
                         attribute.location, attribute.instance, static_cast<unsigned long long>(v.address), v.stride, v.count, v.format & 0x7FFFF,
                         attribute.offset, vertex_count, first[0], first[1], first[2], first[3]);
         }
@@ -4425,7 +4426,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
             ++stats.instanced_expanded;
             static std::set<std::pair<u64, u32>> logged; // Fase 44: o que sao esses draws
             if (logged.size() < 24 && logged.insert({info->ps_hash, step}).second) {
-                std::printf("[INSTANCIAS] VS %016llx PS %016llx: %u instancias, passo %u, %u indices/vertices, alvo 0x%llx\n",
+                std::printf("[INSTANCES] VS %016llx PS %016llx: %u instances, step %u, %u indices/vertices, target 0x%llx\n",
                             static_cast<unsigned long long>(info->vs_hash), static_cast<unsigned long long>(info->ps_hash), instance_count, step,
                             count, static_cast<unsigned long long>(draw.color_count ? draw.colors[0].address : 0));
             }
@@ -4506,7 +4507,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                             seen.clear();
                             if (++frames % 300 == 0) {
                                 static u64 last_ring = 0;
-                                std::printf("[COPIAS] por frame: %.0f buffers de constantes, %.0f KB copiados, %.0f KB unicos | geometria pelo anel %.0f KB\n",
+                                std::printf("[COPIES] per frame: %.0f constant buffers, %.0f KB copied, %.0f KB unique | geometry via ring %.0f KB\n",
                                             count / 300.0, total / 300.0 / 1024.0, unique / 300.0 / 1024.0,
                                             (g_vk_stats.ring_bytes - last_ring) / 300.0 / 1024.0);
                                 last_ring = g_vk_stats.ring_bytes;
@@ -4532,8 +4533,8 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                     if (buffer.data) {
                         std::memcpy(f, buffer.data, std::min<size_t>(sizeof(f), buffer.bytes));
                     }
-                    std::printf("[DBG-BUF] estagio %u binding %u origem %u reg %u dword %u | V# %08x %08x %08x %08x -> end 0x%llx stride %u bytes %llu "
-                                "lido %d | %g %g %g %g %g %g %g %g\n",
+                    std::printf("[DBG-BUF] stage %u binding %u source %u reg %u dword %u | V# %08x %08x %08x %08x -> address 0x%llx stride %u bytes %llu "
+                                "read %d | %g %g %g %g %g %g %g %g\n",
                                 r.stage, r.binding, r.source, r.reg, r.dword, words[0], words[1], words[2], words[3],
                                 static_cast<unsigned long long>(address), stride, static_cast<unsigned long long>(bytes), buffer.data != nullptr,
                                 f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
@@ -4569,7 +4570,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                     static std::set<std::tuple<u64, u32, u64>> logged;
                     const u64 into = draw.color_count ? draw.colors[0].address : draw.depth.address;
                     if (logged.size() < 4000 && logged.insert(std::make_tuple(address, words[2], into)).second) {
-                        std::printf("[ALVO] amostra 0x%llx T# %ux%u pitch %u tiling %u (alvo conhecido: %d) sampler-binding ? | desenhando em "
+                        std::printf("[TARGET] sample 0x%llx T# %ux%u pitch %u tiling %u (known target: %d) sampler-binding ? | drawing to "
                                     "0x%llx %ux%u\n",
                                     static_cast<unsigned long long>(address), (words[2] & 0x3FFF) + 1, ((words[2] >> 14) & 0x3FFF) + 1,
                                     ((words[4] >> 13) & 0x3FFF) + 1, (words[3] >> 20) & 0x1F, is_target,
@@ -4581,7 +4582,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                     static std::set<std::tuple<u64, u64, u64>> logged;
                     const u64 into = draw.color_count ? draw.colors[0].address : draw.depth.address;
                     if (logged.size() < 4000 && logged.insert(std::make_tuple(info->key, address, into)).second) {
-                        std::printf("[PASSE] VS %016llx PS %016llx amostra 0x%llx (formato T# 0x%x tipo %u swizzle %03x, binding %u) -> desenha em 0x%llx\n",
+                        std::printf("[PASS] VS %016llx PS %016llx sample 0x%llx (T# format 0x%x type %u swizzle %03x, binding %u) -> draw to 0x%llx\n",
                                     static_cast<unsigned long long>(ContentHashOfShader(0, vs_address)),
                                     static_cast<unsigned long long>(ContentHashOfShader(1, ps_address)),
                                     static_cast<unsigned long long>(address), (words[1] >> 20) & 0x3F, (words[1] >> 26) & 0xF, words[3] & 0xFFF, r.binding,
@@ -4610,12 +4611,12 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
                 static std::set<u64> logged; // uma linha por descritor distinto que o backend nao sabe enviar
                 const u64 id = (static_cast<u64>(words[1] >> 20) << 32) ^ (words[3] >> 20) ^ (static_cast<u64>(words[2]) << 20);
                 if (have && type && logged.size() < 40 && logged.insert(id).second) {
-                    std::printf("[VULKAN] textura nao tratada: tipo 0x%x formato 0x%x tiling %u %ux%u niveis %u pitch %u endereco 0x%llx | "
-                                "o shader declara view %u; descritor %s\n",
+                    std::printf("[VULKAN] unsupported texture: type 0x%x format 0x%x tiling %u %ux%u levels %u pitch %u address 0x%llx | "
+                                "shader declares view %u; descriptor %s\n",
                                 type, (words[1] >> 20) & 0x3F, (words[3] >> 20) & 0x1F, (words[2] & 0x3FFF) + 1,
                                 ((words[2] >> 14) & 0x3FFF) + 1, ((words[3] >> 16) & 0xF) + 1, ((words[4] >> 13) & 0x3FFF) + 1,
                                 static_cast<unsigned long long>(address), r.view_type,
-                                readable ? "aceito (tipo de view diferente ou envio falhou)" : "recusado pelo leitor de T#");
+                                readable ? "accepted (different view type or upload failed)" : "refused by T# reader");
                 }
             }
             draw.images[draw.image_count++] = image;
@@ -4630,13 +4631,13 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
             if (g_target_diagnostics) { // --target-log: uma linha por S# distinto
                 static std::set<std::tuple<u32, u32, u32, u32, bool>> logged;
                 if (logged.size() < 60 && logged.insert(std::make_tuple(words[0], words[1], words[2], words[3], have)).second) {
-                    std::printf("[SAMPLER] S# %08x %08x %08x %08x lido=%d origem=%u reg=%u dword=%u estagio=%u -> clamp x %u y %u\n", words[0],
+                    std::printf("[SAMPLER] S# %08x %08x %08x %08x read=%d source=%u reg=%u dword=%u stage=%u -> clamp x %u y %u\n", words[0],
                                 words[1], words[2], words[3], have, r.source, r.reg, r.dword, r.stage, cx, cy);
                 }
             }
             if (dbg_lut_enabled) {
                 char text[160];
-                std::snprintf(text, sizeof(text), " | S# binding %u estagio %u origem %u reg %u dword %u lido %d: %08x %08x %08x %08x", r.binding,
+                std::snprintf(text, sizeof(text), " | S# binding %u stage %u source %u reg %u dword %u read %d: %08x %08x %08x %08x", r.binding,
                               r.stage, r.source, r.reg, r.dword, have, words[0], words[1], words[2], words[3]);
                 dbg_samplers += text;
             }
@@ -4654,7 +4655,7 @@ void SubmitDrawToVulkan(u32 opcode, const u32* body, u32 body_dwords) {
     if (dbg_lut_enabled && dbg_lut) {
         static std::set<u64> logged;
         if (logged.size() < 12 && logged.insert(info->key).second) {
-            std::printf("[DBG-LUT] par pair_%016llx_%016llx_%016llx amostra a tabela 256x128%s\n", static_cast<unsigned long long>(info->vs_hash),
+            std::printf("[DBG-LUT] pair pair_%016llx_%016llx_%016llx samples 256x128 table%s\n", static_cast<unsigned long long>(info->vs_hash),
                         static_cast<unsigned long long>(info->ps_hash), static_cast<unsigned long long>(info->signature), dbg_samplers.c_str());
         }
     }
@@ -4945,7 +4946,7 @@ void ProcessCommandBuffer(const u32* cmd, u64 size_bytes, u64 release_event) {
                         g_dma_fill_bytes += bytes;
                         ++g_label_writes;
                     } else {
-                        Refuse("DMA_DATA (imediato)", dst, bytes, body[0]);
+                        Refuse("DMA_DATA (immediate)", dst, bytes, body[0]);
                     }
                 } else if ((src_sel == 0 || src_sel == 3) && !g_dma_parallel.load(std::memory_order_relaxed)) { // copia memoria -> memoria
                     const u64 src = body[1] | (static_cast<u64>(body[2]) << 32);
@@ -4954,7 +4955,7 @@ void ProcessCommandBuffer(const u32* cmd, u64 size_bytes, u64 release_event) {
                         g_dma_copy_bytes += bytes;
                         ++g_label_writes;
                     } else {
-                        Refuse("DMA_DATA (copia)", dst, bytes, body[0]);
+                        Refuse("DMA_DATA (copy)", dst, bytes, body[0]);
                     }
                 } else if (src_sel == 2) { // caminho antigo, com consulta de memoria e lote em paralelo
                     if (Writable(dst, bytes)) {
@@ -4976,7 +4977,7 @@ void ProcessCommandBuffer(const u32* cmd, u64 size_bytes, u64 release_event) {
                         g_dma_fill_bytes += bytes;
                         ++g_label_writes;
                     } else {
-                        Refuse("DMA_DATA (imediato)", dst, bytes, body[0]);
+                        Refuse("DMA_DATA (immediate)", dst, bytes, body[0]);
                     }
                 } else if (src_sel == 0 || src_sel == 3) { // copia memoria -> memoria
                     const u64 src = body[1] | (static_cast<u64>(body[2]) << 32);
@@ -5001,7 +5002,7 @@ void ProcessCommandBuffer(const u32* cmd, u64 size_bytes, u64 release_event) {
                         g_dma_copy_bytes += bytes;
                         ++g_label_writes;
                     } else {
-                        Refuse("DMA_DATA (copia)", dst, bytes, body[0]);
+                        Refuse("DMA_DATA (copy)", dst, bytes, body[0]);
                     }
                 }
             }
@@ -5200,7 +5201,7 @@ bool SameShaderStillThere(u64 address, const ShaderSeen& k) {
 }
 
 void ExtractShader(ShaderStage stage, const u32* regs) {
-    static perf::Counter perf_counter("extrator de shaders");
+    static perf::Counter perf_counter("shader extractor");
     const perf::Scope perf_scope(perf_counter);
     ++g_shader_calls[stage];
     if (!regs) {
@@ -5255,7 +5256,7 @@ void ExtractShader(ShaderStage stage, const u32* regs) {
         ++g_shader_not_found;
         if (g_shader_not_found <= 8) {
             const u32* code = reinterpret_cast<const u32*>(address);
-            log::Tagged("SHADER EXTRACT", "%s em 0x%" PRIx64 ": 'OrbShdr' nao encontrado (codigo comeca com %08x %08x)", kStageName[stage],
+            log::Tagged("SHADER EXTRACT", "%s em 0x%" PRIx64 ": 'OrbShdr' not found (code starts with %08x %08x)", kStageName[stage],
                         address, code[0], code[1]);
         }
         return;
@@ -5309,7 +5310,7 @@ void ExtractShader(ShaderStage stage, const u32* regs) {
     FileWrite job;
     job.path = path;
     job.data.assign(reinterpret_cast<const char*>(address), bytes);
-    job.log_line = Format("Dumped %s: %016llx (Tamanho: %llu bytes; codigo %u bytes)", kStageName[stage],
+    job.log_line = Format("Dumped %s: %016llx (Size: %llu bytes; code %u bytes)", kStageName[stage],
                           static_cast<unsigned long long>(hash), static_cast<unsigned long long>(bytes), code_bytes);
     WriteFileAsync(std::move(job));
     on_disk.insert(name);
@@ -5448,7 +5449,7 @@ void QueueLiveSnapshot(u64 vs_address, u64 ps_address, u64 signature, GamePairIn
     live.text = SnapshotText(snapshot->second);
     live.job = MakePairJob(*info, info, true);
     info->pending = true;
-    info->why = "sendo recompilado em segundo plano";
+    info->why = "being recompiled in background";
     ++g_pairs_live_requested;
     QueuePairJob({}); // garante a thread; o trabalho vazio e descartado abaixo
     std::lock_guard lock(g_pair_mutex);
@@ -5500,11 +5501,11 @@ bool LiveCompileNow(u64 vs_address, u64 ps_address, u64 signature, GamePairInfo*
         ++g_live_sync_pairs;
         static u32 logged = 0;
         if (++logged <= 40) {
-            log::Tagged("SHADER-LIVE", "par %s traduzido na hora, no mesmo frame: %.0f ms", name, ms);
+            log::Tagged("SHADER-LIVE", "pair %s translated on demand, in same frame: %.0f ms", name, ms);
         }
         return true;
     }
-    info->why = "o recompilador ao vivo nao conseguiu traduzir o par";
+    info->why = "live recompiler could not translate pair";
     return false;
 }
 
@@ -5532,7 +5533,7 @@ void WriteUiShaderPairs() {
     }
     const std::filesystem::path path = std::filesystem::path(render::GameSpirvDirectory()) / "ui_shader_pairs.tsv";
     if (std::FILE* f = _wfopen(path.c_str(), L"w")) {
-        std::fprintf(f, "vs_hash\tps_hash\tvariante\tdraws\n");
+        std::fprintf(f, "vs_hash\tps_hash\tvariant\tdraws\n");
         for (const auto& [hashes, draws] : by_hash) {
             std::fprintf(f, "%016llx\t%016llx\t%016llx\t%llu\n", static_cast<unsigned long long>(std::get<0>(hashes)),
                          static_cast<unsigned long long>(std::get<1>(hashes)), static_cast<unsigned long long>(std::get<2>(hashes)),
@@ -5583,8 +5584,8 @@ void WriteUiShaderPairs() {
         }
         std::fclose(f);
     }
-    std::printf("  variantes de par (VS, PS, layout de vertice) vistas nesta execucao: %zu | retratos em %s: %zu (%zu novos nesta "
-                "execucao, %zu ja existiam)\n",
+    std::printf("  pair variants (VS, PS, vertex layout) seen in this run: %zu | snapshots in %s: %zu (%zu new this "
+                "run, %zu already existed)\n",
                 by_hash.size(), snapshots.string().c_str(), blocks.size(), fresh, kept);
 }
 
@@ -5672,7 +5673,7 @@ void CaptureFetchShader() {
         job.path = g_shader_dir / name;
         job.data.assign(reinterpret_cast<const char*>(code), bytes);
         job.skip_if_exists = true;
-        job.log_line = Format("Dumped FETCH: %016llx (Tamanho: %llu bytes)", static_cast<unsigned long long>(hash),
+        job.log_line = Format("Dumped FETCH: %016llx (Size: %llu bytes)", static_cast<unsigned long long>(hash),
                               static_cast<unsigned long long>(bytes));
         WriteFileAsync(std::move(job));
         ++g_fetch_written;
@@ -5841,11 +5842,11 @@ void NoteFrameHitch(std::chrono::steady_clock::time_point submit_start) {
     }
     if (g_hitch_log.load(std::memory_order_relaxed) && (submit_ms > 12.0 || interval_ms > 50.0)) {
         const auto hitch_epoch = HitchEpoch(); // Fase 59: o mesmo relogio do [QUADRO-LENTO]
-        std::printf("[ENGASGO] t=%.1fs frame %" PRIu64 ": intervalo %.1f ms, Submit %.1f ms | pipelines %u/%.1f ms, texturas %u/%.1f ms "
-                    "(destile %u/%.1f ms), pares %u/%.1f ms, extrator %u/%.1f ms, DMA %u/%.1f ms | etapas do draw: estado %.1f, par %.1f, recursos %.1f, fila %.1f ms"
-                    " | geometria nova %u/%.1f ms, alvos novos %u/%.1f ms, pares do pacote %u/%.1f ms"
-                    " | par: busca %.1f, retrato %.1f; recursos: geometria %.1f, constantes %.1f, texturas %.1f ms"
-                    " | na hora: %u texturas novas %.1f ms, %u lineares conferidas %.1f ms\n",
+        std::printf("[HITCH] t=%.1fs frame %" PRIu64 ": interval %.1f ms, Submit %.1f ms | pipelines %u/%.1f ms, textures %u/%.1f ms "
+                    "(detile %u/%.1f ms), pairs %u/%.1f ms, extractor %u/%.1f ms, DMA %u/%.1f ms | draw stages: state %.1f, pair %.1f, resources %.1f, queue %.1f ms"
+                    " | new geometry %u/%.1f ms, new targets %u/%.1f ms, pack pairs %u/%.1f ms"
+                    " | pair: lookup %.1f, snapshot %.1f; resources: geometry %.1f, constants %.1f, textures %.1f ms"
+                    " | on demand: %u new textures %.1f ms, %u linear checked %.1f ms\n",
                     std::chrono::duration<double>(now - hitch_epoch).count(), g_hitch.frames, interval_ms, submit_ms, kind_count[0],
                     kind_ms[0], kind_count[1], kind_ms[1], kind_count[3], kind_ms[3], kind_count[2], kind_ms[2], kind_count[4], kind_ms[4], kind_count[5], kind_ms[5],
                     lap_ms[0], lap_ms[1], lap_ms[2], lap_ms[3], kind_count[6], kind_ms[6], kind_count[7], kind_ms[7], kind_count[8], kind_ms[8],
@@ -5880,7 +5881,7 @@ void StallWatchThread() {
             reported_for = last;
             ++reports;
             char reason[200];
-            std::snprintf(reason, sizeof(reason), "t=%.1fs (relogio do [GAME STATE]), depois do quadro %llu: %lld ms sem quadro novo; onde cada thread esta:",
+            std::snprintf(reason, sizeof(reason), "t=%.1fs ([GAME STATE] clock), after frame %llu: %lld ms without a new frame; each thread location:",
                           now / 1000.0, static_cast<unsigned long long>(g_flip_submits.load()), static_cast<long long>(now - last));
             log::FlushGameText();
             runtime::DumpStallStacks(reason);
@@ -5899,7 +5900,7 @@ HLE_OVERRIDE(sceGnmSubmitCommandBuffers);
 HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dcb_addrs, const u32* dcb_sizes,
          const u32* const* ccb_addrs, const u32* ccb_sizes, u32 video_out_handle, u32 buffer_index, u32 flip_mode,
          s64 flip_arg) {
-    HLE_QUIET("%u buffers, flip handle=%u buffer=%u modo=%u arg=%" PRId64, count, video_out_handle, buffer_index,
+    HLE_QUIET("%u buffers, flip handle=%u buffer=%u mode=%u arg=%" PRId64, count, video_out_handle, buffer_index,
               flip_mode, flip_arg);
     const auto submit_start = std::chrono::steady_clock::now();
     g_last_flip_submit_ms = NowMs(); // Fase 59
@@ -5933,7 +5934,7 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
                     const u32 row = std::min(first & ~15u, (e.bytes & ~15u) - 16);
                     const float* a = reinterpret_cast<const float*>(e.data.data() + row);
                     const float* b = reinterpret_cast<const float*>(now.data() + row);
-                    std::printf("[DBG-CB] %s: par %016llx %016llx est %u b%u src %u end 0x%llx %u bytes, 1o byte diferente %u | copia %g %g %g %g -> agora %g %g %g %g\n",
+                    std::printf("[DBG-CB] %s: pair %016llx %016llx stage %u b%u src %u address 0x%llx %u bytes, first different byte %u | copy %g %g %g %g -> now %g %g %g %g\n",
                                 when, static_cast<unsigned long long>(e.vs), static_cast<unsigned long long>(e.ps), e.stage, e.binding, e.source,
                                 static_cast<unsigned long long>(e.address), e.bytes, first, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
                 }
@@ -5943,18 +5944,18 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
         for (const auto& [key, g] : groups) {
             group_changed += g.first != 0;
         }
-        std::printf("[DBG-CB] %s: %zu buffers copiados, %u mudaram depois da copia (%u de %zu grupos)\n", when, g_dbg_cb.size(), changed,
+        std::printf("[DBG-CB] %s: %zu buffers copied, %u changed after copy (%u of %zu groups)\n", when, g_dbg_cb.size(), changed,
                     group_changed, groups.size());
     };
     if (dbg_cb && !g_dbg_cb.empty()) {
-        dbg_cb_check("um frame depois");
+        dbg_cb_check("one frame later");
         g_dbg_cb.clear();
     }
     g_dbg_cb_record = dbg_cb && g_texture_frame % 600 == 300;
     const int result = Submit(count, dcb_addrs, dcb_sizes, ccb_addrs, ccb_sizes);
     if (g_dbg_cb_record) {
         g_dbg_cb_record = false;
-        dbg_cb_check("fim do Submit");
+        dbg_cb_check("end of Submit");
     }
     if (result != err::OK) {
         return result;
@@ -5964,7 +5965,7 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
     // limpa a tela e apresenta. O swapchain e FIFO, entao esta chamada espera o VSync real do
     // monitor, e o flip do jogo so e enfileirado (SubmitFlip, abaixo) depois da apresentacao.
     if (auto& renderer = render::VulkanRenderer::Instance(); renderer.Active()) {
-        static perf::Counter perf_counter("Vulkan DrawFrame (limpa + apresenta)");
+        static perf::Counter perf_counter("Vulkan DrawFrame (clear + present)");
         const perf::Scope perf_scope(perf_counter);
         // Fase 25: pixels dos alvos minusculos copiados no frame anterior voltam para a memoria do
         // jogo, no lugar em que o tiling do PS4 os guardaria (microtile 8x8; so os primeiros pixels).
@@ -6004,11 +6005,11 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
                 if (bytes == 4) {
                     u16 halves[2];
                     std::memcpy(halves, pixels, 4);
-                    std::printf("[READBACK] alvo 0x%llx %ux%u, %u bytes por pixel: primeiro pixel %04x %04x\n", static_cast<unsigned long long>(address),
+                    std::printf("[READBACK] target 0x%llx %ux%u, %u bytes per pixel: first pixel %04x %04x\n", static_cast<unsigned long long>(address),
                                 width, height, bytes, halves[0], halves[1]);
                 } else {
                     std::memcpy(f, pixels, std::min<u32>(bytes, 8));
-                    std::printf("[READBACK] alvo 0x%llx %ux%u, %u bytes por pixel: %g %g\n", static_cast<unsigned long long>(address), width, height,
+                    std::printf("[READBACK] target 0x%llx %ux%u, %u bytes per pixel: %g %g\n", static_cast<unsigned long long>(address), width, height,
                                 bytes, f[0], f[1]);
                 }
             }
@@ -6031,8 +6032,8 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
             static u32 logged = 0;
             if (logged++ < 400) {
                 const auto t0 = HitchEpoch(); // Fase 59: mesmo relogio do [ENGASGO]
-                std::printf("[QUADRO-LENTO] t=%.1fs fim do frame %.1f ms: leitura de volta %.1f, frame anterior %.1f, texturas pendentes %.1f, "
-                            "envio de texturas %.1f, DrawFrame %.1f (pipelines %.1f, lock %.1f, fence %.1f, acquire %.1f, gravacao %.1f, "
+                std::printf("[SLOW-FRAME] t=%.1fs end of frame %.1f ms: readback %.1f, previous frame %.1f, pending textures %.1f, "
+                            "texture upload %.1f, DrawFrame %.1f (pipelines %.1f, lock %.1f, fence %.1f, acquire %.1f, recording %.1f, "
                             "submit %.1f, present %.1f)\n",
                             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), total, end_ms[0], end_ms[1], end_ms[2],
                             end_ms[3], end_ms[4], df[0], df[1], df[2], df[3], df[4], df[5], df[6]);
@@ -6055,9 +6056,9 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
             renderer.PipelineFailures(&failed, &retried);
             u64 vram_used = 0, vram_budget = 0; // Fase 59
             renderer.VideoMemory(&vram_used, &vram_budget);
-            std::printf("[STREAM] t=%.0fs: texturas novas %" PRIu64 " na hora + %" PRIu64 " pela thread | draws esperando textura %" PRIu64
-                        " | pipelines novos %" PRIu64 " | frames com pico %" PRIu64 " | memoria %llu MB (em uso na RAM %llu MB) | video %llu de %llu MB, "
-                        "texturas %u (%llu MB, %llu descartadas) | pipelines que falharam %" PRIu64 " (%" PRIu64 " novas tentativas)\n",
+            std::printf("[STREAM] t=%.0fs: new textures %" PRIu64 " on demand + %" PRIu64 " from thread | draws waiting for texture %" PRIu64
+                        " | new pipelines %" PRIu64 " | frames with peak %" PRIu64 " | memory %llu MB (RAM in use %llu MB) | video %llu of %llu MB, "
+                        "textures %u (%llu MB, %llu discarded) | failed pipelines %" PRIu64 " (%" PRIu64 " retries)\n",
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), g_tex_sync_count - last_sync,
                         g_tex_sync_deferred - last_async, g_vk_stats.texture_pending - last_pending, pipes - last_pipes,
                         g_tex_spike_frames - last_spikes, static_cast<unsigned long long>(mem.PrivateUsage >> 20),
@@ -6077,7 +6078,7 @@ HLE_IMPL(int, sceGnmSubmitAndFlipCommandBuffers, u32 count, const u32* const* dc
         EndFrame();
         if (++g_window_frames >= kWindowFrames) {
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_epoch).count();
-            log::Tagged("GAME STATE", "t=%.0fs frame %" PRIu64 ": %.1f draws/frame, %.0f pacotes PM4/frame", seconds,
+            log::Tagged("GAME STATE", "t=%.0fs frame %" PRIu64 ": %.1f draws/frame, %.0f PM4 packets/frame", seconds,
                         g_submits, static_cast<double>(g_window_draws) / g_window_frames,
                         static_cast<double>(g_window_packets) / g_window_frames);
             // Desempenho da janela: quadros/s, tempo por funcao medida e HLE mais chamados.
@@ -6179,7 +6180,7 @@ int MapQueue(u32 pipe_id, u32 queue_id, const u32* ring, u32 ring_dwords, u32* r
 
 HLE_IMPL(int, sceGnmMapComputeQueue, u32 pipe_id, u32 queue_id, const u32* ring, u32 ring_dwords, u32* read_ptr) {
     const int result = MapQueue(pipe_id, queue_id, ring, ring_dwords, read_ptr);
-    HLE_TRACE("pipe=%u fila=%u anel=%p (%u dwords) -> vqid %d", pipe_id, queue_id, static_cast<const void*>(ring),
+    HLE_TRACE("pipe=%u queue=%u ring=%p (%u dwords) -> vqid %d", pipe_id, queue_id, static_cast<const void*>(ring),
               ring_dwords, result);
     return result;
 }
@@ -6188,7 +6189,7 @@ HLE_OVERRIDE(sceGnmMapComputeQueue);
 HLE_IMPL(int, sceGnmMapComputeQueueWithPriority, u32 pipe_id, u32 queue_id, const u32* ring, u32 ring_dwords,
          u32* read_ptr, u32 priority) {
     const int result = MapQueue(pipe_id, queue_id, ring, ring_dwords, read_ptr);
-    HLE_TRACE("pipe=%u fila=%u anel=%p (%u dwords) prio=%u -> vqid %d", pipe_id, queue_id,
+    HLE_TRACE("pipe=%u queue=%u ring=%p (%u dwords) prio=%u -> vqid %d", pipe_id, queue_id,
               static_cast<const void*>(ring), ring_dwords, priority, result);
     return result;
 }
@@ -6204,7 +6205,7 @@ HLE_OVERRIDE(sceGnmUnmapComputeQueue);
 // "Campainha": o jogo escreveu comandos no anel ate `next_offset` (em dwords). Executa o trecho
 // novo na hora e avanca o ponteiro de leitura que o jogo consulta.
 HLE_IMPL(void, sceGnmDingDong, u32 vqid, u32 next_offset) {
-    HLE_QUIET("vqid %u ate %u", vqid, next_offset);
+    HLE_QUIET("vqid %u through %u", vqid, next_offset);
     std::lock_guard lock(g_mutex);
     const auto it = g_queues.find(vqid);
     if (it == g_queues.end()) {
@@ -6314,68 +6315,68 @@ const char* OpcodeName(u32 opcode) {
 // Chamado no resumo final: o que o jogo mandou para a "GPU".
 void PrintStats() {
     FlushFileWrites(); // Fase 45: o que ainda estava na fila do gravador
-    std::printf("  Fase 45 (extrator): %" PRIu64 " no caminho frio (%" PRIu64 " pela busca lenta, %" PRIu64 " repetidos) | cabecalho %.0f ms, busca lenta %.0f ms, hash %.0f ms, resto %.0f ms | %" PRIu64 " gravacoes em segundo plano\n",
+    std::printf("  Phase 45 (extractor): %" PRIu64 " on cold path (%" PRIu64 " via slow lookup, %" PRIu64 " repeats) | header %.0f ms, slow lookup %.0f ms, hash %.0f ms, rest %.0f ms | %" PRIu64 " background recordings\n",
                 g_extract_cold, g_extract_slow, g_extract_dup, g_extract_ms[0], g_extract_ms[1], g_extract_ms[2], g_extract_ms[3],
                 g_file_writes.load());
     std::unique_lock lock(g_mutex, std::try_to_lock);
-    std::printf("GnmDriver: %" PRIu64 " submits, %" PRIu64 " pacotes PM4, %" PRIu64 " escritas de label/fence, %" PRIu64
-                " interrupcoes, %" PRIu64 " escritas recusadas (endereco invalido), %" PRIu64 " buffers malformados, %" PRIu64
-                " DMA_DATA sem destino em memoria (prefetch)\n",
+    std::printf("GnmDriver: %" PRIu64 " submits, %" PRIu64 " PM4 packets, %" PRIu64 " label/fence writes, %" PRIu64
+                " interrupts, %" PRIu64 " refused writes (invalid address), %" PRIu64 " malformed buffers, %" PRIu64
+                " DMA_DATA without memory destination (prefetch)\n",
                 g_submits, g_packets, g_label_writes, g_interrupts, g_bad_writes, g_malformed, g_dma_non_memory);
     {
         std::unique_lock shader_lock(g_shader_mutex, std::try_to_lock);
         std::printf("Shaders: ");
         for (u32 stage = 0; stage < kStageCount; ++stage) {
             if (g_shader_calls[stage]) {
-                std::printf("%s %zu distintos (%" PRIu64 " chamadas)  ", kStageName[stage], g_shader_hashes[stage].size(),
+                std::printf("%s %zu distinct (%" PRIu64 " calls)  ", kStageName[stage], g_shader_hashes[stage].size(),
                             g_shader_calls[stage].load());
             }
         }
-        std::printf("| fetch shaders: %zu distintos, %zu pares VS-fetch, %" PRIu64 " gravados agora, %" PRIu64
-                    " ponteiros invalidos, %" PRIu64 " VS sem fetch shader ",
+        std::printf(" | fetch shaders: %zu distinct, %zu VS-fetch pairs, %" PRIu64 " written now, %" PRIu64
+                    " invalid pointers, %" PRIu64 " VS without fetch shader ",
                     g_fetch_hashes.size(), g_fetch_pairs.size(), g_fetch_written, g_fetch_bad, g_vs_without_fetch);
-        std::printf("| %" PRIu64 " gravados agora (%" PRIu64 " bytes), %" PRIu64 " ja em disco, %" PRIu64 " sem OrbShdr -> %s\n",
+        std::printf("| %" PRIu64 " written now (%" PRIu64 " bytes), %" PRIu64 " already on disk, %" PRIu64 " without OrbShdr -> %s\n",
                     g_shader_written, g_shader_bytes, g_shader_on_disk, g_shader_not_found, g_shader_dir.string().c_str());
     }
     {
         const auto& renderer = render::VulkanRenderer::Instance();
-        std::printf("Vulkan: %s | %" PRIu64 " frames apresentados, %" PRIu64 " pulados\n", renderer.Describe().c_str(),
+        std::printf("Vulkan: %s | %" PRIu64 " frames presented, %" PRIu64 " skipped\n", renderer.Describe().c_str(),
                     renderer.FramesPresented(), renderer.FramesSkipped());
         const VulkanDrawStats& v = g_vk_stats;
         u32 usable = 0;
         for (const auto& [hashes, info] : g_game_pair_by_hash) {
             usable += info.usable;
         }
-        std::printf("Vulkan draws: %" PRIu64 " draws desenhados (todos com os modulos SPIR-V do jogo), %.1f MiB de vertices / indices / "
-                    "constantes copiados | pares: %u usaveis de %zu vistos, %u pipelines\n",
+        std::printf("Vulkan draws: %" PRIu64 " draws rendered (all with the game's SPIR-V modules), %.1f MiB of vertices / indices / "
+                    "constants copied | pairs: %u usable of %zu seen, %u pipelines\n",
                     renderer.DrawsRendered(), renderer.BytesUploaded() / 1048576.0, usable, g_game_pair_by_hash.size(),
                     renderer.GamePipelines());
-        std::printf("  alvos de render: %u VkImage (cor e profundidade), %u passes no ultimo frame, ultimo frame %s | limpezas de "
-                    "profundidade %" PRIu64 ", draws so de profundidade %" PRIu64 ", texturas que eram alvos de render %" PRIu64 "\n",
+        std::printf("  render targets: %u VkImage (color and depth), %u passes in last frame, last frame %s | clears of "
+                    "depth %" PRIu64 ", depth-only draws %" PRIu64 ", textures previously used as render targets %" PRIu64 "\n",
                     renderer.RenderTargets(), renderer.LastFramePasses(),
-                    renderer.LastFrameShowedTarget() ? "copiou um alvo do jogo para a janela" : "SEM alvo para mostrar", v.depth_clears,
+                    renderer.LastFrameShowedTarget() ? "copied a game target to the window" : "NO target to display", v.depth_clears,
                     v.depth_only, v.target_sampled);
-        std::printf("  enviados %" PRIu64 " | fora: %" PRIu64 " par ainda nao recompilado, %" PRIu64 " shader sem hash, %" PRIu64
-                    " formato de vertice diferente do especializado ou nao tratado, %" PRIu64 " layout de vertice, %" PRIu64
-                    " tamanho, %" PRIu64 " primitiva, %" PRIu64 " modo de cor (resolve / fast clear), %" PRIu64 " sem alvo, %" PRIu64
-                    " formato de alvo, %" PRIu64 " viewport, %" PRIu64 " memoria ilegivel, %" PRIu64 " recusados pelo backend (%" PRIu64
-                    " por aneis cheios), %" PRIu64 " amostravam o proprio alvo\n",
+        std::printf("  submitted %" PRIu64 " | skipped: %" PRIu64 " pair not yet recompiled, %" PRIu64 " shader without hash, %" PRIu64
+                    " vertex format differs from specialization or is unsupported, %" PRIu64 " vertex layout, %" PRIu64
+                    " size, %" PRIu64 " primitive, %" PRIu64 " color mode (resolve / fast clear), %" PRIu64 " no target, %" PRIu64
+                    " target format, %" PRIu64 " viewport, %" PRIu64 " unreadable memory, %" PRIu64 " refused by backend (%" PRIu64
+                    " due to full rings), %" PRIu64 " sampled their own target\n",
                     v.game_sent, v.game_no_pair, v.no_hash, v.game_format, v.game_layout, v.size, v.primitive, v.color_mode, v.no_target,
                     v.target_format, v.viewport, v.unreadable, v.game_rejected, renderer.RingRejected(), renderer.FeedbackSkipped());
         {
             u64 pv = 0, pi = 0, ps = 0; // Fase 54f
             renderer.RingPeaks(&pv, &pi, &ps);
-            std::printf("  aneis do frame (maior frame): vertices %.1f MiB, indices %.1f MiB, constantes %.1f MiB (limite: metade de cada anel)\n",
+            std::printf("  frame rings (largest frame): vertices %.1f MiB, indices %.1f MiB, constants %.1f MiB (limit: half of each ring)\n",
                         pv / 1048576.0, pi / 1048576.0, ps / 1048576.0);
         }
-        std::printf("  listas de retangulos desenhadas pela metade (so o primeiro triangulo): %" PRIu64 " | buffers ilegiveis (zeros) %" PRIu64
-                    ", texturas nao tratadas (branco) %" PRIu64 "\n",
+        std::printf("  rectangle lists drawn halfway (first triangle only): %" PRIu64 " | unreadable buffers (zeros) %" PRIu64
+                    ", unsupported textures (white) %" PRIu64 "\n",
                     v.rect_list, v.game_zero_buffers, v.game_white_images);
         const double geometry_total = static_cast<double>(v.cache_hit_bytes + v.cache_upload_bytes + v.ring_bytes);
-        std::printf("  cache de geometria: %.1f MiB reaproveitados da GPU (%.1f%%), %.1f MiB enviados ao buffer estatico, %.1f MiB "
-                    "copiados para o anel | %" PRIu64 " acertos, %" PRIu64 " envios, %" PRIu64 " mudancas detectadas, %" PRIu64
-                    " conferencias completas, %" PRIu64 " esvaziamentos | buffer estatico em uso: %.1f MiB | draws com mais de uma "
-                    "instancia: %" PRIu64 " (%" PRIu64 " com passo de instancia maior que 1; %" PRIu64 " buffers expandidos)\n",
+        std::printf("  geometry cache: %.1f MiB reused from GPU (%.1f%%), %.1f MiB uploaded to static buffer, %.1f MiB "
+                    "copied to ring | %" PRIu64 " hits, %" PRIu64 " uploads, %" PRIu64 " changes detected, %" PRIu64
+                    " full checks, %" PRIu64 " flushes | static buffer in use: %.1f MiB | draws with more than one "
+                    "instance: %" PRIu64 " (%" PRIu64 " with instance step greater than 1; %" PRIu64 " expanded buffers)\n",
                     v.cache_hit_bytes / 1048576.0, geometry_total > 0 ? 100.0 * v.cache_hit_bytes / geometry_total : 0.0,
                     v.cache_upload_bytes / 1048576.0, v.ring_bytes / 1048576.0, v.cache_hits, v.cache_uploads, v.cache_changed,
                     v.cache_rechecks, v.cache_resets, renderer.StaticBytes() / 1048576.0, v.instanced, v.instanced_step, v.instanced_expanded);
@@ -6389,73 +6390,73 @@ void PrintStats() {
             }
             std::printf("\n");
         };
-        print_map("formatos de vertice nao tratados (dados << 4 | tipo numerico = draws)", v.vertex_formats);
-        print_map("formatos de alvo nao tratados (formato << 4 | tipo numerico = draws)", v.target_formats);
-        print_map("primitivas nao tratadas (tipo = draws)", v.primitives);
-        std::printf("  texturas: %u VkImage criadas (%.1f MiB), %" PRIu64 " enviadas, %" PRIu64 " falharam; draws com textura %" PRIu64 "\n",
+        print_map("unsupported vertex formats (data << 4 | numeric type = draws)", v.vertex_formats);
+        print_map("unsupported target formats (format << 4 | numeric type = draws)", v.target_formats);
+        print_map("unsupported primitives (type = draws)", v.primitives);
+        std::printf("  textures: %u VkImage created (%.1f MiB), %" PRIu64 " uploaded, %" PRIu64 " failed; textured draws %" PRIu64 "\n",
                     renderer.TexturesCreated(), renderer.TextureBytes() / 1048576.0, v.textures_uploaded, v.textures_failed,
                     renderer.TexturedDraws());
-        std::printf("  Fase 25: %" PRIu64 " niveis de mip enviados, %" PRIu64 " reenvios de texturas pequenas reescritas pela CPU, %" PRIu64
-                    " leituras de volta de alvos minusculos\n",
+        std::printf("  Phase 25: %" PRIu64 " mip levels uploaded, %" PRIu64 " reuploads of small textures rewritten by CPU, %" PRIu64
+                    " tiny target readbacks\n",
                     v.mip_levels_uploaded, v.textures_refreshed, g_readbacks_delivered.load());
-        std::printf("  Fase 34: %" PRIu64 " draws com teste de estencil, %" PRIu64 " limpezas de estencil\n", v.stencil_draws, v.stencil_clears);
-        std::printf("  Fase 32: %" PRIu64 " draws amostraram o proprio alvo por uma copia (%" PRIu64 " copias tiradas) | %" PRIu64
-                    " buffers achatados (flatbuf) montados\n",
+        std::printf("  Phase 34: %" PRIu64 " draws with stencil testing, %" PRIu64 " stencil clears\n", v.stencil_draws, v.stencil_clears);
+        std::printf("  Phase 32: %" PRIu64 " draws sampled their own target through a copy (%" PRIu64 " copies made) | %" PRIu64
+                    " flattened buffers (flatbuf) built\n",
                     renderer.FeedbackDraws(), renderer.FeedbackCopies(), v.flatbuf_built);
-        std::printf("  Fase 29: %" PRIu64 " pipelines criados em segundo plano\n", renderer.AsyncPipelines());
-        std::printf("  Fase 29: %" PRIu64 " pares carregados em segundo plano | recompilador ao vivo: %" PRIu64 " par(es) pedidos, %" PRIu64
-                    " prontos, %" PRIu64 " execucao(oes), %" PRIu64 " ms | %" PRIu64 " texturas reenviadas porque o jogo reescreveu o conteudo\n",
+        std::printf("  Phase 29: %" PRIu64 " pipelines created in background\n", renderer.AsyncPipelines());
+        std::printf("  Phase 29: %" PRIu64 " pairs loaded in background | live recompiler: %" PRIu64 " pair(s) requested, %" PRIu64
+                    " ready, %" PRIu64 " run(s), %" PRIu64 " ms | %" PRIu64 " textures reuploaded because the game rewrote their content\n",
                     g_pairs_async_loaded.load(), g_pairs_live_requested.load(), g_pairs_live_ok.load(), g_live_runs.load(), g_live_ms.load(),
                     v.textures_rewritten);
-        std::printf("  Fase 28 (engasgos): %" PRIu64 " frames, %" PRIu64 " com Submit > 12 ms (soma %.0f ms, pior %.1f ms), %" PRIu64
-                    " intervalos entre flips > 50 ms (pior %.1f ms)\n",
+        std::printf("  Phase 28 (hitches): %" PRIu64 " frames, %" PRIu64 " with Submit > 12 ms (total %.0f ms, worst %.1f ms), %" PRIu64
+                    " flip intervals > 50 ms (worst %.1f ms)\n",
                     g_hitch.frames, g_hitch.hitch_frames, g_hitch.hitch_ms, g_hitch.worst_ms, g_hitch.long_intervals,
                     g_hitch.worst_interval_ms);
-        std::printf("    tempo total: pipelines %" PRIu64 " em %.0f ms | texturas (VkImage + copia) %" PRIu64 " em %.0f ms | leitura/destile %"
-                    PRIu64 " em %.0f ms | pares (arquivo + modulos) %" PRIu64 " em %.0f ms | extrator (shader novo) %" PRIu64 " em %.0f ms\n",
+        std::printf("    total time: pipelines %" PRIu64 " in %.0f ms | textures (VkImage + copy) %" PRIu64 " in %.0f ms | read/detile %"
+                    PRIu64 " in %.0f ms | pairs (file + modules) %" PRIu64 " in %.0f ms | extractor (new shader) %" PRIu64 " em %.0f ms\n",
                     g_hitch.kind_count[0], g_hitch.kind_ms[0], g_hitch.kind_count[1], g_hitch.kind_ms[1], g_hitch.kind_count[3],
                     g_hitch.kind_ms[3], g_hitch.kind_count[2], g_hitch.kind_ms[2], g_hitch.kind_count[4], g_hitch.kind_ms[4]);
         {
             u32 warm_done = 0, warm_total = 0;
             renderer.PrewarmProgress(&warm_done, &warm_total);
-            std::printf("    Fase 36 (aquecimento): %u de %u pares carregados na abertura, %u usados sem espera | %u de %u pipelines criados antes do uso\n",
+            std::printf("    Phase 36 (warmup): %u of %u pairs loaded at startup, %u used without waiting | %u of %u pipelines created before use\n",
                         g_warm_pairs_done.load(), g_warm_pairs_total.load(), g_warm_pairs_used.load(), warm_done, warm_total);
         }
         {
             const auto sync = renderer.GetSyncPipelineStats();
-            std::printf("    Fase 38 (na hora): %" PRIu64 " pares do pacote carregados na thread de render (%.0f ms no total, pior %.1f ms), %" PRIu64
-                        " sem compilado, %" PRIu64 " deixados em segundo plano (disco ou pacote ainda nao lido), %" PRIu64 " por orcamento | %" PRIu64 " pipelines criados na hora (%.0f ms, pior %.1f ms; pior frame %.1f ms;"
-                        " %" PRIu64 " frames com criacao), %" PRIu64 " deixados para a thread por orcamento\n",
+            std::printf("    Phase 38 (on demand): %" PRIu64 " pack pairs loaded on render thread (%.0f ms total, worst %.1f ms), %" PRIu64
+                        " without compiled output, %" PRIu64 " deferred to background (disk or pack not yet read), %" PRIu64 " due to budget | %" PRIu64 " pipelines created on demand (%.0f ms, worst %.1f ms; worst frame %.1f ms;"
+                        " %" PRIu64 " frames with creation), %" PRIu64 " deferred to worker due to budget\n",
                         g_sync_pairs_loaded, g_sync_pairs_ms, g_sync_pairs_worst_ms, g_sync_pairs_missing, g_sync_pairs_deferred, g_sync_pairs_over_budget,
                         sync.created, sync.total_ms,
                         sync.worst_single_ms, sync.worst_frame_ms, sync.frames_with_sync, sync.over_budget);
             u64 fast = 0, upgraded = 0;
             renderer.FastPipelineStats(&fast, &upgraded);
-            std::printf("    Fase 56: %" PRIu64 " pares novos traduzidos na hora, no mesmo frame (sem pop-in)\n", g_live_sync_pairs);
-            std::printf("    Fase 55/56: %" PRIu64 " frames esperaram pipelines novos (para nao sair sem os objetos) | %" PRIu64
-                        " pipelines urgentes sem otimizacao, %" PRIu64 " ja trocados pela versao otimizada\n", sync.burst_frames, fast, upgraded);
+            std::printf("    Phase 56: %" PRIu64 " new pairs translated on demand in the same frame (no pop-in)\n", g_live_sync_pairs);
+            std::printf("    Phase 55/56: %" PRIu64 " frames waited for new pipelines (to avoid missing objects) | %" PRIu64
+                        " urgent unoptimized pipelines, %" PRIu64 " already replaced by optimized version\n", sync.burst_frames, fast, upgraded);
             u64 lazy_loaded = 0, lazy_failed = 0;
             renderer.LazyModuleStats(&lazy_loaded, &lazy_failed);
-            std::printf("    Fase 59: %zu pares do pacote AOT registrados sem modulos; %" PRIu64 " ganharam os modulos no primeiro pipeline, "
-                        "%" PRIu64 " falharam | %" PRIu64 " texturas descartadas por falta de uso\n",
+            std::printf("    Phase 59: %zu AOT pack pairs registered without modules; %" PRIu64 " received modules on first pipeline, "
+                        "%" PRIu64 " failed | %" PRIu64 " textures discarded due to disuse\n",
                         g_lazy_sources.size(), lazy_loaded, lazy_failed, renderer.TexturesEvicted());
-            std::printf("    Fase 61 (orcamento de geometria %.1f ms/frame): %" PRIu64 " promocoes ao buffer estatico e %" PRIu64
-                        " conferencias completas adiadas para outro frame\n",
+            std::printf("    Phase 61 (geometry budget %.1f ms/frame): %" PRIu64 " promotions to static buffer and %" PRIu64
+                        " full checks deferred to another frame\n",
                         g_geometry_budget_ms, g_geometry_deferred, g_geometry_rechecks_deferred);
         }
         {
             const auto gpl = renderer.GetGplStats();
-            std::printf("    Fase 41 (bibliotecas de pipeline): %s | %" PRIu64 " bibliotecas de shader em %.0f ms (pior par %.1f ms), %" PRIu64
-                        " falhas | %" PRIu64 " pipelines ligados em %.1f ms (media %.3f ms, pior %.3f ms), %" PRIu64 " falhas | %" PRIu64
-                        " bibliotecas de entrada de vertice, %" PRIu64 " de saida | %" PRIu64 " monoliticos em %.0f ms (pior %.1f ms)\n",
+            std::printf("    Phase 41 (pipeline libraries): %s | %" PRIu64 " shader libraries in %.0f ms (worst pair %.1f ms), %" PRIu64
+                        " failures | %" PRIu64 " pipelines linked in %.1f ms (average %.3f ms, worst %.3f ms), %" PRIu64 " failures | %" PRIu64
+                        " vertex input libraries, %" PRIu64 " output libraries | %" PRIu64 " monolithic in %.0f ms (worst %.1f ms)\n",
                         gpl.active ? "ligadas" : "desligadas", gpl.shader_libs, gpl.shader_lib_ms, gpl.shader_lib_worst_ms, gpl.lib_failures, gpl.links,
                         gpl.link_ms, gpl.links ? gpl.link_ms / gpl.links : 0.0, gpl.link_worst_ms, gpl.link_failures, gpl.vertex_libs, gpl.output_libs,
                         gpl.monolithic, gpl.monolithic_ms, gpl.monolithic_worst_ms);
         }
         {
             const auto uploads = renderer.GetUploadStats();
-            std::printf("    Fase 39 (texturas na hora): %" PRIu64 " criadas na thread de render (%.0f ms no total, pior %.1f ms; pior frame %.1f ms; %"
-                        PRIu64 " frames, %" PRIu64 " deles com pico de mais de %u texturas novas), %" PRIu64 " deixadas para a thread por orcamento | envios no proprio frame %" PRIu64 " (%.0f MiB), com espera %" PRIu64 "\n",
+            std::printf("    Phase 39 (on-demand textures): %" PRIu64 " created on render thread (%.0f ms total, worst %.1f ms; worst frame %.1f ms; %"
+                        PRIu64 " frames, %" PRIu64 " of them with peaks over %u new textures), %" PRIu64 " deferred to worker due to budget | uploads in same frame %" PRIu64 " (%.0f MiB), with waiting %" PRIu64 "\n",
                         g_tex_sync_count, g_tex_sync_ms, g_tex_sync_worst_ms, g_tex_sync_worst_frame_ms, g_tex_sync_frames, g_tex_spike_frames,
                         g_tex_spike_count, g_tex_sync_deferred,
                         uploads.deferred, uploads.deferred_bytes / 1048576.0, uploads.immediate);
@@ -6463,25 +6464,25 @@ void PrintStats() {
         {
             u64 modules = 0, layouts = 0;
             renderer.GetSharedObjectCounts(&modules, &layouts);
-            std::printf("    Fase 43 (pacote inteiro na abertura): %u de %u variantes prontas em %.1f s (%u falhas), memoria %llu MB | %" PRIu64
-                        " usadas no jogo, %" PRIu64 " recusadas (mapa de entradas / formato) | %llu modulos e %llu layouts compartilhados\n",
+            std::printf("    Phase 43 (full pack at startup): %u of %u variants ready in %.1f s (%u failures), memory %llu MB | %" PRIu64
+                        " used in game, %" PRIu64 " refused (input map / format) | %llu modules and %llu layouts shared\n",
                         g_ready_done.load() - g_ready_failed.load(), g_ready_total.load(), g_ready_seconds, g_ready_failed.load(),
                         static_cast<unsigned long long>(g_ready_memory_mb), g_ready_used.load(), g_ready_refused.load(),
                         static_cast<unsigned long long>(modules), static_cast<unsigned long long>(layouts));
         }
-        std::printf("    Fase 37 (pacote AOT): %" PRIu64 " pares carregados do pacote (%zu variantes nele, indice em %.0f ms) | tipo de textura "
-                    "confirmado em %" PRIu64 ", errado em %" PRIu64 " (recompilados ao vivo)\n",
+        std::printf("    Phase 37 (AOT pack): %" PRIu64 " pairs loaded from pack (%zu variants in it, index in %.0f ms) | texture type "
+                    "confirmed in %" PRIu64 ", wrong in %" PRIu64 " (recompiled live)\n",
                     g_aot_loaded.load(), g_aot.pairs.size(), g_aot.load_ms, g_aot_confirmed.load(), g_aot_rejected.load());
-        std::printf("    Fase 45 (espera no fim do frame): texturas %" PRIu64 " em %" PRIu64 " frames, %.0f ms (pior %.1f ms), %" PRIu64
-                    " draws ainda sem textura no fim do teto | pipelines: ver Fase 38 (\"deixados para a thread\" = draws sem pipeline no fim do teto)\n",
+        std::printf("    Phase 45 (end-of-frame wait): textures %" PRIu64 " em %" PRIu64 " frames, %.0f ms (worst %.1f ms), %" PRIu64
+                    " draws still without textures at deadline | pipelines: see Phase 38 (\"deferred to worker\" = draws without pipelines at deadline)\n",
                     g_tex_wait_textures, g_tex_wait_frames, g_tex_wait_ms, g_tex_wait_worst_ms, renderer.DrawsLateTexture());
-        std::printf("    Fase 35: %" PRIu64 " texturas lidas fora da thread de render; %" PRIu64 " draws adiados esperando textura\n",
+        std::printf("    Phase 35: %" PRIu64 " textures read off render thread; %" PRIu64 " draws deferred waiting for textures\n",
                     g_tex_async_uploaded.load(), v.texture_pending);
-        std::printf("    Fase 35: DMA_DATA %.1f MiB de preenchimento + %.1f MiB de copia; %.1f MiB feitos em paralelo, em %" PRIu64 " lotes\n",
+        std::printf("    Phase 35: DMA_DATA %.1f MiB fill + %.1f MiB copy; %.1f MiB done in parallel, in %" PRIu64 " batches\n",
                     g_dma_fill_bytes / 1048576.0, g_dma_copy_bytes / 1048576.0, g_dma_parallel_bytes / 1048576.0, g_dma_batches);
-        std::printf("    DMA_DATA: %" PRIu64 " pacotes em %.0f ms\n", g_hitch.kind_count[5], g_hitch.kind_ms[5]);
-        std::printf("    Submit: %.0f ms no total (%.2f ms por frame) | etapas do draw: estado %.0f ms, par %.0f ms, recursos %.0f ms, "
-                    "fila %.0f ms\n",
+        std::printf("    DMA_DATA: %" PRIu64 " packets in %.0f ms\n", g_hitch.kind_count[5], g_hitch.kind_ms[5]);
+        std::printf("    Submit: %.0f ms total (%.2f ms per frame) | draw stages: state %.0f ms, pair %.0f ms, resources %.0f ms, "
+                    "queue %.0f ms\n",
                     g_hitch.submit_ms, g_hitch.frames ? g_hitch.submit_ms / g_hitch.frames : 0.0, g_hitch.lap_ms[0], g_hitch.lap_ms[1],
                     g_hitch.lap_ms[2], g_hitch.lap_ms[3]);
         std::map<std::string, u32> reasons;
@@ -6491,10 +6492,10 @@ void PrintStats() {
             }
         }
         for (const auto& [why, pairs] : reasons) {
-            std::printf("    %u par(es) fora: %s\n", pairs, why.c_str());
+            std::printf("    %u pair(s) skipped: %s\n", pairs, why.c_str());
         }
         if (renderer.ValidationActive()) {
-            std::printf("  validacao do Vulkan: %" PRIu64 " erros, %" PRIu64 " avisos\n", renderer.ValidationErrors(),
+            std::printf("  Vulkan validation: %" PRIu64 " errors, %" PRIu64 " warnings\n", renderer.ValidationErrors(),
                         renderer.ValidationWarnings());
         }
         WriteUiShaderPairs();
@@ -6508,7 +6509,7 @@ void PrintStats() {
     std::sort(ops.rbegin(), ops.rend());
     for (const auto& [count, opcode] : ops) {
         const char* name = OpcodeName(opcode);
-        std::printf("  %10" PRIu64 "x  0x%02X %s\n", count, opcode, name ? name : "(sem nome)");
+        std::printf("  %10" PRIu64 "x  0x%02X %s\n", count, opcode, name ? name : "(unnamed)");
     }
 }
 
@@ -6603,7 +6604,7 @@ void WarmThread() {
     }
     const u32 pipelines = renderer.PrewarmPipelines();
     g_warm_finished = true;
-    log::Tagged("AQUECIMENTO", "%zu pares carregados e %u pipelines na fila em %.1f s", entries.size(), pipelines,
+    log::Tagged("WARMUP", "%zu pairs loaded and %u pipelines queued in %.1f s", entries.size(), pipelines,
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
 }
 
@@ -6686,8 +6687,8 @@ void PreloadAllAot() {
     }
     u64 modules = 0, layouts = 0;
     renderer.GetSharedObjectCounts(&modules, &layouts);
-    log::Tagged("AOT", "pacote inteiro carregado: %u de %u variantes prontas em %.1f s (%u falhas) | %llu modulos e %llu layouts no Vulkan | "
-                "memoria do processo %llu MB", g_ready_done.load() - g_ready_failed.load(), g_ready_total.load(), g_ready_seconds,
+    log::Tagged("AOT", "full pack loaded: %u of %u variants ready in %.1f s (%u failures) | %llu modules and %llu layouts in Vulkan | "
+                "process memory %llu MB", g_ready_done.load() - g_ready_failed.load(), g_ready_total.load(), g_ready_seconds,
                 g_ready_failed.load(), static_cast<unsigned long long>(modules), static_cast<unsigned long long>(layouts),
                 static_cast<unsigned long long>(g_ready_memory_mb));
     // Fase 48: os pipelines ja vistos dos pares do pacote (registrados so agora) tambem entram no
@@ -6697,7 +6698,7 @@ void PreloadAllAot() {
             Sleep(50); // a primeira passada do aquecimento precisa ter lido o arquivo
         }
         const u32 extra = renderer.PrewarmPipelines();
-        log::Tagged("AOT", "%u pipelines ja vistos de pares do pacote na fila do aquecimento", extra);
+        log::Tagged("AOT", "%u previously seen pack-pair pipelines queued for warmup", extra);
     }
     if (const char* bench = std::getenv("LD_PIPE_BENCH")) { // Fase 53: so medicao
         renderer.BenchPipelines(bench);
@@ -6774,8 +6775,8 @@ void PreloadAotIndex() {
             SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
         }
         g_aot_prefetched.store(bytes > 0, std::memory_order_release);
-        log::Tagged("AOT", "pacote lido %s: %.0f MB em %.1f s | %zu pares compilados com o jogo listados",
-                    g_aot_pak_memory.empty() ? "para o cache de arquivos" : "para a memoria", bytes / 1048576.0,
+        log::Tagged("AOT", "pack read %s: %.0f MB in %.1f s | %zu pairs compiled with the game listed",
+                    g_aot_pak_memory.empty() ? "to file cache" : "to memory", bytes / 1048576.0,
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), g_pairs_on_disk.size());
         if (g_preload_all.load()) {
             PreloadAllAot();
@@ -6916,7 +6917,7 @@ void SetLiveCompiler(const std::filesystem::path& tool, const std::filesystem::p
         g_live_tool = tool;
         g_live_root = root;
         g_live_shader_dir = shader_dir;
-        log::Tagged("SHADER-LIVE", "recompilador ao vivo: %s", tool.string().c_str());
+        log::Tagged("SHADER-LIVE", "live recompiler: %s", tool.string().c_str());
         // Fase 56: uma execucao vazia na abertura poe o executavel e o indice de shaders no cache do
         // Windows (o D: e um HD): a 1a traducao na hora levava 1,8 s, as seguintes 0,1 a 0,3 s.
         std::thread([] {
@@ -6926,7 +6927,7 @@ void SetLiveCompiler(const std::filesystem::path& tool, const std::filesystem::p
     } else {
         g_live_tool.clear();
         if (!tool.empty()) {
-            log::Tagged("SHADER-LIVE", "desligado: %s nao existe (pares novos ficam para a proxima execucao da ferramenta)",
+            log::Tagged("SHADER-LIVE", "disabled: %s does not exist (new pairs deferred to next tool run)",
                         tool.string().c_str());
         }
     }
