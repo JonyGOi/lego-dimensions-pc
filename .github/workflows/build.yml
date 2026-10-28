@@ -1,0 +1,57 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Vulkan SDK via Chocolatey
+        run: |
+          for ($i=1; $i -le 3; $i++) {
+              choco install vulkan-sdk -y
+              if (Test-Path "C:\VulkanSDK") { break }
+              Start-Sleep -Seconds 5
+          }
+          $vk = Get-ChildItem "C:\VulkanSDK" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+          if ($vk) {
+              echo "VULKAN_SDK=$($vk.FullName)" >> $env:GITHUB_ENV
+              echo "$($vk.FullName)\bin" >> $env:GITHUB_PATH
+          }
+
+      - name: Setup MSVC & clang-cl environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Port (lego_dimensions.exe)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+
+      - name: Build Tools (Launcher, Transfer, Installer)
+        run: |
+          cmd.exe /c "tools\dist\build_dist.bat"
+      - name: Upload Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-binaries
+          path: |
+            build/lego_dimensions.exe
+            build/pkg_extractor.exe
+            tools/dist/build/LegoDimensionsLauncher.exe
+            tools/dist/build/LD_PC_Transfer.exe
+            tools/dist/build/installer_stub.exe

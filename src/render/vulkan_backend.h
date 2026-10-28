@@ -260,6 +260,7 @@ public:
     bool DrawFrame(u64 display_address = 0);
 
     void Shutdown();
+    void RequestSwapchainRebuild();
 
     bool Active() const;
     const std::string& LastError() const;

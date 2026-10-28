@@ -72,7 +72,9 @@ The languages other than Portuguese and English need the game's original text fi
 - **Player nicknames** (launcher): the names the game shows instead of Player1, Player2...
 - **Mods** (button in the launcher): PS4 / shadPS4 LEGO Dimensions mods work - `.HDR` + `.DAT` packs (e.g. made with BrickVault), edited game packs like the `PATCH.HDR` + `PATCH.DAT` shadPS4 mods (only the files that changed are used) and loose files laid out like the game folder. Install from a `.zip`, `.rar` or `.7z`, turn each one on / off; mods already in the shadPS4 `CUSA01176-mods` folder or in `CUSA01176\Mods` are picked up too. The game files are never changed. Mod packs with their own name load through [Anomaly](https://github.com/connorh315/anomaly), the LEGO Dimensions PS4 mod loader by connorh315, built into the port (Mods menu, on by default). Mod voice lines with blank sound-event hashes or without the language suffix (e.g. connorh315's Bart voice mod) are fixed in the cache, so they play with subtitles, and the game text is kept with large mods.
 - **Disabled figures**: figures the game has but leaves switched off (e.g. Lord Vortech, figure 73) are enabled when a mod folder holds the figure's `.bin` dump; the character is built in the cache from the player's own game files.
-- The LegoToypad app (1.6 or newer) mirrors the portal lights the way the game drives them: colour, flashes and fades.
+- The LegoToypad app (version 1.9 Web App Extended included): the launcher has an "Open with LegoToypad" option to automatically start the portal emulator with the game, and a button to open it anytime.
+- **Create Shortcut**: launcher button to create Desktop and Start Menu shortcuts.
+- Default resolution is 1080p (1920x1080) and immediate application of settings (resolution, button icons, language) without needing to Prepare again.
 - Fullscreen ("Fullscreen" option in the launcher, or F11 in game) and a window size selector ("Resolution"; the game still renders at 1920x1080 and is scaled to the window).
 - "Skip all cutscenes" option: any cutscene can be skipped, even the ones the game only lets you skip after watching them or at 100%.
 - The controller only drives the game while the game window is in front: clicking the Toy Pad app makes the character stop.
@@ -150,3 +152,17 @@ segments; ambiguous or missing signatures leave the executable unchanged.
 Synthetic EU/US fixtures exercise discovery and rejection. Actual local native
 self-tests use EU 01.24 only; US gameplay has not been verified here. No release
 version, upstream update destination or workflow is changed by this integration.
+
+### English beta upstream integration
+
+This branch includes main through `4d99f34`: DPI awareness, swapchain rebuilding
+on window resize/fullscreen changes, and launcher Toypad/shortcut helpers. The
+compact launcher keeps Toypad auto-start in Settings and manual opening/shortcut
+creation in Tools. It also searches the sibling tools folder used by portable
+installations. Existing resolution choices are retained. The game still renders
+at its native internal resolution; these changes do not establish a performance
+gain. Region metadata validation, bounded cutscene patching, English diagnostics
+and compatibility with prepared `real sim` shader metadata are retained.
+
+Validation: native build, three CTest cases, ten Python checks and the hidden
+launcher layout test. Gameplay and resize behavior still require owner testing.

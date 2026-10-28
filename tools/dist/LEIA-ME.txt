@@ -20,11 +20,11 @@ O QUE VOCE PRECISA
   - Placa de video com Vulkan 1.3 e driver atualizado. Testado so em AMD Radeon RX 6600.
   - 16 GB de RAM (o jogo usa uns 5 GB; com 8 GB pode funcionar, mas o Windows vai usar o arquivo de
     paginacao e aparecem travadas).
-  - O dump do jogo: a pasta CUSA01176 (a que tem eboot.bin, sce_sys e data\chunk*).
-    Versao testada: 01.24. Outra versao pode nao funcionar.
+  - O dump do jogo: a pasta CUSA01176 ou CUSA00935 (a que tem eboot.bin, sce_sys e data\chunk*).
+    Versao recomendada: 01.24.
     Duas estruturas funcionam:
       a) tudo junto (a atualizacao ja dentro do dump: data\chunk1 com PATCH.DAT, PATCH0.DAT...);
-      b) jogo base + atualizacao numa pasta separada, CUSA01176-patch (formato do shadPS4),
+      b) jogo base + atualizacao numa pasta separada, CUSA01176-patch ou CUSA00935-patch (formato do shadPS4),
          dentro da pasta do jogo ou ao lado dela. O launcher acha essa pasta sozinho; se ela tiver
          outro nome, escolha-a em "Atualizacao". Sem a atualizacao (versao 01.00) o port nao roda.
   - (Opcional) as DLCs: uma pasta com uma subpasta por DLC, cada uma com sce_sys\param.sfo e o
@@ -40,8 +40,8 @@ COMO USAR
      <pasta>\addcont\CUSA01176 (ou para a pasta de DLCs ja escolhida), e os campos abaixo sao preenchidos
      sozinhos. A extracao e a do shadPS4 0.7.0; precisa de espaco livre do tamanho dos .pkg. Os .pkg nao
      sao apagados.
-  2. Em "Pasta do jogo", escolha a pasta CUSA01176. A arte do jogo aparece no topo.
-  3. Em "Atualizacao", confira a pasta CUSA01176-patch (so se a atualizacao for separada; fica vazio
+  2. Em "Pasta do jogo", escolha a pasta CUSA01176 ou CUSA00935. A arte do jogo aparece no topo.
+  3. Em "Atualizacao", confira a pasta CUSA01176-patch ou CUSA00935-patch (so se a atualizacao for separada; fica vazio
      quando o dump ja traz a atualizacao junto).
   4. Em "Pasta das DLCs", escolha a pasta das DLCs (se a do shadPS4 existir, ela ja vem preenchida).
   5. Clique em Preparar (so na primeira vez). Isso:
@@ -70,8 +70,13 @@ DICAS
   - Toy Pad real: ligado no USB antes de abrir o jogo, ele e usado sozinho, sem driver extra (o
     portal.json e o app ficam de fora). Se voce instalou o driver WinUSB pelo Zadig (Cemu / RPCS3),
     volte o driver do portal para o padrao do Windows. --no-real-toypad usa o portal virtual.
-  - Com o app LegoToypad 1.6 ou mais novo (opcao "Toypad LEDs" ligada), as luzes do portal aparecem no
-    app como o jogo as acende: cor, piscadas e fades.
+  - Com o app LegoToypad (versao 1.9 Web App Extended inclusa em tools/LegoToypad.exe): o launcher possui
+    a opcao "Abrir com LegoToypad" para abrir o emulador do portal automaticamente ao clicar em JOGAR, alem do
+    botao "Abrir ToyPad" no topo.
+  - O botao "Criar Atalho" no topo do launcher cria atalhos do jogo na Area de Trabalho e no Menu Iniciar.
+  - A resolucao padrao da janela agora e 1080p (1920x1080).
+  - Trocar resolucao, icones dos botoes ou idioma e salvo imediatamente e tem efeito ao clicar em JOGAR;
+    nao precisa clicar em Preparar de novo.
   - Na primeira visita a cada area o driver de video ainda compila pipelines novos (pode engasgar um
     pouco); eles ficam gravados e nas proximas vezes sao preparados na tela de carregamento.
   - Se notar travadas, mande o log da sessao (build\logs\): as linhas [ENGASGO], [QUADRO-LENTO] e

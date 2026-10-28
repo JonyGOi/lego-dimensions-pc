@@ -349,9 +349,9 @@ void Paint(HDC target) {
     ui::Text(dc, FreeSpace(GetText(g_dir)), space, g_label, ui::kMuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     RECT info{S(48), header + S(118), S(kW - 48), header + S(164)};
     ui::Text(dc,
-             ui::T(L"Depois de instalar: abra o launcher, escolha a pasta do jogo (dump do PS4, CUSA01176) e a das DLCs, clique em Preparar "
+             ui::T(L"Depois de instalar: abra o launcher, escolha a pasta do jogo (dump do PS4, CUSA01176 ou CUSA00935) e a das DLCs, clique em Preparar "
                    L"(s\u00f3 na primeira vez: traduz os shaders do seu jogo para Vulkan) e depois em JOGAR.",
-                   L"After installing: open the launcher, choose the game folder (PS4 dump, CUSA01176) and the DLC folder, click Prepare "
+                   L"After installing: open the launcher, choose the game folder (PS4 dump, CUSA01176 or CUSA00935) and the DLC folder, click Prepare "
                    L"(first time only: translates your game's shaders to Vulkan) and then PLAY."),
              info, g_small, ui::kMuted, DT_LEFT | DT_WORDBREAK);
     RECT step{S(48), S(kH - 154), S(kW - 120), S(kH - 130)}, pct{S(kW - 120), S(kH - 154), S(kW - 48), S(kH - 130)};

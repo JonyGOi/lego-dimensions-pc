@@ -2,7 +2,7 @@
 
 [English](README.md) | **Português**
 
-Port nativo **não oficial** do LEGO Dimensions do PS4 (CUSA01176, versão 01.24) para Windows x64.
+Port nativo **não oficial** do LEGO Dimensions do PS4 (CUSA01176 / CUSA00935, versão 01.24) para Windows x64.
 
 Não é um emulador de PS4. O executável do jogo roda direto no processador do PC, e as bibliotecas do sistema do PS4 foram reescritas para o Windows. Os gráficos do PS4 (GCN) são traduzidos para Vulkan, e os shaders do jogo são traduzidos antes de jogar, a partir dos próprios pacotes do jogo.
 
@@ -17,9 +17,9 @@ Baixe o instalador (`LEGO_Dimensions_PC_Setup.exe`) ou o zip portátil na págin
 - Windows 10 (1803 ou mais novo) ou Windows 11, 64 bits.
 - Placa de vídeo com **Vulkan 1.3** e driver atualizado. Testado em AMD Radeon RX 6600.
 - **16 GB de RAM**. O jogo usa uns 5 GB; com 8 GB pode funcionar, mas com travadas.
-- O dump do jogo: a pasta `CUSA01176` (com `eboot.bin`, `sce_sys` e `data\chunk*`), **versão 01.24**. Duas estruturas funcionam:
+- O dump do jogo: a pasta `CUSA01176` ou `CUSA00935` (com `eboot.bin`, `sce_sys` e `data\chunk*`), **versão 01.24**. Duas estruturas funcionam:
   1. tudo junto: a atualização já dentro do dump (`data\chunk1` com `PATCH.DAT`, `PATCH0.DAT`...);
-  2. jogo base + atualização numa pasta separada, `CUSA01176-patch` (formato do shadPS4), dentro da pasta do jogo ou ao lado dela.
+  2. jogo base + atualização numa pasta separada, `CUSA01176-patch` ou `CUSA00935-patch` (formato do shadPS4), dentro da pasta do jogo ou ao lado dela.
 - Opcional: DLCs (uma subpasta por DLC, no formato da pasta `addcont` do shadPS4), controle DS4/Xbox e o app LegoToypad para o portal.
 - Jogo, atualização ou DLCs em arquivos `.pkg`: o botão **Extrair PKG...** do launcher extrai no formato acima e preenche as pastas (extração de PKG do shadPS4 0.7.0).
 
@@ -44,7 +44,9 @@ Detalhes e dicas no [LEIA-ME](tools/dist/LEIA-ME.txt).
 - **Apelidos dos jogadores** (launcher): os nomes que o jogo mostra no lugar de Player1, Player2...
 - **Mods** (botão no launcher): funcionam os mods de PS4 / shadPS4 do LEGO Dimensions - pacotes `.HDR` + `.DAT` (ex. feitos com o BrickVault), pacotes do jogo editados como os `PATCH.HDR` + `PATCH.DAT` dos mods de shadPS4 (entram só os arquivos que mudaram) e arquivos soltos no formato da pasta do jogo. Instale de um `.zip`, `.rar` ou `.7z` e ligue / desligue cada um; os que já estiverem na pasta `CUSA01176-mods` do shadPS4 ou em `CUSA01176\Mods` também entram. Os arquivos do jogo nunca são alterados. Os pacotes de mod com nome próprio entram pelo [Anomaly](https://github.com/connorh315/anomaly), o carregador de mods do LEGO Dimensions de PS4 de connorh315, embutido no port (menu Mods, ligado por padrão). Falas de mod com hashes de evento de som em branco ou sem o sufixo do idioma (ex. o mod de voz do Bart, de connorh315) são consertadas no cache, então tocam com legenda, e o texto do jogo continua valendo com mods grandes.
 - **Figuras desligadas**: figuras que o jogo tem mas deixa desligadas (ex. Lord Vortech, figura 73) são liberadas quando uma pasta de mod tem a gravação `.bin` da figura; o personagem é montado no cache com os arquivos do próprio jogo do jogador.
-- O app LegoToypad (1.6 ou mais novo) mostra as luzes do portal como o jogo as acende: cor, piscadas e fades.
+- O app LegoToypad (versão 1.9 Web App Extended inclusa): o launcher tem a opção "Abrir com LegoToypad" para abrir o emulador do portal junto com o jogo, e botão no topo para abrir a qualquer momento.
+- **Criar Atalho**: botão no launcher para criar atalhos na Área de Trabalho e no Menu Iniciar.
+- Resolução padrão 1080p (1920x1080) e aplicação imediata de configurações (resolução, ícones, idioma) sem precisar clicar em Preparar novamente.
 - Tela cheia (opção "Tela cheia" no launcher ou F11 no jogo) e seletor do tamanho da janela ("Resolução"; o jogo continua desenhando em 1920x1080 e é escalado para a janela).
 - Opção "Pular todas as cutscenes": qualquer cutscene pode ser pulada, mesmo as que o jogo só deixa pular depois de vistas ou com 100%.
 - O controle só mexe no jogo com a janela do jogo na frente: ao clicar no app do Toy Pad, o personagem para.

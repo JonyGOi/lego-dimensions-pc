@@ -20,11 +20,11 @@ WHAT YOU NEED
   - A graphics card with Vulkan 1.3 and an up-to-date driver. Only tested on an AMD Radeon RX 6600.
   - 16 GB of RAM (the game uses about 5 GB; 8 GB may work, but Windows will use the page file and you
     will get stutters).
-  - The game dump: the CUSA01176 folder (the one with eboot.bin, sce_sys and data\chunk*).
-    Tested version: 01.24. Other versions may not work.
+  - The game dump: the CUSA01176 or CUSA00935 folder (the one with eboot.bin, sce_sys and data\chunk*).
+    Recommended version: 01.24.
     Two layouts work:
       a) all in one (the update already inside the dump: data\chunk1 with PATCH.DAT, PATCH0.DAT...);
-      b) base game + update in a separate folder, CUSA01176-patch (shadPS4 layout), inside the game
+      b) base game + update in a separate folder, CUSA01176-patch or CUSA00935-patch (shadPS4 layout), inside the game
          folder or next to it. The launcher finds it on its own; if it has another name, choose it
          under "Update". Without the update (version 01.00) the port does not run.
   - (Optional) the DLCs: a folder with one subfolder per DLC, each with sce_sys\param.sfo and the
@@ -47,8 +47,8 @@ HOW TO USE
      <folder>\addcont\CUSA01176 (or to the DLC folder already chosen), and the fields below are filled in
      for you. The extraction is the one from shadPS4 0.7.0; it needs as much free space as the .pkg files.
      The .pkg files are not deleted.
-  2. Under "Game folder", choose the CUSA01176 folder. The game art shows up at the top.
-  3. Under "Update", check the CUSA01176-patch folder (only if the update is separate; it stays empty
+  2. Under "Game folder", choose the CUSA01176 or CUSA00935 folder. The game art shows up at the top.
+  3. Under "Update", check the CUSA01176-patch or CUSA00935-patch folder (only if the update is separate; it stays empty
      when the dump already includes the update).
   4. Under "DLC folder", choose the DLC folder (if the shadPS4 one exists, it is already filled in).
   5. Click Prepare (first time only). This:
@@ -81,8 +81,13 @@ TIPS
   - Real Toy Pad: plugged into USB before the game starts, it is used on its own, with no extra driver
     (portal.json and the app are left out). If you installed the WinUSB driver with Zadig (Cemu /
     RPCS3), switch the portal back to the default Windows driver. --no-real-toypad uses the virtual one.
-  - With the LegoToypad app 1.6 or newer ("Toypad LEDs" setting on), the portal lights show in the app
-    the way the game lights them: colour, flashes and fades.
+  - With the LegoToypad app (version 1.9 Web App Extended included in tools/LegoToypad.exe): the launcher
+    has an "Open with LegoToypad" option to launch the portal emulator automatically when clicking PLAY,
+    as well as an "Open ToyPad" button at the top.
+  - The "Create Shortcut" button at the top of the launcher creates shortcuts on the Desktop and Start Menu.
+  - The default windowed resolution is now 1080p (1920x1080).
+  - Changing resolution, button icons or language saves immediately and takes effect when clicking PLAY;
+    there is no need to click Prepare again.
   - The first time you visit each area the graphics driver still compiles new pipelines (it may hitch
     a little); they are stored and prepared on the loading screen the next times.
   - If you notice stutters, send the session log (build\logs\): the [ENGASGO], [QUADRO-LENTO] and
