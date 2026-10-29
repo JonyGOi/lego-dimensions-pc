@@ -1204,6 +1204,18 @@ int main(int argc, char** argv) {
         if (ini_full[0] == L'1') {
             hle::videoout::SetStartFullscreen(true);
         }
+        wchar_t ini_fps[16] = {};
+        GetPrivateProfileStringW(L"launcher", L"fps60", L"1", ini_fps, 16, (root / "launcher.ini").wstring().c_str());
+        if (ini_fps[0] == L'0') {
+            hle::videoout::SetForce60Hz(false);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (ini_fps[0] == L'2') {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(true);
+        } else {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(false);
+        }
     }
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
     std::filesystem::path app0 = DefaultApp0(root);
@@ -1317,7 +1329,14 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--fullscreen")) {
             hle::videoout::SetStartFullscreen(true); // Fase 60: tela cheia sem bordas (F11 alterna)
         } else if (!std::strcmp(argv[i], "--fps60")) {
-            hle::videoout::SetForce60Hz(true); // EXPERIMENTAL: flips a 60 Hz mesmo que o jogo peca 30
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (!std::strcmp(argv[i], "--fps30")) {
+            hle::videoout::SetForce60Hz(false);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (!std::strcmp(argv[i], "--fps-unlocked") || !std::strcmp(argv[i], "--fps-unlimited")) {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(true);
         } else if (!std::strcmp(argv[i], "--no-async-pipelines")) {
             render::VulkanRenderer::Instance().SetAsyncPipelines(false); // pipelines criados na thread de render
         } else if (!std::strcmp(argv[i], "--check-modules")) {

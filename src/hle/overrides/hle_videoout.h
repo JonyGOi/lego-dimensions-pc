@@ -37,6 +37,9 @@ u64 BufferAddress(int buffer_index);
 bool IsSrgbDisplayBuffer(u64 address);
 // Fase 28 (--fps60): ignora o sceVideoOutSetFlipRate(1) do jogo e conclui um flip a cada VSync de 60 Hz.
 void SetForce60Hz(bool enabled);
+void SetUnlockedFps(bool enabled);
+bool IsUnlockedFps();
+void InitVideoDefaults();
 // Fase 38: confere na abertura todos os .spv soltos de shaders_spv (diagnostico; segura o backend por segundos).
 void SetCheckModules(bool enabled);
 // Fase 60 (--fullscreen): janela abre em tela cheia sem bordas. F11 alterna a qualquer momento.
