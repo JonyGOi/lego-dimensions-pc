@@ -196,7 +196,16 @@ def main():
         progress(15, T('planejando as variantes', 'planning the variants'))
         run_step(['plan'], T('planejando', 'planning'), 15, 17)
         progress(17, T('traduzindo os shaders para Vulkan (a etapa mais longa)', 'translating the shaders to Vulkan (the longest step)'))
-        run_step(['compile', '--jobs', str(args.jobs)] + (['--limit', str(args.limite)] if args.limite else []), T('traduzindo shaders', 'translating shaders'), 17, 99)
+        run_step(['compile', '--jobs', str(args.jobs)] + (['--limit', str(args.limite)] if args.limite else []), T('traduzindo shaders', 'translating shaders'), 17, 95)
+        exe = os.path.join(ROOT, 'build', 'lego_dimensions.exe')
+        if not os.path.isfile(exe):
+            exe = os.path.join(ROOT, 'lego_dimensions.exe')
+        if os.path.isfile(exe):
+            progress(96, T('pre-aquecendo pipelines Vulkan em disco', 'pre-warming Vulkan pipelines to disk'))
+            try:
+                subprocess.run([exe, '--prewarm-only'], cwd=ROOT, timeout=120)
+            except Exception:
+                pass
     with open(os.path.join(ROOT, 'assets', 'preparado.txt'), 'w', encoding='utf-8') as f:
         f.write('app0=%s\npatch=%s\naddcont=%s\naot=%s\n' % (args.app0, args.patch, args.addcont, 'nao' if args.sem_aot else 'sim'))
     progress(100, T('pronto em %.0f min', 'done in %.0f min') % ((time.time() - t0) / 60))

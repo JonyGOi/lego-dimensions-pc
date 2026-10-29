@@ -127,6 +127,9 @@ void SetLocalIndexDir(const std::filesystem::path& dir) {
 }
 
 void OnRead(const std::string& guest_path, s64 offset, u64 size) {
+    if (!g_log) {
+        return;
+    }
     const std::string name = PackName(guest_path);
     if (name.empty() || offset < 0 || !size) {
         return;

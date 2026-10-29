@@ -37,6 +37,9 @@ u64 BufferAddress(int buffer_index);
 bool IsSrgbDisplayBuffer(u64 address);
 // Fase 28 (--fps60): ignora o sceVideoOutSetFlipRate(1) do jogo e conclui um flip a cada VSync de 60 Hz.
 void SetForce60Hz(bool enabled);
+void SetUnlockedFps(bool enabled);
+bool IsUnlockedFps();
+void InitVideoDefaults();
 // Fase 38: confere na abertura todos os .spv soltos de shaders_spv (diagnostico; segura o backend por segundos).
 void SetCheckModules(bool enabled);
 // Fase 60 (--fullscreen): janela abre em tela cheia sem bordas. F11 alterna a qualquer momento.
@@ -60,6 +63,12 @@ void RunLoadingScreen(u32 max_seconds);
 void SetStatsOverlay(bool enabled);
 // Chamado uma vez por quadro do jogo, antes do DrawFrame: mede o tempo do quadro e, ligado, enfileira o desenho.
 void QueueStatsOverlay();
+
+// Menu de configuracoes de video dentro do jogo (F2 ou L3+R3)
+void SetWindowResolution(u32 width, u32 height);
+void ToggleVideoSettingsMenu();
+bool IsVideoSettingsMenuOpen();
+void HandleVideoMenuController(u32 pressed_buttons);
 
 // true se a janela do jogo existe e esta em primeiro plano (o teclado so vale nesse caso).
 bool WindowHasFocus();

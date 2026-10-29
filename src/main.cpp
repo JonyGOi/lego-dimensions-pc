@@ -1186,6 +1186,18 @@ int main(int argc, char** argv) {
         if (ini_full[0] == L'1') {
             hle::videoout::SetStartFullscreen(true);
         }
+        wchar_t ini_fps[16] = {};
+        GetPrivateProfileStringW(L"launcher", L"fps60", L"1", ini_fps, 16, (root / "launcher.ini").wstring().c_str());
+        if (ini_fps[0] == L'0') {
+            hle::videoout::SetForce60Hz(false);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (ini_fps[0] == L'2') {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(true);
+        } else {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(false);
+        }
     }
     std::filesystem::path elf_path = root / "assets" / "decrypted_elfs" / "eboot.bin.elf";
     std::filesystem::path app0 = DefaultApp0(root);
@@ -1219,6 +1231,7 @@ int main(int argc, char** argv) {
     // grava um arquivo a cada tela "parada" e prende a thread de render por 0,3 a 1,2 s cada vez.
     std::filesystem::path frame_dump_dir;
     bool window = true;
+    bool prewarm_only = false;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--max-calls") && i + 1 < argc) {
             max_lines = std::strtoull(argv[++i], nullptr, 0);
@@ -1298,7 +1311,14 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--fullscreen")) {
             hle::videoout::SetStartFullscreen(true); // Fase 60: tela cheia sem bordas (F11 alterna)
         } else if (!std::strcmp(argv[i], "--fps60")) {
-            hle::videoout::SetForce60Hz(true); // EXPERIMENTAL: flips a 60 Hz mesmo que o jogo peca 30
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (!std::strcmp(argv[i], "--fps30")) {
+            hle::videoout::SetForce60Hz(false);
+            hle::videoout::SetUnlockedFps(false);
+        } else if (!std::strcmp(argv[i], "--fps-unlocked") || !std::strcmp(argv[i], "--fps-unlimited")) {
+            hle::videoout::SetForce60Hz(true);
+            hle::videoout::SetUnlockedFps(true);
         } else if (!std::strcmp(argv[i], "--no-async-pipelines")) {
             render::VulkanRenderer::Instance().SetAsyncPipelines(false); // pipelines criados na thread de render
         } else if (!std::strcmp(argv[i], "--check-modules")) {
@@ -1347,6 +1367,8 @@ int main(int argc, char** argv) {
             hle::gnm::SetAot(false, false); // nao usa o pacote de pares compilados dos .DAT (assets/shaders_aot)
         } else if (!std::strcmp(argv[i], "--aot-first")) {
             hle::gnm::SetAot(true, true); // diagnostico: pares do pacote AOT mesmo quando o compilado com o jogo existe
+        } else if (!std::strcmp(argv[i], "--prewarm-only")) {
+            prewarm_only = true;
         } else if (!std::strcmp(argv[i], "--no-warmup")) {
             shader_warmup = false; // nao carrega na abertura os pares e pipelines ja vistos
         } else if (!std::strcmp(argv[i], "--no-async-textures")) {
@@ -1484,6 +1506,8 @@ int main(int argc, char** argv) {
         hle::gnm::SetFrameDumpDirectory(frame_dump_dir);
         hle::gnm::SetShaderDumpDirectory(shader_dump_dir);
         render::SetGameSpirvDirectory((root / "assets" / "shaders_spv").string());
+        render::VulkanRenderer::Instance().SetPipelineStateFile((root / "assets" / "shaders_spv" / "pipeline_states.txt").string());
+        render::VulkanRenderer::Instance().SetPipelineCacheFile((root / "assets" / "shaders_spv" / "vk_pipeline_cache.bin").string());
         hle::gnm::SetSyncShaders(sync_shaders, sync_budget_ms);
         hle::gnm::SetSyncTextures(sync_textures, texture_budget_ms, texture_spike_budget_ms, texture_spike_count);
         hle::gnm::SetTextureWait(texture_wait);
@@ -1591,6 +1615,25 @@ int main(int argc, char** argv) {
     // ---- 4. tela de carregamento (Fase 42) --------------------------------
     // Abre a janela antes do jogo e espera o pacote AOT ser lido, os pares ja usados serem
     // carregados e os pipelines ja vistos serem criados; so entao o jogo comeca.
+    if (prewarm_only) {
+        std::printf("[PREWARM] Modo pre-aquecimento de pipelines solicitado (--prewarm-only)\n");
+        if (hle::videoout::OpenWindowEarly(5000)) {
+            render::VulkanRenderer::Instance().PrewarmPipelines();
+            for (int i = 0; i < 400; ++i) {
+                u32 done = 0, total = 0;
+                render::VulkanRenderer::Instance().PrewarmProgress(&done, &total);
+                if (total > 0 && done >= total) {
+                    std::printf("[PREWARM] Concluidos todos os %u pipelines pre-aquecidos!\n", total);
+                    break;
+                }
+                Sleep(50);
+            }
+            render::VulkanRenderer::Instance().SaveDiskPipelineCache();
+            std::printf("[PREWARM] Cache salvo em disco com sucesso. Finalizando pre-aquecimento.\n");
+        }
+        return 0;
+    }
+
     if (loading_screen && window && hle::videoout::OpenWindowEarly(15000)) {
         hle::videoout::RunLoadingScreen(600);
     }

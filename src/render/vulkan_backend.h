@@ -261,6 +261,7 @@ public:
 
     void Shutdown();
     void RequestSwapchainRebuild();
+    void SavePipelineCache();
 
     bool Active() const;
     const std::string& LastError() const;
@@ -309,6 +310,9 @@ public:
     // pipeline); PrewarmPipelines le o arquivo e manda criar, em segundo plano, todos os que sao de
     // pares ja registrados. Devolve quantos foram enfileirados.
     void SetPipelineStateFile(const std::string& path);
+    void SetPipelineCacheFile(const std::string& path);
+    void SaveDiskPipelineCache();
+    void LoadDiskPipelineCache();
     u32 PrewarmPipelines();
     void BenchPipelines(const std::string& path); // Fase 53: so medicao (LD_PIPE_BENCH)
     void PrewarmProgress(u32* done, u32* total) const;

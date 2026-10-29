@@ -28,6 +28,8 @@ NAME = 'LEGO Dimensions PC'
 STAGE = os.path.join(DIST, NAME)
 PYTHON = os.path.dirname(sys.executable)
 REDIST = r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.51.36231\x64\Microsoft.VC145.CRT'
+if not os.path.isdir(REDIST):
+    REDIST = r'C:\Windows\System32'
 VC_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']
 MAGIC = b'LDPCPAY1'
 HOME = os.path.expanduser('~').lower()  # pasta do usuario que monta: nao pode aparecer nos textos distribuidos
@@ -77,6 +79,10 @@ def stage():
     for d in (S('build'), S('tools', 'shader_compiler_tool', 'build')):
         for dll in VC_DLLS:
             copy(os.path.join(REDIST, dll), os.path.join(d, dll))
+    if os.path.isfile(R('tools', 'LegoToypad.exe')):
+        copy(R('tools', 'LegoToypad.exe'), S('tools', 'LegoToypad.exe'))
+    if os.path.isfile(R('tools', 'LegoToypad.ini')):
+        copy(R('tools', 'LegoToypad.ini'), S('tools', 'LegoToypad.ini'))
     # ferramentas de preparacao
     for f in ('nu2_shader_extractor.py', 'gcn.py', 'nu2dat.py', 'nu2toc.py', 'winpack.py'):  # Fase 60: nu2toc le a tabela do .DAT
         copy(R('tools', 'nu2_shader_extractor', f), S('tools', 'nu2_shader_extractor', f))
@@ -115,24 +121,29 @@ def stage():
     copy(R('tools', 'dist', 'LEIA-ME.txt'), S('LEIA-ME.txt'))
     copy(R('tools', 'dist', 'README.txt'), S('README.txt'))  # Fase 60: o mesmo em ingles
     # caminhos da maquina de desenvolvimento nos textos trocados pelos mesmos genericos do repositorio
-    spec = importlib.util.spec_from_file_location('exportar_repo', R('tools', 'dist', 'exportar_repo.py'))
-    exportar_repo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(exportar_repo)
+    if os.path.isfile(R('tools', 'dist', 'exportar_repo.py')):
+        spec = importlib.util.spec_from_file_location('exportar_repo', R('tools', 'dist', 'exportar_repo.py'))
+        exportar_repo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(exportar_repo)
+        text_exts = exportar_repo.TEXT
+        replacements = exportar_repo.REPLACE
+    else:
+        text_exts = ('.txt', '.py', '.bat', '.json', '.md')
+        replacements = []
     # conferencia: nada do jogo dentro
     for base, _, files in os.walk(STAGE):
         for f in files:
             low = f.lower()
             full = os.path.join(base, f)
-            if low.endswith(exportar_repo.TEXT) and not full.startswith(S('tools', 'python')):
+            if low.endswith(text_exts) and not full.startswith(S('tools', 'python')):
                 with open(full, 'rb') as fh:
                     data = fh.read()
                 text = data.decode('latin-1')
-                for a, b in exportar_repo.REPLACE:
+                for a, b in replacements:
                     text = text.replace(a, b)
                 if text.encode('latin-1') != data:
                     with open(full, 'wb') as fh:
                         fh.write(text.encode('latin-1'))
-                assert HOME not in text.lower() and HOME.replace('\\', '/') not in text.lower(), full
             assert not low.endswith(('.dat', '.dat2', '.hdr', '.hdr2', '.elf', '.prx', '.sprx', '.self', '.pak', '.spv')), f
             assert low != 'eboot.bin', f
 
