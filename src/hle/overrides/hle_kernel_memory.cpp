@@ -48,14 +48,6 @@ std::map<u64, PhysRange> g_phys;   // offset fisico -> faixa alocada
 std::map<u64, Mapping> g_mappings; // endereco virtual -> mapeamento
 u64 g_virtual_cursor = kVirtualBase;
 
-static void EnsureVirtualRangeReserved() {
-    static bool s_init = [] {
-        VirtualAlloc(reinterpret_cast<void*>(kVirtualBase), kDirectMemorySize, MEM_RESERVE, PAGE_NOACCESS);
-        return true;
-    }();
-    (void)s_init;
-}
-
 bool IsPow2(u64 v) {
     return v && !(v & (v - 1));
 }
@@ -84,12 +76,8 @@ bool FindPhysical(u64 search_start, u64 search_end, u64 size, u64 align, u64& ou
 }
 
 void* ReserveVirtual(u64 hint, u64 size, u64 align, DWORD protect, bool fixed) {
-    EnsureVirtualRangeReserved();
     if (hint) {
-        void* p = VirtualAlloc(reinterpret_cast<void*>(hint), size, MEM_COMMIT, protect);
-        if (!p) {
-            p = VirtualAlloc(reinterpret_cast<void*>(hint), size, MEM_RESERVE | MEM_COMMIT, protect);
-        }
+        void* p = VirtualAlloc(reinterpret_cast<void*>(hint), size, MEM_RESERVE | MEM_COMMIT, protect);
         if (p || fixed) {
             return p;
         }
@@ -101,11 +89,7 @@ void* ReserveVirtual(u64 hint, u64 size, u64 align, DWORD protect, bool fixed) {
             return nullptr;
         }
         g_virtual_cursor = addr + AlignUp(size, kWinGranularity);
-        void* p = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_COMMIT, protect);
-        if (!p) {
-            p = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_RESERVE | MEM_COMMIT, protect);
-        }
-        if (p) {
+        if (void* p = VirtualAlloc(reinterpret_cast<void*>(addr), size, MEM_RESERVE | MEM_COMMIT, protect)) {
             return p;
         }
     }
@@ -159,10 +143,7 @@ HLE_IMPL(int, sceKernelMapDirectMemory, void** addr, u64 len, int prot, int flag
         // O Windows so reserva em fronteiras de 64 KiB; um pedido alinhado so em 16 KiB e
         // arredondado para baixo quando nao e MAP_FIXED.
         const bool fixed = (flags & kMapFixed) != 0;
-        u64 hint = fixed ? requested : AlignDown(requested, kWinGranularity);
-        if (!hint && phys_start >= 0 && (static_cast<u64>(phys_start) + len <= kDirectMemorySize)) {
-            hint = kVirtualBase + static_cast<u64>(phys_start);
-        }
+        const u64 hint = fixed ? requested : AlignDown(requested, kWinGranularity);
         mapped = ReserveVirtual(hint, len, align, ToWinProtect(prot), fixed);
         if (mapped) {
             g_mappings[reinterpret_cast<u64>(mapped)] = {len, phys_start, prot};
@@ -191,12 +172,7 @@ int UnmapLocked(u64 addr, u64 len) {
     if (addr + len > base + it->second.size) {
         return err::kEINVAL;
     }
-    if (addr >= kVirtualBase && addr + len <= kVirtualBase + kDirectMemorySize) {
-        VirtualFree(reinterpret_cast<void*>(addr), len, MEM_DECOMMIT);
-        if (addr == base && len == it->second.size) {
-            g_mappings.erase(it);
-        }
-    } else if (addr == base && len == it->second.size) {
+    if (addr == base && len == it->second.size) {
         VirtualFree(reinterpret_cast<void*>(base), 0, MEM_RELEASE);
         g_mappings.erase(it);
     } else {
@@ -233,11 +209,7 @@ HLE_IMPL(int, sceKernelReleaseDirectMemory, s64 start, u64 len) {
         for (auto it = g_mappings.begin(); it != g_mappings.end();) {
             const s64 phys = it->second.phys_start;
             if (phys >= 0 && static_cast<u64>(phys) >= begin && static_cast<u64>(phys) + it->second.size <= end) {
-                if (it->first >= kVirtualBase && it->first + it->second.size <= kVirtualBase + kDirectMemorySize) {
-                    VirtualFree(reinterpret_cast<void*>(it->first), it->second.size, MEM_DECOMMIT);
-                } else {
-                    VirtualFree(reinterpret_cast<void*>(it->first), 0, MEM_RELEASE);
-                }
+                VirtualFree(reinterpret_cast<void*>(it->first), 0, MEM_RELEASE);
                 it = g_mappings.erase(it);
                 ++unmapped;
             } else {

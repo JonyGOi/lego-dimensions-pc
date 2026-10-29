@@ -68,14 +68,33 @@ HLE_IMPL(int, sceAvPlayerStreamCount, AvPlayer* player) {
 }
 HLE_OVERRIDE(sceAvPlayerStreamCount);
 
+#pragma pack(push, 1)
+struct SceAvPlayerVideoInfo {
+    u32 width;
+    u32 height;
+    u32 aspect_ratio;
+    u32 language_code;
+};
+
+struct SceAvPlayerStreamInfo {
+    u32 type;
+    u32 reserved;
+    SceAvPlayerVideoInfo video;
+    u64 duration;
+    u64 start_time;
+};
+#pragma pack(pop)
+
 HLE_IMPL(int, sceAvPlayerGetStreamInfo, AvPlayer* player, u32 stream_index, void* info) {
     log::Tagged("AVPLAYER", "sceAvPlayerGetStreamInfo(%p, stream=%u, info=%p)", player, stream_index, info);
     if (info) {
-        std::memset(info, 0, 128);
-        *reinterpret_cast<u32*>(info) = 0; // tipo 0 = video
-        *reinterpret_cast<u32*>(static_cast<char*>(info) + 8) = 1920; // largura
-        *reinterpret_cast<u32*>(static_cast<char*>(info) + 12) = 1080; // altura
-        *reinterpret_cast<u64*>(static_cast<char*>(info) + 24) = 1000; // duracao
+        std::memset(info, 0, sizeof(SceAvPlayerStreamInfo));
+        auto* s = reinterpret_cast<SceAvPlayerStreamInfo*>(info);
+        s->type = 0; // video
+        s->video.width = 1920;
+        s->video.height = 1080;
+        s->duration = 1000;
+        s->start_time = 0;
     }
     return err::OK;
 }

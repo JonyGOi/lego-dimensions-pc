@@ -512,45 +512,72 @@ void WindowThread() {
 // ------------------------------- VSync --------------------------------------
 // A cada periodo conclui no maximo um flip pendente: atualiza o status e dispara o evento.
 void VsyncThread() {
-    auto last_flip = std::chrono::steady_clock::now();
+    auto next = std::chrono::steady_clock::now();
     for (;;) {
-        std::unique_lock lock(g_mutex);
-        g_flip_cv.wait(lock, [] { return !g_pending.empty(); });
-
-        if (!g_unlocked_fps.load(std::memory_order_relaxed)) {
-            const int rate = g_force_60hz.load(std::memory_order_relaxed) ? 0 : g_flip_rate;
-            const auto target_interval = std::chrono::microseconds(16667 * (rate + 1));
-            const auto now = std::chrono::steady_clock::now();
-            const auto elapsed = now - last_flip;
-            if (elapsed < target_interval) {
-                const auto wait_dur = target_interval - elapsed;
-                lock.unlock();
-                std::this_thread::sleep_for(wait_dur);
-                lock.lock();
+        if (g_unlocked_fps.load(std::memory_order_relaxed)) {
+            std::unique_lock lock(g_mutex);
+            g_flip_cv.wait(lock, [] { return !g_pending.empty() || !g_unlocked_fps.load(std::memory_order_relaxed); });
+            if (!g_unlocked_fps.load(std::memory_order_relaxed) || g_pending.empty()) {
+                continue;
             }
-        }
-        if (g_pending.empty()) {
+            const PendingFlip flip = g_pending.front();
+            g_pending.pop_front();
+            const u64 now_us = NowMicros();
+            ++g_status.count;
+            g_status.process_time = now_us;
+            g_status.tsc = __rdtsc();
+            g_status.submit_tsc = flip.submit_time;
+            g_status.flip_arg = flip.flip_arg;
+            g_status.current_buffer = flip.buffer_index;
+            g_status.gc_queue_num = 0;
+            g_status.flip_pending_num = static_cast<s32>(g_pending.size());
+            g_flip_count.store(g_status.count);
+            const s64 event_data = static_cast<s64>((now_us & 0xFFF) | ((g_status.count & 0xF) << 12) |
+                                                    (static_cast<u64>(flip.flip_arg) << 16));
+            const std::vector<FlipListener> listeners = g_listeners;
+            lock.unlock();
+            for (const FlipListener& listener : listeners) {
+                equeue::Trigger(listener.queue, kEventFlip, equeue::kFilterVideoOut, event_data);
+            }
             continue;
         }
-        const PendingFlip flip = g_pending.front();
-        g_pending.pop_front();
-        last_flip = std::chrono::steady_clock::now();
-        const u64 now_us = NowMicros();
-        ++g_status.count;
-        g_status.process_time = now_us;
-        g_status.tsc = __rdtsc();
-        g_status.submit_tsc = flip.submit_time;
-        g_status.flip_arg = flip.flip_arg;
-        g_status.current_buffer = flip.buffer_index;
-        g_status.gc_queue_num = 0;
-        g_status.flip_pending_num = static_cast<s32>(g_pending.size());
-        g_flip_count.store(g_status.count);
-        // SceVideoOutEventData: time:12 | count:4 | flipArg:48
-        const s64 event_data = static_cast<s64>((now_us & 0xFFF) | ((g_status.count & 0xF) << 12) |
-                                                (static_cast<u64>(flip.flip_arg) << 16));
-        const std::vector<FlipListener> listeners = g_listeners;
-        lock.unlock();
 
+        int rate;
+        {
+            std::lock_guard lock(g_mutex);
+            rate = g_force_60hz.load(std::memory_order_relaxed) ? 0 : g_flip_rate;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (next < now) {
+            next = now;
+        }
+        next += std::chrono::microseconds(16667) * (rate + 1);
+        std::this_thread::sleep_until(next);
+
+        std::vector<FlipListener> listeners;
+        s64 event_data = 0;
+        {
+            std::lock_guard lock(g_mutex);
+            if (g_pending.empty()) {
+                continue;
+            }
+            const PendingFlip flip = g_pending.front();
+            g_pending.pop_front();
+            const u64 now = NowMicros();
+            ++g_status.count;
+            g_status.process_time = now;
+            g_status.tsc = __rdtsc();
+            g_status.submit_tsc = flip.submit_time;
+            g_status.flip_arg = flip.flip_arg;
+            g_status.current_buffer = flip.buffer_index;
+            g_status.gc_queue_num = 0;
+            g_status.flip_pending_num = static_cast<s32>(g_pending.size());
+            g_flip_count.store(g_status.count);
+            // SceVideoOutEventData: time:12 | count:4 | flipArg:48
+            event_data = static_cast<s64>((now & 0xFFF) | ((g_status.count & 0xF) << 12) |
+                                          (static_cast<u64>(flip.flip_arg) << 16));
+            listeners = g_listeners;
+        }
         for (const FlipListener& listener : listeners) {
             equeue::Trigger(listener.queue, kEventFlip, equeue::kFilterVideoOut, event_data);
         }
@@ -693,6 +720,7 @@ void SetForce60Hz(bool enabled) {
 
 void SetUnlockedFps(bool enabled) {
     g_unlocked_fps = enabled;
+    g_flip_cv.notify_all();
 }
 
 bool IsUnlockedFps() {

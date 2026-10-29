@@ -2819,7 +2819,7 @@ void PipelineWorker() {
         // aquecimento e pedidos sem pressa ficam abaixo do normal e nao disputam a CPU com o jogo.
         const bool urgent = job.fast || (!job.upgrade && !job.prewarm);
         SetThreadPriority(GetCurrentThread(), urgent ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
-        g_pipeline_flags = job.fast ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0;
+        g_pipeline_flags = (job.fast || job.prewarm) ? VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT : 0;
         if (!job.vs || !job.ps) {
             ResolvePairModules(job.draw.pair, &job.vs, &job.ps); // Fase 59: par do pacote registrado sem modulos
         }
@@ -2982,12 +2982,12 @@ u64 g_draws_late_texture = 0;
 // ate g_burst_wait_ms: um engasgo curto no corte, no lugar de objetos faltando.
 // Fase 56: limiar 1 e teto 400 ms: o frame nao sai sem objetos (a 1a vez vira um engasgo no corte, sem
 // pop-in). Os pipelines urgentes saem sem otimizacao (Fase 56), o que encurta esse engasgo.
-double g_burst_wait_ms = 0.0;
+double g_burst_wait_ms = 16.0; // Teto de 1 frame (16 ms) para compilar sem pop-in preto
 u32 g_burst_threshold = 1;
 
 void WaitFramePipelines() {
     const auto start = std::chrono::steady_clock::now();
-    double budget = std::clamp(g_sync_budget_ms - g_frame_wait_spent_ms, 0.0, 2.0);
+    double budget = std::clamp(g_sync_budget_ms - g_frame_wait_spent_ms, 0.0, 16.0); // ate 1 frame
     g_frame_wait_spent_ms = 0;
     if (g_burst_wait_ms > budget) {
         std::unordered_set<u64> pending;
