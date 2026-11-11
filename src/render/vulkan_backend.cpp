@@ -901,7 +901,7 @@ bool CreateDevice() {
             }
         }
         if (all_ok) {
-            void* features_ptr = info.pNext;
+            void* features_ptr = &want;
             if (g_xess_api.VKGetRequiredDeviceFeatures(g.instance, g.physical, &features_ptr) == XESS_RESULT_SUCCESS) {
                 info.pNext = features_ptr;
                 g_xess_device_ready = true;
@@ -5407,6 +5407,8 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
 
 std::atomic<bool> g_xess_wanted{false};
 std::atomic<bool> g_xess_native{false};
+std::atomic<u32> g_upscale_target_w{0}, g_upscale_target_h{0};
+std::atomic<u32> g_render_actual_w{1920}, g_render_actual_h{1080};
 
 struct XessRuntime {
     xess_context_handle_t context = nullptr;
@@ -8130,8 +8132,6 @@ void VulkanRenderer::SetPrewarmPredicted(bool enabled) {
 // 1.9.1: resolucao em que o jogo e desenhado (antes de criar qualquer alvo). Por enquanto em 16:9: numa tela de outra
 // proporcao, o maior 16:9 que cabe nela (a imagem do jogo continua 16:9).
 u32 g_render_out_w = 1920, g_render_out_h = 1080, g_render_scale_pct = 100;
-std::atomic<u32> g_upscale_target_w{0}, g_upscale_target_h{0};
-std::atomic<u32> g_render_actual_w{1920}, g_render_actual_h{1080};
 
 void VulkanRenderer::SetTargetUpscaleResolution(u32 width, u32 height) {
     g_upscale_target_w = width;
