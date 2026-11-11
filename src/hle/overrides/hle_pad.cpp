@@ -688,17 +688,34 @@ HLE_IMPL(int, scePadReadState, int handle, PadData* data, u64 guest_rbp) {
     }
     ReadScript(in);
 
-    // Menu de Configuracoes de Video (L3 + R3 no controle)
+    // Menu de Configuracoes de Video / Imagem (L3 + R3 no controle)
     static bool s_menu_combo_held = false;
     const bool menu_combo_now = ((in.buttons & (kL3 | kR3)) == (kL3 | kR3));
     if (menu_combo_now && !s_menu_combo_held) {
-        videoout::ToggleVideoSettingsMenu();
+        if (videoout::IsImageSettingsMenuOpen()) {
+            videoout::ToggleImageSettingsMenu();
+        } else {
+            videoout::ToggleVideoSettingsMenu();
+        }
     }
     s_menu_combo_held = menu_combo_now;
 
     if (videoout::IsVideoSettingsMenuOpen()) {
         videoout::HandleVideoMenuController(in.buttons);
         in.buttons = 0;
+        in.l2 = 0;
+        in.r2 = 0;
+        in.lx = 128;
+        in.ly = 128;
+        in.rx = 128;
+        in.ry = 128;
+    }
+
+    if (videoout::IsImageSettingsMenuOpen()) {
+        videoout::HandleImageMenuController(in.buttons);
+        in.buttons = 0;
+        in.l2 = 0;
+        in.r2 = 0;
         in.lx = 128;
         in.ly = 128;
         in.rx = 128;

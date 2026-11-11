@@ -1142,12 +1142,18 @@ bool CreateFrameObjects() {
 }
 
 // ------------------- shaders proprios, montados palavra a palavra -------------------
-// Nao ha compilador GLSL nesta maquina (sem Vulkan SDK), entao os dois shaders base sao
+// Nao ha compilador GLSL nesta maquina (sem Vulkan SDK), entao os shaders base sao
 // escritos direto em SPIR-V. Equivalem a:
 //   vertice:   layout(location=0) in vec4 pos; layout(location=1) in vec4 cor;
 //              layout(push_constant) uniform PC { mat4 mvp; vec4 tinta; };
 //              gl_Position = mvp * vec4(pos.xyz, 1); saida = cor * tinta;
 //   fragmento: cor de saida = cor recebida (sem textura).
+inline u32 FloatBits(float value) {
+    u32 bits;
+    std::memcpy(&bits, &value, 4);
+    return bits;
+}
+
 class SpirvBuilder {
 public:
     void Op(u32 opcode, std::initializer_list<u32> operands) {
@@ -1286,6 +1292,231 @@ std::vector<u32> BuildFragmentShader() {
     b.Op(87, {kV4, kTexel, kLoaded, kUv2}); // OpImageSampleImplicitLod
     b.Op(133, {kV4, kResult, kColor, kTexel});
     b.Op(62, {kOut, kResult});
+    b.Op(253, {});
+    b.Op(56, {});
+    return b.Finish(kBound);
+}
+
+// Fragment shader de controle de imagem em tempo real (F3): nitidez adaptativa, balanco RGB/temperatura/matiz,
+// contraste, brilho, gama, saturacao Rec.709 e vibracao seletiva.
+std::vector<u32> BuildColorGradeFragmentShader() {
+    enum : u32 {
+        kGlsl = 1, kVoid, kFn, kBool, kInt, kFloat, kV2, kV3, kV4,
+        kImage, kSampled, kPtrSampled, kPtrInV4, kPtrOutV4, kPcStruct, kPtrPc, kPtrPcV4,
+        kTex, kFragCoord, kOutColor, kPcVar,
+        kI0, kI1, kI2, kI3,
+        kF0, kF1, kF0_5, kF0_25, kF0_08, kF0_001, kF1_35, kFeps, kLumaR, kLumaG, kLumaB,
+        kV3Zero, kV3One, kV3Half, kV3Eps, kV3EdgePad, kV3LumaW,
+        kMain, kEntry,
+        kP0, kPcRect, kP1, kPcInvBright, kP2, kPcColor, kP3, kPcRgb,
+        kFc, kFcXy, kRectXy, kRectWh, kDeltaXy, kUv, kTexVal, kS0, kCCenter,
+        kSharp, kDoSharp, kLblSharp, kLblAfterSharp,
+        kInvW, kInvH, kDx, kDy, kUvN, kUvS, kUvE, kUvW,
+        kSn4, kSs4, kSe4, kSw4, kSn, kSs, kSe, kSw,
+        kSumNs, kSumEw, kSum4, kAvg, kDiff, kSAmt, kDiffS, kCBoost,
+        kMnNs, kMnEw, kMn4, kMnAll, kMnLo, kMnBound,
+        kMxNs, kMxEw, kMx4, kMxAll, kMxHi, kMxBound, kCSharp,
+        kCBase, kGains, kCRgb,
+        kBright, kContrast, kCMid, kCCon, kHalfBright, kV3Hb, kCBc,
+        kCPos, kInvGamma, kV3Ig, kCGam,
+        kLuma1, kV3Luma1, kSat, kV3Sat, kCSat,
+        kCr, kCg, kCb, kMxRg, kMxCh, kMnRg, kMnCh, kSatAmt, kOneMinusSat,
+        kVib, kVibBoost, kVibPos, kVibNeg, kIsVibPos, kVibRaw, kVibScale,
+        kLuma2, kV3Luma2, kV3Vib, kCVib, kCFinal,
+        kRf, kGf, kBf, kOut4, kBound
+    };
+    SpirvBuilder b;
+    b.Op(17, {1}); // OpCapability Shader
+    b.OpString(11, {kGlsl}, "GLSL.std.450", {});
+    b.Op(14, {0, 1}); // OpMemoryModel Logical GLSL450
+    b.OpString(15, {4, kMain}, "main", {kFragCoord, kOutColor});
+    b.Op(16, {kMain, 7}); // OriginUpperLeft
+
+    // Annotations
+    b.Op(71, {kFragCoord, 11, 15}); // BuiltIn FragCoord
+    b.Op(71, {kOutColor, 30, 0});   // Location 0
+    b.Op(71, {kTex, 34, 0});        // DescriptorSet 0
+    b.Op(71, {kTex, 33, 0});        // Binding 0
+    b.Op(71, {kPcStruct, 2});       // Block
+    b.Op(72, {kPcStruct, 0, 35, 0});
+    b.Op(72, {kPcStruct, 1, 35, 16});
+    b.Op(72, {kPcStruct, 2, 35, 32});
+    b.Op(72, {kPcStruct, 3, 35, 48});
+
+    // Types
+    b.Op(19, {kVoid});
+    b.Op(33, {kFn, kVoid});
+    b.Op(20, {kBool});
+    b.Op(21, {kInt, 32, 1});
+    b.Op(22, {kFloat, 32});
+    b.Op(23, {kV2, kFloat, 2});
+    b.Op(23, {kV3, kFloat, 3});
+    b.Op(23, {kV4, kFloat, 4});
+    b.Op(25, {kImage, kFloat, 1, 0, 0, 0, 1, 0});
+    b.Op(27, {kSampled, kImage});
+    b.Op(32, {kPtrSampled, 0, kSampled});
+    b.Op(32, {kPtrInV4, 1, kV4});
+    b.Op(32, {kPtrOutV4, 3, kV4});
+    b.Op(30, {kPcStruct, kV4, kV4, kV4, kV4});
+    b.Op(32, {kPtrPc, 9, kPcStruct});
+    b.Op(32, {kPtrPcV4, 9, kV4});
+
+    // Constants
+    b.Op(43, {kInt, kI0, 0});
+    b.Op(43, {kInt, kI1, 1});
+    b.Op(43, {kInt, kI2, 2});
+    b.Op(43, {kInt, kI3, 3});
+    b.Op(43, {kFloat, kF0, FloatBits(0.0f)});
+    b.Op(43, {kFloat, kF1, FloatBits(1.0f)});
+    b.Op(43, {kFloat, kF0_5, FloatBits(0.5f)});
+    b.Op(43, {kFloat, kF0_25, FloatBits(0.25f)});
+    b.Op(43, {kFloat, kF0_08, FloatBits(0.08f)});
+    b.Op(43, {kFloat, kF0_001, FloatBits(0.001f)});
+    b.Op(43, {kFloat, kF1_35, FloatBits(1.35f)});
+    b.Op(43, {kFloat, kFeps, FloatBits(1e-6f)});
+    b.Op(43, {kFloat, kLumaR, FloatBits(0.2126f)});
+    b.Op(43, {kFloat, kLumaG, FloatBits(0.7152f)});
+    b.Op(43, {kFloat, kLumaB, FloatBits(0.0722f)});
+    b.Op(44, {kV3, kV3Zero, kF0, kF0, kF0});
+    b.Op(44, {kV3, kV3One, kF1, kF1, kF1});
+    b.Op(44, {kV3, kV3Half, kF0_5, kF0_5, kF0_5});
+    b.Op(44, {kV3, kV3Eps, kFeps, kFeps, kFeps});
+    b.Op(44, {kV3, kV3EdgePad, kF0_08, kF0_08, kF0_08});
+    b.Op(44, {kV3, kV3LumaW, kLumaR, kLumaG, kLumaB});
+
+    // Global variables
+    b.Op(59, {kPtrSampled, kTex, 0});
+    b.Op(59, {kPtrInV4, kFragCoord, 1});
+    b.Op(59, {kPtrOutV4, kOutColor, 3});
+    b.Op(59, {kPtrPc, kPcVar, 9});
+
+    // void main()
+    b.Op(54, {kVoid, kMain, 0, kFn});
+    b.Op(248, {kEntry});
+    b.Op(65, {kPtrPcV4, kP0, kPcVar, kI0});
+    b.Op(61, {kV4, kPcRect, kP0});
+    b.Op(65, {kPtrPcV4, kP1, kPcVar, kI1});
+    b.Op(61, {kV4, kPcInvBright, kP1});
+    b.Op(65, {kPtrPcV4, kP2, kPcVar, kI2});
+    b.Op(61, {kV4, kPcColor, kP2});
+    b.Op(65, {kPtrPcV4, kP3, kPcVar, kI3});
+    b.Op(61, {kV4, kPcRgb, kP3});
+
+    b.Op(61, {kV4, kFc, kFragCoord});
+    b.Op(79, {kV2, kFcXy, kFc, kFc, 0, 1});
+    b.Op(79, {kV2, kRectXy, kPcRect, kPcRect, 0, 1});
+    b.Op(79, {kV2, kRectWh, kPcRect, kPcRect, 2, 3});
+    b.Op(131, {kV2, kDeltaXy, kFcXy, kRectXy});
+    b.Op(136, {kV2, kUv, kDeltaXy, kRectWh}); // OpFDiv
+
+    b.Op(61, {kSampled, kTexVal, kTex});
+    b.Op(87, {kV4, kS0, kTexVal, kUv});
+    b.Op(79, {kV3, kCCenter, kS0, kS0, 0, 1, 2});
+
+    // Optional contrast-adaptive sharpening if sharpness > 0.001
+    b.Op(81, {kFloat, kSharp, kPcColor, 3});
+    b.Op(186, {kBool, kDoSharp, kSharp, kF0_001}); // OpFOrdGreaterThan
+    b.Op(247, {kLblAfterSharp, 0});                // OpSelectionMerge
+    b.Op(250, {kDoSharp, kLblSharp, kLblAfterSharp}); // OpBranchConditional
+
+    b.Op(248, {kLblSharp});
+    b.Op(81, {kFloat, kInvW, kPcInvBright, 0});
+    b.Op(81, {kFloat, kInvH, kPcInvBright, 1});
+    b.Op(80, {kV2, kDx, kInvW, kF0});
+    b.Op(80, {kV2, kDy, kF0, kInvH});
+    b.Op(131, {kV2, kUvN, kUv, kDy});
+    b.Op(129, {kV2, kUvS, kUv, kDy});
+    b.Op(129, {kV2, kUvE, kUv, kDx});
+    b.Op(131, {kV2, kUvW, kUv, kDx});
+    b.Op(87, {kV4, kSn4, kTexVal, kUvN});
+    b.Op(87, {kV4, kSs4, kTexVal, kUvS});
+    b.Op(87, {kV4, kSe4, kTexVal, kUvE});
+    b.Op(87, {kV4, kSw4, kTexVal, kUvW});
+    b.Op(79, {kV3, kSn, kSn4, kSn4, 0, 1, 2});
+    b.Op(79, {kV3, kSs, kSs4, kSs4, 0, 1, 2});
+    b.Op(79, {kV3, kSe, kSe4, kSe4, 0, 1, 2});
+    b.Op(79, {kV3, kSw, kSw4, kSw4, 0, 1, 2});
+    b.Op(129, {kV3, kSumNs, kSn, kSs});
+    b.Op(129, {kV3, kSumEw, kSe, kSw});
+    b.Op(129, {kV3, kSum4, kSumNs, kSumEw});
+    b.Op(142, {kV3, kAvg, kSum4, kF0_25});
+    b.Op(131, {kV3, kDiff, kCCenter, kAvg});
+    b.Op(133, {kFloat, kSAmt, kSharp, kF1_35});
+    b.Op(142, {kV3, kDiffS, kDiff, kSAmt});
+    b.Op(129, {kV3, kCBoost, kCCenter, kDiffS});
+    b.Op(12, {kV3, kMnNs, kGlsl, 37, kSn, kSs}); // FMin
+    b.Op(12, {kV3, kMnEw, kGlsl, 37, kSe, kSw});
+    b.Op(12, {kV3, kMn4, kGlsl, 37, kMnNs, kMnEw});
+    b.Op(12, {kV3, kMnAll, kGlsl, 37, kCCenter, kMn4});
+    b.Op(131, {kV3, kMnLo, kMnAll, kV3EdgePad});
+    b.Op(12, {kV3, kMnBound, kGlsl, 40, kV3Zero, kMnLo}); // FMax
+    b.Op(12, {kV3, kMxNs, kGlsl, 40, kSn, kSs});         // FMax
+    b.Op(12, {kV3, kMxEw, kGlsl, 40, kSe, kSw});
+    b.Op(12, {kV3, kMx4, kGlsl, 40, kMxNs, kMxEw});
+    b.Op(12, {kV3, kMxAll, kGlsl, 40, kCCenter, kMx4});
+    b.Op(129, {kV3, kMxHi, kMxAll, kV3EdgePad});
+    b.Op(12, {kV3, kMxBound, kGlsl, 37, kV3One, kMxHi}); // FMin
+    b.Op(12, {kV3, kCSharp, kGlsl, 43, kCBoost, kMnBound, kMxBound}); // FClamp
+    b.Op(249, {kLblAfterSharp}); // OpBranch
+
+    b.Op(248, {kLblAfterSharp});
+    b.Op(245, {kV3, kCBase, kCSharp, kLblSharp, kCCenter, kEntry}); // OpPhi
+
+    // RGB gains (temp + tint + R/G/B combined)
+    b.Op(79, {kV3, kGains, kPcRgb, kPcRgb, 0, 1, 2});
+    b.Op(133, {kV3, kCRgb, kCBase, kGains});
+
+    // Contrast & Brightness
+    b.Op(81, {kFloat, kBright, kPcInvBright, 2});
+    b.Op(81, {kFloat, kContrast, kPcInvBright, 3});
+    b.Op(131, {kV3, kCMid, kCRgb, kV3Half});
+    b.Op(142, {kV3, kCCon, kCMid, kContrast});
+    b.Op(129, {kFloat, kHalfBright, kF0_5, kBright});
+    b.Op(80, {kV3, kV3Hb, kHalfBright, kHalfBright, kHalfBright});
+    b.Op(129, {kV3, kCBc, kCCon, kV3Hb});
+
+    // Gamma
+    b.Op(12, {kV3, kCPos, kGlsl, 40, kCBc, kV3Eps}); // FMax(..., 1e-6)
+    b.Op(81, {kFloat, kInvGamma, kPcColor, 2});
+    b.Op(80, {kV3, kV3Ig, kInvGamma, kInvGamma, kInvGamma});
+    b.Op(12, {kV3, kCGam, kGlsl, 26, kCPos, kV3Ig}); // Pow
+
+    // Saturation (Rec.709)
+    b.Op(148, {kFloat, kLuma1, kCGam, kV3LumaW}); // OpDot
+    b.Op(80, {kV3, kV3Luma1, kLuma1, kLuma1, kLuma1});
+    b.Op(81, {kFloat, kSat, kPcColor, 0});
+    b.Op(80, {kV3, kV3Sat, kSat, kSat, kSat});
+    b.Op(12, {kV3, kCSat, kGlsl, 46, kV3Luma1, kCGam, kV3Sat}); // FMix
+
+    // Selective Vibrance
+    b.Op(81, {kFloat, kCr, kCSat, 0});
+    b.Op(81, {kFloat, kCg, kCSat, 1});
+    b.Op(81, {kFloat, kCb, kCSat, 2});
+    b.Op(12, {kFloat, kMxRg, kGlsl, 40, kCr, kCg});
+    b.Op(12, {kFloat, kMxCh, kGlsl, 40, kMxRg, kCb});
+    b.Op(12, {kFloat, kMnRg, kGlsl, 37, kCr, kCg});
+    b.Op(12, {kFloat, kMnCh, kGlsl, 37, kMnRg, kCb});
+    b.Op(131, {kFloat, kSatAmt, kMxCh, kMnCh});
+    b.Op(131, {kFloat, kOneMinusSat, kF1, kSatAmt});
+    b.Op(81, {kFloat, kVib, kPcColor, 1});
+    b.Op(133, {kFloat, kVibBoost, kVib, kOneMinusSat});
+    b.Op(129, {kFloat, kVibPos, kF1, kVibBoost});
+    b.Op(129, {kFloat, kVibNeg, kF1, kVib});
+    b.Op(190, {kBool, kIsVibPos, kVib, kF0}); // OpFOrdGreaterThanEqual
+    b.Op(169, {kFloat, kVibRaw, kIsVibPos, kVibPos, kVibNeg}); // OpSelect
+    b.Op(12, {kFloat, kVibScale, kGlsl, 40, kVibRaw, kF0});    // FMax
+    b.Op(148, {kFloat, kLuma2, kCSat, kV3LumaW});
+    b.Op(80, {kV3, kV3Luma2, kLuma2, kLuma2, kLuma2});
+    b.Op(80, {kV3, kV3Vib, kVibScale, kVibScale, kVibScale});
+    b.Op(12, {kV3, kCVib, kGlsl, 46, kV3Luma2, kCSat, kV3Vib}); // FMix
+
+    // Clamp & store
+    b.Op(12, {kV3, kCFinal, kGlsl, 43, kCVib, kV3Zero, kV3One}); // FClamp
+    b.Op(81, {kFloat, kRf, kCFinal, 0});
+    b.Op(81, {kFloat, kGf, kCFinal, 1});
+    b.Op(81, {kFloat, kBf, kCFinal, 2});
+    b.Op(80, {kV4, kOut4, kRf, kGf, kBf, kF1});
+    b.Op(62, {kOutColor, kOut4});
     b.Op(253, {});
     b.Op(56, {});
     return b.Finish(kBound);
@@ -4176,7 +4407,7 @@ struct FsrState {
     bool tried = false, ok = false;
     VkShaderModule vert = VK_NULL_HANDLE, easu_fs = VK_NULL_HANDLE, rcas_fs = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkPipeline easu = VK_NULL_HANDLE, rcas = VK_NULL_HANDLE;
+    VkPipeline easu = VK_NULL_HANDLE, rcas = VK_NULL_HANDLE, rcas_rt = VK_NULL_HANDLE;
     VkFormat rcas_format = VK_FORMAT_UNDEFINED;
     VkDescriptorSet easu_set = VK_NULL_HANDLE, rcas_set = VK_NULL_HANDLE;
     VkImage image = VK_NULL_HANDLE;
@@ -4272,6 +4503,7 @@ bool EnsureFsr() {
         g_fsr.rcas_set = sets[1];
         if (g_fsr.ok) {
             g_fsr.easu = FsrPipeline(g_fsr.easu_fs, VK_FORMAT_R8G8B8A8_UNORM);
+            g_fsr.rcas_rt = FsrPipeline(g_fsr.rcas_fs, VK_FORMAT_R8G8B8A8_UNORM);
             g_fsr.ok = g_fsr.easu != VK_NULL_HANDLE;
         }
         std::printf("[FSR] AMD FidelityFX FSR 1: %s\n", g_fsr.ok ? "ready" : "FAILED (bilinear instead)");
@@ -4343,12 +4575,6 @@ bool EnsureFsrImage(u32 width, u32 height) {
     return true;
 }
 
-u32 FloatBits(float value) {
-    u32 bits;
-    std::memcpy(&bits, &value, 4);
-    return bits;
-}
-
 // EASU: imagem do jogo -> intermediaria (fora de qualquer passagem de render). Devolve se o RCAS deve ser usado.
 void PointRcas(VkImageView view);
 
@@ -4411,11 +4637,11 @@ void PointRcas(VkImageView view) {
     vk.vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
 }
 
-// RCAS: intermediaria -> janela (dentro da passagem da janela), na area (x, y, w, h).
-void FsrRcasDraw(float x, float y, float w, float h) {
+// RCAS: intermediaria -> destino (janela ou RT intermediaria), na area (x, y, w, h).
+void FsrRcasDraw(float x, float y, float w, float h, VkPipeline target_pipeline = VK_NULL_HANDLE) {
     const VkViewport viewport{x, y, w, h, 0.0f, 1.0f};
     const VkRect2D scissor{{static_cast<s32>(x), static_cast<s32>(y)}, {static_cast<u32>(w), static_cast<u32>(h)}};
-    vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, g_fsr.rcas);
+    vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, target_pipeline ? target_pipeline : g_fsr.rcas);
     vk.vkCmdSetViewport(g.command, 0, 1, &viewport);
     vk.vkCmdSetScissor(g.command, 0, 1, &scissor);
     FsrPush push{};
@@ -5617,7 +5843,10 @@ bool XessPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out
     return true;
 }
 
+void DestroyPostPipelines();
+
 void DestroyUpscalerContexts() {
+    DestroyPostPipelines();
     DestroyXessContext();
     DestroyOwnImage(g_xess.output);
     if (g_xess.pool && g.device) {
@@ -5738,7 +5967,7 @@ void GrabFlush() {
 struct DownState {
     bool tried = false;
     VkShaderModule fs = VK_NULL_HANDLE;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE, pipeline_rt = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkDescriptorSet set = VK_NULL_HANDLE;
 } g_down;
@@ -5757,6 +5986,9 @@ bool EnsureDown() {
         if (vk.vkAllocateDescriptorSets(g.device, &allocate, &g_down.set) != VK_SUCCESS) {
             g_down.set = VK_NULL_HANDLE;
         }
+        if (g_down.fs) {
+            g_down.pipeline_rt = FsrPipeline(g_down.fs, VK_FORMAT_R8G8B8A8_UNORM);
+        }
     }
     if (!g_down.fs || !g_down.set) {
         return false;
@@ -5771,7 +6003,8 @@ bool EnsureDown() {
     return g_down.pipeline != VK_NULL_HANDLE;
 }
 
-void DownscaleDraw(VkImageView view, u32 src_w, u32 src_h, float x, float y, float w, float h) {
+void DownscaleDraw(VkImageView view, u32 src_w, u32 src_h, float x, float y, float w, float h,
+                   VkPipeline target_pipeline = VK_NULL_HANDLE) {
     VkDescriptorImageInfo info{g.sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = g_down.set;
@@ -5781,7 +6014,7 @@ void DownscaleDraw(VkImageView view, u32 src_w, u32 src_h, float x, float y, flo
     vk.vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
     const VkViewport viewport{x, y, w, h, 0.0f, 1.0f};
     const VkRect2D scissor{{static_cast<s32>(x), static_cast<s32>(y)}, {static_cast<u32>(w), static_cast<u32>(h)}};
-    vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, g_down.pipeline);
+    vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, target_pipeline ? target_pipeline : g_down.pipeline);
     vk.vkCmdSetViewport(g.command, 0, 1, &viewport);
     vk.vkCmdSetScissor(g.command, 0, 1, &scissor);
     FsrPush push{};
@@ -5795,6 +6028,157 @@ void DownscaleDraw(VkImageView view, u32 src_w, u32 src_h, float x, float y, flo
     vk.vkCmdPushConstants(g.command, g_fsr.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vk.vkCmdBindDescriptorSets(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, g_fsr.layout, 0, 1, &g_down.set, 0, nullptr);
     vk.vkCmdDraw(g.command, 3, 1, 0, 0);
+}
+
+// ---- Controle de imagem em tempo real (painel F3): cor, brilho, contraste, saturacao, vibracao, gama, temperatura, nitidez ----
+std::mutex g_grade_mutex;
+ImageColorSettings g_grade_cfg;
+
+bool IsColorGradeActive(const ImageColorSettings& s) {
+    return std::fabs(s.brightness) > 1e-3f || std::fabs(s.contrast - 1.0f) > 1e-3f ||
+           std::fabs(s.saturation - 1.0f) > 1e-3f || std::fabs(s.vibrance) > 1e-3f ||
+           std::fabs(s.gamma - 1.0f) > 1e-3f || std::fabs(s.temperature) > 1e-3f ||
+           std::fabs(s.tint) > 1e-3f || std::fabs(s.red - 1.0f) > 1e-3f ||
+           std::fabs(s.green - 1.0f) > 1e-3f || std::fabs(s.blue - 1.0f) > 1e-3f ||
+           std::fabs(s.sharpness) > 1e-3f;
+}
+
+struct ColorGradePush {
+    float rect[4];           // x, y, w, h
+    float inv_src_bright[4]; // 1/src_w, 1/src_h, brightness, contrast
+    float color_params[4];   // saturation, vibrance, inv_gamma, sharpness
+    float rgb_gain[4];       // gain_r, gain_g, gain_b, 0
+};
+static_assert(sizeof(ColorGradePush) == 64);
+
+struct ColorGradeState {
+    bool tried = false, ok = false;
+    VkShaderModule vert = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    OwnImage rt;
+} g_grade;
+
+bool EnsureColorGrade() {
+    if (!g_grade.tried) {
+        g_grade.tried = true;
+        g_grade.vert = FsrModule(kFullscreenVert, sizeof(kFullscreenVert));
+        const std::vector<u32> spv = BuildColorGradeFragmentShader();
+        g_grade.fs = FsrModule(spv.data(), spv.size() * sizeof(u32));
+        VkPushConstantRange range{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ColorGradePush)};
+        VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        layout.setLayoutCount = 1;
+        layout.pSetLayouts = &g.set_layout;
+        layout.pushConstantRangeCount = 1;
+        layout.pPushConstantRanges = &range;
+        VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocate.descriptorPool = g.descriptor_pool;
+        allocate.descriptorSetCount = 1;
+        allocate.pSetLayouts = &g.set_layout;
+        g_grade.ok = g_grade.vert && g_grade.fs &&
+                     vk.vkCreatePipelineLayout(g.device, &layout, nullptr, &g_grade.layout) == VK_SUCCESS &&
+                     vk.vkAllocateDescriptorSets(g.device, &allocate, &g_grade.set) == VK_SUCCESS;
+    }
+    if (!g_grade.ok) {
+        return false;
+    }
+    if (g_grade.format != g.format.format) {
+        if (g_grade.pipeline) {
+            vk.vkDestroyPipeline(g.device, g_grade.pipeline, nullptr);
+        }
+        g_grade.pipeline = FsrPipeline(g_grade.fs, g.format.format, g_grade.vert, g_grade.layout);
+        g_grade.format = g.format.format;
+        g_grade.ok = g_grade.pipeline != VK_NULL_HANDLE;
+    }
+    return g_grade.ok;
+}
+
+void ColorGradeDraw(VkImageView view, u32 src_w, u32 src_h, float x, float y, float w, float h, const ImageColorSettings& cfg) {
+    VkDescriptorImageInfo info{g.sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = g_grade.set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &info;
+    vk.vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
+    const VkViewport viewport{x, y, w, h, 0.0f, 1.0f};
+    const VkRect2D scissor{{static_cast<s32>(x), static_cast<s32>(y)}, {static_cast<u32>(w), static_cast<u32>(h)}};
+    vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, g_grade.pipeline);
+    vk.vkCmdSetViewport(g.command, 0, 1, &viewport);
+    vk.vkCmdSetScissor(g.command, 0, 1, &scissor);
+
+    const float temp = std::clamp(cfg.temperature, -1.0f, 1.0f);
+    const float tint = std::clamp(cfg.tint, -1.0f, 1.0f);
+    const float temp_r = std::max(0.1f, 1.0f + 0.18f * temp);
+    const float temp_g = std::max(0.1f, 1.0f + 0.04f * temp);
+    const float temp_b = std::max(0.1f, 1.0f - 0.18f * temp);
+    const float tint_r = std::max(0.1f, 1.0f + 0.08f * tint);
+    const float tint_g = std::max(0.1f, 1.0f - 0.15f * tint);
+    const float tint_b = std::max(0.1f, 1.0f + 0.08f * tint);
+    const ColorGradePush push{
+        {x, y, std::max(1.0f, w), std::max(1.0f, h)},
+        {1.0f / static_cast<float>(std::max(1u, src_w)),
+         1.0f / static_cast<float>(std::max(1u, src_h)),
+         std::clamp(cfg.brightness, -0.5f, 0.5f),
+         std::clamp(cfg.contrast, 0.1f, 3.0f)},
+        {std::clamp(cfg.saturation, 0.0f, 3.0f),
+         std::clamp(cfg.vibrance, -1.0f, 1.0f),
+         1.0f / std::clamp(cfg.gamma, 0.25f, 4.0f),
+         std::clamp(cfg.sharpness, 0.0f, 1.0f)},
+        {std::clamp(cfg.red, 0.1f, 2.0f) * temp_r * tint_r,
+         std::clamp(cfg.green, 0.1f, 2.0f) * temp_g * tint_g,
+         std::clamp(cfg.blue, 0.1f, 2.0f) * temp_b * tint_b,
+         0.0f},
+    };
+    vk.vkCmdPushConstants(g.command, g_grade.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vk.vkCmdBindDescriptorSets(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, g_grade.layout, 0, 1, &g_grade.set, 0, nullptr);
+    vk.vkCmdDraw(g.command, 3, 1, 0, 0);
+}
+
+void ResetDynamicPipelineState() {
+    if (!g.gpl) {
+        return;
+    }
+    vk.vkCmdSetCullMode(g.command, VK_CULL_MODE_NONE);
+    vk.vkCmdSetFrontFace(g.command, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    if (g.set_depth_clamp) {
+        g.set_depth_clamp(g.command, VK_FALSE);
+    }
+    vk.vkCmdSetDepthTestEnable(g.command, VK_FALSE);
+    vk.vkCmdSetDepthWriteEnable(g.command, VK_FALSE);
+    vk.vkCmdSetDepthCompareOp(g.command, VK_COMPARE_OP_ALWAYS);
+    vk.vkCmdSetStencilTestEnable(g.command, VK_FALSE);
+}
+
+void DestroyPostPipelines() {
+    if (!g.device) {
+        return;
+    }
+    DestroyOwnImage(g_grade.rt);
+    if (g_grade.pipeline) vk.vkDestroyPipeline(g.device, g_grade.pipeline, nullptr);
+    if (g_grade.layout) vk.vkDestroyPipelineLayout(g.device, g_grade.layout, nullptr);
+    if (g_grade.fs) vk.vkDestroyShaderModule(g.device, g_grade.fs, nullptr);
+    if (g_grade.vert) vk.vkDestroyShaderModule(g.device, g_grade.vert, nullptr);
+    g_grade = ColorGradeState{};
+
+    if (g_down.pipeline) vk.vkDestroyPipeline(g.device, g_down.pipeline, nullptr);
+    if (g_down.pipeline_rt) vk.vkDestroyPipeline(g.device, g_down.pipeline_rt, nullptr);
+    if (g_down.fs) vk.vkDestroyShaderModule(g.device, g_down.fs, nullptr);
+    g_down = DownState{};
+
+    if (g_fsr.easu) vk.vkDestroyPipeline(g.device, g_fsr.easu, nullptr);
+    if (g_fsr.rcas) vk.vkDestroyPipeline(g.device, g_fsr.rcas, nullptr);
+    if (g_fsr.rcas_rt) vk.vkDestroyPipeline(g.device, g_fsr.rcas_rt, nullptr);
+    if (g_fsr.layout) vk.vkDestroyPipelineLayout(g.device, g_fsr.layout, nullptr);
+    if (g_fsr.vert) vk.vkDestroyShaderModule(g.device, g_fsr.vert, nullptr);
+    if (g_fsr.easu_fs) vk.vkDestroyShaderModule(g.device, g_fsr.easu_fs, nullptr);
+    if (g_fsr.rcas_fs) vk.vkDestroyShaderModule(g.device, g_fsr.rcas_fs, nullptr);
+    if (g_fsr.view) vk.vkDestroyImageView(g.device, g_fsr.view, nullptr);
+    if (g_fsr.image) vk.vkDestroyImage(g.device, g_fsr.image, nullptr);
+    if (g_fsr.memory) vk.vkFreeMemory(g.device, g_fsr.memory, nullptr);
+    g_fsr = FsrState{};
 }
 } // namespace
 
@@ -6506,6 +6890,48 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     const u32 present_w = ffx ? g_ffx.output.width : xess ? g_xess.output.width : shown ? shown->width : 0;
     const u32 present_h = ffx ? g_ffx.output.height : xess ? g_xess.output.height : shown ? shown->height : 0;
     const bool down = !fsr && present_pipeline && (present_w > out_w * 1.01f || present_h > out_h * 1.01f) && EnsureDown();
+    const ImageColorSettings grade_cfg = GetImageColorSettings();
+    VkImageView grade_view = present_view;
+    u32 grade_src_w = present_w ? present_w : (shown ? shown->width : 1);
+    u32 grade_src_h = present_h ? present_h : (shown ? shown->height : 1);
+    bool grade = shown && present_pipeline && IsColorGradeActive(grade_cfg) && EnsureColorGrade();
+    if (grade && ((fsr && !g_fsr.rcas_rt) || (down && !g_down.pipeline_rt))) {
+        grade = false;
+    }
+    if (grade && (fsr || down)) {
+        const u32 uw = std::max(1u, static_cast<u32>(out_w));
+        const u32 uh = std::max(1u, static_cast<u32>(out_h));
+        if (EnsureOwnImage(g_grade.rt, uw, uh, VK_FORMAT_R8G8B8A8_UNORM,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)) {
+            Transition(g.command, g_grade.rt.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingAttachmentInfo rt_att{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            rt_att.imageView = g_grade.rt.view;
+            rt_att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            rt_att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            rt_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo rt_info{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            rt_info.renderArea = {{0, 0}, {uw, uh}};
+            rt_info.layerCount = 1;
+            rt_info.colorAttachmentCount = 1;
+            rt_info.pColorAttachments = &rt_att;
+            vk.vkCmdBeginRendering(g.command, &rt_info);
+            ResetDynamicPipelineState();
+            if (fsr) {
+                FsrRcasDraw(0.0f, 0.0f, static_cast<float>(uw), static_cast<float>(uh), g_fsr.rcas_rt);
+            } else {
+                DownscaleDraw(present_view, present_w, present_h, 0.0f, 0.0f, static_cast<float>(uw), static_cast<float>(uh), g_down.pipeline_rt);
+            }
+            vk.vkCmdEndRendering(g.command);
+            Transition(g.command, g_grade.rt.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            grade_view = g_grade.rt.view;
+            grade_src_w = uw;
+            grade_src_h = uh;
+        } else {
+            grade = false;
+        }
+    }
     Transition(g.command, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     VkRenderingAttachmentInfo window{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -6523,24 +6949,16 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &window;
     vk.vkCmdBeginRendering(g.command, &rendering);
-    if (g.gpl) {
-        // Fase 41: o driver nao restaura o estado estatico de um pipeline ligado depois de vkCmdSet*:
-        // sem isto o quad de apresentacao herdava o cull / profundidade do ultimo draw do jogo (tela
-        // preta ou branca). Volta aos valores dos pipelines estaticos daqui (sem cull, sem profundidade).
-        vk.vkCmdSetCullMode(g.command, VK_CULL_MODE_NONE);
-        vk.vkCmdSetFrontFace(g.command, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-        if (g.set_depth_clamp) {
-            g.set_depth_clamp(g.command, VK_FALSE);
-        }
-        vk.vkCmdSetDepthTestEnable(g.command, VK_FALSE);
-        vk.vkCmdSetDepthWriteEnable(g.command, VK_FALSE);
-        vk.vkCmdSetDepthCompareOp(g.command, VK_COMPARE_OP_ALWAYS);
-        vk.vkCmdSetStencilTestEnable(g.command, VK_FALSE);
-    }
+    // Fase 41: o driver nao restaura o estado estatico de um pipeline ligado depois de vkCmdSet*:
+    // sem isto o quad de apresentacao herdava o cull / profundidade do ultimo draw do jogo (tela
+    // preta ou branca). Volta aos valores dos pipelines estaticos daqui (sem cull, sem profundidade).
+    ResetDynamicPipelineState();
     static const float kTint[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     const VkBuffer vertex_buffers[2] = {g.vertices.buffer, g.vertices.buffer};
-    if (fsr) {
+    if (grade) {
+        ColorGradeDraw(grade_view, grade_src_w, grade_src_h, out_x, out_y, out_w, out_h, grade_cfg);
+    } else if (fsr) {
         FsrRcasDraw(out_x, out_y, out_w, out_h); // 1.9.1: FSR 1 (nitidez) direto na janela
     } else if (down) {
         DownscaleDraw(present_view, present_w, present_h, out_x, out_y, out_w, out_h);
@@ -6560,7 +6978,7 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         vk.vkCmdBindIndexBuffer(g.command, g.indices.buffer, 0, VK_INDEX_TYPE_UINT16);
         vk.vkCmdDrawIndexed(g.command, 6, 1, 0, 0, 0);
     }
-    bound = fsr ? g_fsr.rcas : down ? g_down.pipeline : present_pipeline;
+    bound = grade ? g_grade.pipeline : fsr ? g_fsr.rcas : down ? g_down.pipeline : present_pipeline;
     for (const State::Queued& draw : g.queue_draws) {
         if (draw.pipeline != bound) {
             vk.vkCmdBindPipeline(g.command, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.pipeline);
@@ -8289,6 +8707,16 @@ void GetXessUpscaler(bool* enabled, bool* native) {
 
 bool XessAvailable() {
     return g_xess_device_ready && g_xess_api.ok;
+}
+
+void SetImageColorSettings(const ImageColorSettings& settings) {
+    std::lock_guard lock(g_grade_mutex);
+    g_grade_cfg = settings;
+}
+
+ImageColorSettings GetImageColorSettings() {
+    std::lock_guard lock(g_grade_mutex);
+    return g_grade_cfg;
 }
 
 int GetAntiAliasing() {

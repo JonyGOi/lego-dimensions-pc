@@ -438,6 +438,23 @@ void SetXessUpscaler(bool enabled, bool native);
 void GetXessUpscaler(bool* enabled, bool* native);
 bool XessAvailable();
 
+// Ajustes de imagem em tempo real (painel F3): brilho, contraste, saturacao, vibracao, gama, temperatura, matiz, RGB e nitidez.
+struct ImageColorSettings {
+    float brightness = 0.0f;  // -0.20 .. +0.20 (UI: -50 .. +50)
+    float contrast = 1.0f;    // 0.50 .. 2.00  (UI: 50% .. 200%)
+    float saturation = 1.0f;  // 0.00 .. 2.00  (UI: 0% .. 200%)
+    float vibrance = 0.0f;    // -1.00 .. +1.00 (UI: -100% .. +100%)
+    float gamma = 1.0f;       // 0.60 .. 1.80  (UI: 0.60 .. 1.80)
+    float temperature = 0.0f; // -1.00 .. +1.00 (UI: -50 .. +50)
+    float tint = 0.0f;        // -1.00 .. +1.00 (UI: -50 .. +50)
+    float red = 1.0f;         // 0.50 .. 1.50  (UI: 50% .. 150%)
+    float green = 1.0f;       // 0.50 .. 1.50  (UI: 50% .. 150%)
+    float blue = 1.0f;        // 0.50 .. 1.50  (UI: 50% .. 150%)
+    float sharpness = 0.0f;   // 0.00 .. 1.00  (UI: 0% .. 100%)
+};
+void SetImageColorSettings(const ImageColorSettings& settings);
+ImageColorSettings GetImageColorSettings();
+
 // Pasta com os .spv recompilados do jogo (assets/shaders_spv), conferidos na inicializacao.
 void SetGameSpirvDirectory(const std::string& directory);
 const std::string& GameSpirvDirectory();

@@ -77,6 +77,13 @@ void ToggleVideoSettingsMenu();
 bool IsVideoSettingsMenuOpen();
 void HandleVideoMenuController(u32 pressed_buttons);
 
+// Controle de imagem dentro do jogo (F3 ou aba no menu F1 / L3+R3)
+void ToggleImageSettingsMenu();
+bool IsImageSettingsMenuOpen();
+void HandleImageMenuController(u32 pressed_buttons);
+void LoadImageSettingsFromIni();
+void FlushImageSettingsIni();
+
 // Menu de conquistas dentro do jogo (F8 ou RB+LB+RT)
 void ToggleAchievementsMenu();
 bool IsAchievementsMenuOpen();
