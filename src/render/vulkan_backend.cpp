@@ -525,6 +525,8 @@ struct XessApi {
     decltype(&xessDestroyContext) DestroyContext = nullptr;
 } g_xess_api;
 bool g_xess_device_ready = false;
+std::atomic<bool> g_xess_wanted{false};
+std::atomic<bool> g_xess_native{false};
 
 bool LoadXessApi() {
     if (g_xess_api.tried) {
@@ -814,11 +816,17 @@ bool CreateDevice() {
     // tira os engasgos de pipeline novo (sem receitas: 50 -> 7 quadros acima de 25 ms no 1o minuto, espera 749 -> 16 ms), MAS a
     // tela preta da Fase 41 voltou com o mesmo exe depois que o cache do driver dele foi preenchido por outra versao do port (o
     // mesmo build num caminho novo = imagem certa). Intermitente e ligado ao cache do driver: continua desligada sozinha na AMD.
-    const bool gpl_wanted = gpl_mode >= 0 ? gpl_mode == 1 : vendor == 0x10DE || vendor == 0x8086;
-    g_gpl_reason = gpl_mode >= 0     ? (gpl_mode ? "forced on" : "forced off")
-                   : gpl_wanted       ? "automatic: NVIDIA / Intel"
-                   : vendor == 0x1002 ? "automatic: AMD (black screen depending on the driver cache, driver 26.6.1)"
-                                      : "automatic: untested vendor";
+    const bool xess_at_boot = g_xess_wanted.load(std::memory_order_relaxed);
+    bool gpl_wanted = gpl_mode >= 0 ? gpl_mode == 1 : vendor == 0x10DE || vendor == 0x8086;
+    if (vendor == 0x1002 && xess_at_boot && gpl_wanted) {
+        gpl_wanted = false;
+        g_gpl_reason = "disabled on AMD when Intel XeSS is active";
+    } else {
+        g_gpl_reason = gpl_mode >= 0     ? (gpl_mode ? "forced on" : "forced off")
+                       : gpl_wanted       ? "automatic: NVIDIA / Intel"
+                       : vendor == 0x1002 ? "automatic: AMD (black screen depending on the driver cache, driver 26.6.1)"
+                                          : "automatic: untested vendor";
+    }
     g.gpl = gpl_wanted && g.game_shaders && has_gpl && has_pipeline_library && has_eds3 && have_gpl.graphicsPipelineLibrary &&
             have_eds3.extendedDynamicState3DepthClampEnable && fast_linking;
     if (g.gpl) {
@@ -884,7 +892,11 @@ bool CreateDevice() {
     const auto want_eds3_clean = want_eds3;
     const auto want_fault_clean = want_fault;
     g_xess_device_ready = false;
-    if (g_xess_api.ok && g_xess_api.VKGetRequiredDeviceExtensions && g_xess_api.VKGetRequiredDeviceFeatures) {
+    const bool allow_xess_device = !(vendor == 0x1002 && g.gpl);
+    if (!allow_xess_device && g_xess_api.ok) {
+        std::printf("[XESS] skipped device features on AMD while GPL is forced on (use GPL=Auto/Off for live Intel XeSS)\n");
+    }
+    if (allow_xess_device && g_xess_api.ok && g_xess_api.VKGetRequiredDeviceExtensions && g_xess_api.VKGetRequiredDeviceFeatures) {
         u32 x_cnt = 0;
         const char* const* x_exts = nullptr;
         bool all_ok = g_xess_api.VKGetRequiredDeviceExtensions(g.instance, g.physical, &x_cnt, &x_exts) == XESS_RESULT_SUCCESS;
@@ -5412,8 +5424,6 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     return true;
 }
 
-std::atomic<bool> g_xess_wanted{false};
-std::atomic<bool> g_xess_native{false};
 std::atomic<u32> g_upscale_target_w{0}, g_upscale_target_h{0};
 std::atomic<u32> g_render_actual_w{1920}, g_render_actual_h{1080};
 
@@ -8275,6 +8285,10 @@ void SetXessUpscaler(bool enabled, bool native) {
 void GetXessUpscaler(bool* enabled, bool* native) {
     if (enabled) *enabled = g_xess_wanted.load(std::memory_order_relaxed);
     if (native) *native = g_xess_native.load(std::memory_order_relaxed);
+}
+
+bool XessAvailable() {
+    return g_xess_device_ready && g_xess_api.ok;
 }
 
 int GetAntiAliasing() {

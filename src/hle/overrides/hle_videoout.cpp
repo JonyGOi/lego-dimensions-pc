@@ -142,6 +142,7 @@ std::string g_logs_banner_msg;
 int g_logs_banner_timer = 0;
 int g_menu_selected = 0;
 int g_save_confirm_timer = 0;
+bool g_save_needs_xess_restart = false;
 WINDOWPLACEMENT g_windowed_placement{sizeof(WINDOWPLACEMENT)};
 
 static std::vector<int> GetFilteredAchievements(int filter) {
@@ -377,6 +378,7 @@ static void ApplyAndSaveVideoSettings() {
         }
     }
 
+    g_save_needs_xess_restart = (up == 5 || aa == 4) && !render::XessAvailable();
     g_save_confirm_timer = 90;
 }
 
@@ -2262,7 +2264,10 @@ void QueueStatsOverlay() {
         c.Rect(box_x0 + 20.0f * scale_ui, box_y1 - 56.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y1 - 54.0f * scale_ui, kGray);
         if (g_save_confirm_timer > 0) {
             --g_save_confirm_timer;
-            const std::string saved_msg = lang::Pt() ? "CONFIGURACOES SALVAS!" : "SETTINGS SAVED!";
+            const std::string saved_msg =
+                g_save_needs_xess_restart
+                    ? (lang::Pt() ? "SALVO! REINICIE PARA ATIVAR O XESS!" : "SAVED! RESTART TO ENABLE XESS!")
+                    : (lang::Pt() ? "CONFIGURACOES SALVAS!" : "SETTINGS SAVED!");
             c.Write(saved_msg, box_x0 + (box_w - TextWidth(saved_msg, font_item)) / 2.0f, box_y1 - 38.0f * scale_ui, font_item, kBorder);
         } else {
             const std::string footer = lang::Pt() ? "[CIMA/BAIXO] NAVEGAR  [ESQ/DIR] ALTERAR  [ENTER] SALVAR  [F1/ESC] SAIR" : "[UP/DOWN] SELECT  [LEFT/RIGHT] CHANGE  [ENTER] SAVE  [F1/ESC] CLOSE";

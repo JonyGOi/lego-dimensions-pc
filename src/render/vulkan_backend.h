@@ -436,6 +436,7 @@ void SetTemporalUpscaler(int major, bool native);
 // Intel XeSS 3.0.2 (Vulkan): native = XeSS AA sem ampliar.
 void SetXessUpscaler(bool enabled, bool native);
 void GetXessUpscaler(bool* enabled, bool* native);
+bool XessAvailable();
 
 // Pasta com os .spv recompilados do jogo (assets/shaders_spv), conferidos na inicializacao.
 void SetGameSpirvDirectory(const std::string& directory);
