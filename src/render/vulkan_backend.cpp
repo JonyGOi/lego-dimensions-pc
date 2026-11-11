@@ -5236,7 +5236,7 @@ bool PrepareTemporalInputs(State::RenderTarget* shown, bool reset_history, u32* 
         !EnsureOwnImage(g_ffx.motion, shown->width, shown->height, VK_FORMAT_R16G16_SFLOAT, input_usage) ||
         !EnsureOwnImage(g_ffx.depth[0], shown->width, shown->height, VK_FORMAT_R32_SFLOAT, input_usage) ||
         !EnsureOwnImage(g_ffx.depth[1], shown->width, shown->height, VK_FORMAT_R32_SFLOAT, input_usage) ||
-        !EnsureOwnImage(g_ffx.reactive, shown->width, shown->height, VK_FORMAT_R8_UNORM, input_usage)) {
+        !EnsureOwnImage(g_ffx.reactive, shown->width, shown->height, VK_FORMAT_R8_UNORM, input_usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
         return false;
     }
     const FrameTemporal& frame = g_frame_temporal;
@@ -5338,6 +5338,15 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
         const char* env = std::getenv("LD_FSR4_REACTIVE");
         return env && env[0] == '1';
     }();
+    // 2.0: o FSR 4 (4.1.2) nao precisa da mascara sintetica, mas passar FfxApiResource{} nulo causa page fault (0xbeefdeadb000) na GPU;
+    // limpar a imagem valida para 0.0 mantem o descritor valido sem interferir na heuristica ML do FSR 4.
+    if (!g_ffx.needs_reactive && !show_reactive && !force_reactive) {
+        MoveOwnImage(g_ffx.reactive, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        const VkClearColorValue zero{};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vk.vkCmdClearColorImage(g.command, g_ffx.reactive.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+        MoveOwnImage(g_ffx.reactive, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
     VkDescriptorImageInfo present_info{g.sampler, show_reactive ? g_ffx.reactive.view : g_ffx.output.view,
                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet present_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -5357,9 +5366,7 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     dispatch.commandList = g.command;
     dispatch.color = FfxImage(g_ffx.color, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
     dispatch.depth = FfxImage(g_ffx.depth[now_depth], FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
-    dispatch.reactive = (g_ffx.needs_reactive || show_reactive || force_reactive)
-                            ? FfxImage(g_ffx.reactive, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ)
-                            : FfxApiResource{};
+    dispatch.reactive = FfxImage(g_ffx.reactive, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
     dispatch.motionVectors = FfxImage(g_ffx.motion, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
     dispatch.output = FfxImage(g_ffx.output, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dispatch.jitterOffset = {g_jitter_px_x, g_jitter_px_y};

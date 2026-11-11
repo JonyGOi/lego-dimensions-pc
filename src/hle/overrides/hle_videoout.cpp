@@ -2630,9 +2630,14 @@ bool RunLoadingScreen(u32 max_seconds, bool prewarm_only) {
     for (;;) {
         gnm::LoadingStatus st;
         gnm::GetLoadingStatus(&st);
+        u32 prio_done = 0, prio_total = 0;
+        render::VulkanRenderer::Instance().PrewarmPriorityProgress(&prio_done, &prio_total);
         const bool pipelines_finished = st.pairs_finished && st.pipelines_done >= st.pipelines_total;
+        const bool priority_ready = st.pairs_finished && (!prio_total || prio_done >= prio_total);
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        const bool done = st.pack_finished && st.pairs_finished && pipelines_finished && st.aot_finished;
+        const bool fast_timeout_ready = !prewarm_only && !all && st.pack_finished && st.pairs_finished && st.aot_finished &&
+                                        priority_ready && seconds >= 20.0;
+        const bool done = st.pack_finished && st.pairs_finished && (pipelines_finished || fast_timeout_ready) && st.aot_finished;
         // progresso total: pacote 10%, pares ja usados 10%, pipelines 10%, pacote inteiro 70%
         const double pack = st.pack_finished ? 1.0 : st.pack_total ? static_cast<double>(st.pack_done) / st.pack_total : 0.0;
         const double pairs = st.pairs_finished ? 1.0 : st.pairs_total ? static_cast<double>(st.pairs_done) / st.pairs_total : 0.0;
