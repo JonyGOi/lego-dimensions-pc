@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <mutex>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include <windows.h>
@@ -36,6 +37,8 @@
 #include "ffx_api_loader.h"
 #include "ffx_upscale.h"
 #include "vk/ffx_api_vk.h"
+#include <xess/xess.h>
+#include <xess/xess_vk.h>
 
 namespace render {
 
@@ -52,7 +55,7 @@ std::atomic<bool> g_validation_abort{true}; // erro de validacao encerra o proce
 std::atomic<u64> g_validation_errors{0}, g_validation_warnings{0};
 
 // ----------------------- funcoes do Vulkan, carregadas da DLL -----------------------
-#define VK_GLOBAL_FUNCTIONS(X) X(vkCreateInstance) X(vkEnumerateInstanceLayerProperties)
+#define VK_GLOBAL_FUNCTIONS(X) X(vkCreateInstance) X(vkEnumerateInstanceLayerProperties) X(vkEnumerateInstanceExtensionProperties)
 #define VK_INSTANCE_FUNCTIONS(X)                                                                   \
     X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties)            \
     X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkEnumerateDeviceExtensionProperties)            \
@@ -505,16 +508,106 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
     return VK_FALSE;
 }
 
+void DestroyUpscalerContexts();
+
+struct XessApi {
+    bool tried = false, ok = false;
+    HMODULE module = nullptr;
+    decltype(&xessGetVersion) GetVersion = nullptr;
+    decltype(&xessVKGetRequiredInstanceExtensions) VKGetRequiredInstanceExtensions = nullptr;
+    decltype(&xessVKGetRequiredDeviceExtensions) VKGetRequiredDeviceExtensions = nullptr;
+    decltype(&xessVKGetRequiredDeviceFeatures) VKGetRequiredDeviceFeatures = nullptr;
+    decltype(&xessVKCreateContext) VKCreateContext = nullptr;
+    decltype(&xessVKInit) VKInit = nullptr;
+    decltype(&xessVKExecute) VKExecute = nullptr;
+    decltype(&xessGetOptimalInputResolution) GetOptimalInputResolution = nullptr;
+    decltype(&xessSetVelocityScale) SetVelocityScale = nullptr;
+    decltype(&xessDestroyContext) DestroyContext = nullptr;
+} g_xess_api;
+bool g_xess_device_ready = false;
+
+bool LoadXessApi() {
+    if (g_xess_api.tried) {
+        return g_xess_api.ok;
+    }
+    g_xess_api.tried = true;
+    wchar_t path[MAX_PATH * 2] = {};
+    GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+    const std::filesystem::path dll = std::filesystem::path(path).parent_path() / L"libxess.dll";
+    g_xess_api.module = LoadLibraryW(dll.c_str());
+    if (!g_xess_api.module) {
+        return false;
+    }
+    auto load = [&](auto& fn, const char* name) -> bool {
+        fn = reinterpret_cast<std::decay_t<decltype(fn)>>(GetProcAddress(g_xess_api.module, name));
+        return fn != nullptr;
+    };
+    const bool has_core = load(g_xess_api.GetVersion, "xessGetVersion") &&
+                          load(g_xess_api.VKGetRequiredInstanceExtensions, "xessVKGetRequiredInstanceExtensions") &&
+                          load(g_xess_api.VKGetRequiredDeviceExtensions, "xessVKGetRequiredDeviceExtensions") &&
+                          load(g_xess_api.VKGetRequiredDeviceFeatures, "xessVKGetRequiredDeviceFeatures") &&
+                          load(g_xess_api.VKCreateContext, "xessVKCreateContext") &&
+                          load(g_xess_api.VKInit, "xessVKInit") &&
+                          load(g_xess_api.VKExecute, "xessVKExecute") &&
+                          load(g_xess_api.SetVelocityScale, "xessSetVelocityScale") &&
+                          load(g_xess_api.DestroyContext, "xessDestroyContext");
+    load(g_xess_api.GetOptimalInputResolution, "xessGetOptimalInputResolution");
+    if (!has_core) {
+        std::printf("[XESS] libxess.dll missing required Vulkan exports\n");
+        FreeLibrary(g_xess_api.module);
+        g_xess_api.module = nullptr;
+        return false;
+    }
+    xess_version_t ver{};
+    if (g_xess_api.GetVersion(&ver) == XESS_RESULT_SUCCESS) {
+        std::printf("[XESS] Intel XeSS %u.%u.%u DLL loaded\n", ver.major, ver.minor, ver.patch);
+    }
+    g_xess_api.ok = true;
+    return true;
+}
+
 bool CreateInstance() {
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "LEGO Dimensions PC";
     app.pEngineName = "lego-dimensions-pc";
     app.apiVersion = VK_API_VERSION_1_3; // os modulos do jogo usam recursos do Vulkan 1.2 / 1.3
-    const char* extensions[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    std::vector<const char*> extensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+    auto add_ext = [&](const char* name) {
+        if (!name) return;
+        for (const char* e : extensions) {
+            if (!std::strcmp(e, name)) return;
+        }
+        extensions.push_back(name);
+    };
+    if (LoadXessApi() && g_xess_api.VKGetRequiredInstanceExtensions) {
+        u32 x_cnt = 0;
+        const char* const* x_exts = nullptr;
+        u32 min_api = 0;
+        if (g_xess_api.VKGetRequiredInstanceExtensions(&x_cnt, &x_exts, &min_api) == XESS_RESULT_SUCCESS) {
+            if (min_api > app.apiVersion) {
+                app.apiVersion = min_api;
+            }
+            std::vector<VkExtensionProperties> avail;
+            if (vk.vkEnumerateInstanceExtensionProperties) {
+                u32 ac = 0;
+                vk.vkEnumerateInstanceExtensionProperties(nullptr, &ac, nullptr);
+                avail.resize(ac);
+                vk.vkEnumerateInstanceExtensionProperties(nullptr, &ac, avail.data());
+            }
+            for (u32 i = 0; i < x_cnt; ++i) {
+                const bool present = avail.empty() || std::any_of(avail.begin(), avail.end(), [&](const VkExtensionProperties& p) {
+                    return !std::strcmp(p.extensionName, x_exts[i]);
+                });
+                if (present) {
+                    add_ext(x_exts[i]);
+                } else {
+                    std::printf("[XESS] missing Vulkan instance extension %s\n", x_exts[i]);
+                }
+            }
+        }
+    }
     VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     info.pApplicationInfo = &app;
-    info.enabledExtensionCount = 2;
-    info.ppEnabledExtensionNames = extensions;
     // Camadas de validacao (Vulkan SDK), so quando pedidas e instaladas.
     static const char* const kValidationLayer = "VK_LAYER_KHRONOS_validation";
     g.validation = false;
@@ -529,11 +622,13 @@ bool CreateInstance() {
         if (g.validation) {
             info.enabledLayerCount = 1;
             info.ppEnabledLayerNames = &kValidationLayer;
-            info.enabledExtensionCount = 3;
+            add_ext(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         } else {
             std::printf("[VULKAN] layer %s not found (Vulkan SDK installed?): continuing without validation\n", kValidationLayer);
         }
     }
+    info.enabledExtensionCount = static_cast<u32>(extensions.size());
+    info.ppEnabledExtensionNames = extensions.data();
     const VkResult result = vk.vkCreateInstance(&info, nullptr, &g.instance);
     if (result != VK_SUCCESS) {
         return Fail("vkCreateInstance (VK_KHR_surface + VK_KHR_win32_surface)", result);
@@ -634,18 +729,17 @@ bool CreateDevice() {
     queue.queueFamilyIndex = g.queue_family;
     queue.queueCount = 1;
     queue.pQueuePriorities = &priority;
-    const char* extensions[12] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<const char*> extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     info.queueCreateInfoCount = 1;
     info.pQueueCreateInfos = &queue;
-    info.enabledExtensionCount = 1;
-    info.ppEnabledExtensionNames = extensions;
     // Fase 41: bibliotecas de pipeline + depth clamp dinamico, se o driver tiver
     bool has_pipeline_library = false, has_gpl = false, has_eds3 = false, has_marker = false, has_fault = false, has_budget = false;
+    std::vector<VkExtensionProperties> available;
     {
         u32 count = 0;
         vk.vkEnumerateDeviceExtensionProperties(g.physical, nullptr, &count, nullptr);
-        std::vector<VkExtensionProperties> available(count);
+        available.resize(count);
         vk.vkEnumerateDeviceExtensionProperties(g.physical, nullptr, &count, available.data());
         for (const auto& e : available) {
             has_pipeline_library |= !std::strcmp(e.extensionName, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
@@ -728,9 +822,9 @@ bool CreateDevice() {
     g.gpl = gpl_wanted && g.game_shaders && has_gpl && has_pipeline_library && has_eds3 && have_gpl.graphicsPipelineLibrary &&
             have_eds3.extendedDynamicState3DepthClampEnable && fast_linking;
     if (g.gpl) {
-        extensions[info.enabledExtensionCount++] = VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME;
-        extensions[info.enabledExtensionCount++] = VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME;
-        extensions[info.enabledExtensionCount++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
+        extensions.push_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+        extensions.push_back(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+        extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
         want_gpl.graphicsPipelineLibrary = VK_TRUE;
         want_eds3.extendedDynamicState3DepthClampEnable = VK_TRUE;
         want_gpl.pNext = &want_eds3;
@@ -742,17 +836,17 @@ bool CreateDevice() {
     VkPhysicalDeviceExtendedDynamicState3FeaturesEXT want_blend{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
     if (const char* test = std::getenv("LD_DEV_SO")) {
         if (!std::strcmp(test, "so")) {
-            extensions[info.enabledExtensionCount++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME;
+            extensions.push_back(VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
             want_so.shaderObject = VK_TRUE;
             want_so.pNext = want13.pNext;
             want13.pNext = &want_so;
         } else if (!std::strcmp(test, "vi")) {
-            extensions[info.enabledExtensionCount++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+            extensions.push_back(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
             want_vi.vertexInputDynamicState = VK_TRUE;
             want_vi.pNext = want13.pNext;
             want13.pNext = &want_vi;
         } else if (!g.gpl) {
-            extensions[info.enabledExtensionCount++] = VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME;
+            extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
             want_blend.extendedDynamicState3ColorBlendEnable = want_blend.extendedDynamicState3ColorBlendEquation =
                 want_blend.extendedDynamicState3ColorWriteMask = want_blend.extendedDynamicState3DepthClampEnable = VK_TRUE;
             want_blend.pNext = want13.pNext;
@@ -765,12 +859,12 @@ bool CreateDevice() {
                 fast_linking ? "yes" : "no", have_eds3.extendedDynamicState3DepthClampEnable ? "yes" : "no");
     // Fase 54: marcadores de draw e relatorio de falha do dispositivo (diagnostico de GPU travada)
     if (has_marker && !std::getenv("LD_NO_GPU_MARKERS")) {
-        extensions[info.enabledExtensionCount++] = VK_AMD_BUFFER_MARKER_EXTENSION_NAME;
+        extensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
     } else {
         has_marker = false;
     }
     if (has_fault && have_fault.deviceFault) {
-        extensions[info.enabledExtensionCount++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
+        extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         want_fault.deviceFault = VK_TRUE;
         want_fault.pNext = want13.pNext;
         want13.pNext = &want_fault;
@@ -778,10 +872,65 @@ bool CreateDevice() {
         has_fault = false;
     }
     if (has_budget) { // Fase 59: uso e orcamento da memoria de video (linha [STREAM])
-        extensions[info.enabledExtensionCount++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+        extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         g.memory_budget = true;
     }
-    const VkResult result = vk.vkCreateDevice(g.physical, &info, nullptr, &g.device);
+    const size_t base_ext_count = extensions.size();
+    const auto want_clean = want;
+    const auto want11_clean = want11;
+    const auto want12_clean = want12;
+    const auto want13_clean = want13;
+    const auto want_gpl_clean = want_gpl;
+    const auto want_eds3_clean = want_eds3;
+    const auto want_fault_clean = want_fault;
+    g_xess_device_ready = false;
+    if (g_xess_api.ok && g_xess_api.VKGetRequiredDeviceExtensions && g_xess_api.VKGetRequiredDeviceFeatures) {
+        u32 x_cnt = 0;
+        const char* const* x_exts = nullptr;
+        bool all_ok = g_xess_api.VKGetRequiredDeviceExtensions(g.instance, g.physical, &x_cnt, &x_exts) == XESS_RESULT_SUCCESS;
+        for (u32 i = 0; all_ok && i < x_cnt; ++i) {
+            const bool found = std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& p) {
+                return !std::strcmp(p.extensionName, x_exts[i]);
+            });
+            if (!found) {
+                std::printf("[XESS] GPU missing required device extension %s\n", x_exts[i]);
+                all_ok = false;
+            } else {
+                const bool dup = std::any_of(extensions.begin(), extensions.end(), [&](const char* e) { return !std::strcmp(e, x_exts[i]); });
+                if (!dup) extensions.push_back(x_exts[i]);
+            }
+        }
+        if (all_ok) {
+            void* features_ptr = info.pNext;
+            if (g_xess_api.VKGetRequiredDeviceFeatures(g.instance, g.physical, &features_ptr) == XESS_RESULT_SUCCESS) {
+                info.pNext = features_ptr;
+                g_xess_device_ready = true;
+            } else {
+                extensions.resize(base_ext_count);
+            }
+        } else {
+            extensions.resize(base_ext_count);
+        }
+    }
+    info.enabledExtensionCount = static_cast<u32>(extensions.size());
+    info.ppEnabledExtensionNames = extensions.data();
+    VkResult result = vk.vkCreateDevice(g.physical, &info, nullptr, &g.device);
+    if (g_xess_device_ready && result != VK_SUCCESS) {
+        std::printf("[XESS] vkCreateDevice failed with XeSS features (%s), retrying without XeSS\n", ResultName(result));
+        g_xess_device_ready = false;
+        want = want_clean;
+        want11 = want11_clean;
+        want12 = want12_clean;
+        want13 = want13_clean;
+        want_gpl = want_gpl_clean;
+        want_eds3 = want_eds3_clean;
+        want_fault = want_fault_clean;
+        info.pNext = &want;
+        extensions.resize(base_ext_count);
+        info.enabledExtensionCount = static_cast<u32>(extensions.size());
+        info.ppEnabledExtensionNames = extensions.data();
+        result = vk.vkCreateDevice(g.physical, &info, nullptr, &g.device);
+    }
     if (result != VK_SUCCESS) {
         return Fail("vkCreateDevice (VK_KHR_swapchain)", result);
     }
@@ -2191,6 +2340,7 @@ void Transition(VkCommandBuffer command, VkImage image, VkImageAspectFlags aspec
             return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VK_ACCESS_TRANSFER_WRITE_BIT;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VK_ACCESS_TRANSFER_READ_BIT;
+        case VK_IMAGE_LAYOUT_GENERAL: return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         default: return 0;
         }
     };
@@ -3728,6 +3878,7 @@ void DestroyAll() {
             if (buffer->memory) vk.vkFreeMemory(g.device, buffer->memory, nullptr); // desfaz o mapeamento junto
             *buffer = State::HostBuffer{};
         }
+        DestroyUpscalerContexts();
         g.pipeline_layout = VK_NULL_HANDLE;
         g.vertex_shader = g.fragment_shader = VK_NULL_HANDLE;
         DestroySwapchainObjects();
@@ -4420,6 +4571,8 @@ struct FrameTemporal {
     bool camera = false, reprojected = false;
     State::RenderTarget* depth = nullptr; // nao nulo = ha profundidade (view / tamanho abaixo)
     VkImageView depth_view = VK_NULL_HANDLE;
+    VkImage depth_image = VK_NULL_HANDLE;
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
     u32 depth_w = 0, depth_h = 0;
     float reproject[16]{};
     float fov_y = 0.0f;
@@ -4572,6 +4725,8 @@ void UpdateFrameTemporal() {
         if (const auto found = g.target_by_address.find(camera.depth); found != g.target_by_address.end()) {
             g_frame_temporal.depth = found->second;
             g_frame_temporal.depth_view = g_depth_snap.view;
+            g_frame_temporal.depth_image = g_depth_snap.image;
+            g_frame_temporal.depth_format = g_depth_snap.format;
             g_frame_temporal.depth_w = g_depth_snap.width;
             g_frame_temporal.depth_h = g_depth_snap.height;
         }
@@ -4580,6 +4735,8 @@ void UpdateFrameTemporal() {
                                                                          found->second->layout != VK_IMAGE_LAYOUT_UNDEFINED) {
         g_frame_temporal.depth = found->second;
         g_frame_temporal.depth_view = found->second->sample_view;
+        g_frame_temporal.depth_image = found->second->image;
+        g_frame_temporal.depth_format = found->second->format;
         g_frame_temporal.depth_w = found->second->width;
         g_frame_temporal.depth_h = found->second->height;
         TransitionTarget(found->second, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -4843,7 +5000,7 @@ std::atomic<int> g_ffx_wanted{0}; // 0 = desligado; 2 / 3 / 4 = versao maior do 
 std::atomic<bool> g_ffx_native{false}; // FSR AA: mesmo sem ampliar (escala 100%)
 
 struct FfxState {
-    bool tried = false, ok = false, failed_context = false;
+    bool tried = false, ok = false, failed_context = false, needs_reactive = true;
     HMODULE module = nullptr;
     ffxFunctions fn{};
     ffxContext context = nullptr;
@@ -4997,9 +5154,16 @@ bool EnsureFfxContext(u32 render_w, u32 render_h, u32 out_w, u32 out_h) {
     }
     g_ffx.version = pick->second;
     g_ffx.reset = true;
-    {   // 2.0: estabilidade em vez de reacao rapida (o jogo tem sombras / brilhos finos que, com o deslocamento por quadro, o FSR
-        // tomava por 'mudanca de iluminacao' e mostrava crus - piscando). fVelocityFactor 0 = "melhora a estabilidade de
-        // pixels claros" (ffx_upscale.h); fShadingChangeScale menor = menos descarte do historico por mudanca de sombreado.
+    const int chosen_major = FfxMajor(pick->second);
+    g_ffx.needs_reactive = chosen_major <= 3;
+    ffxQueryDescUpscaleGetResourceRequirements req{};
+    req.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GET_RESOURCE_REQUIREMENTS;
+    if (g_ffx.fn.Query(&g_ffx.context, &req.header) == FFX_API_RETURN_OK) {
+        g_ffx.needs_reactive = (req.required_resources & FFX_API_QUERY_RESOURCE_INPUT_REACTIVEMASK) != 0 ||
+                               (chosen_major <= 3 && (req.optional_resources & FFX_API_QUERY_RESOURCE_INPUT_REACTIVEMASK) != 0);
+    }
+    if (chosen_major <= 3) {
+        // 2.0: estabilidade em vez de reacao rapida para FSR 2 / 3 (FSR 4 ML gerencia estabilidade sem essas chaves).
         static float velocity = 0.0f, shading = 0.35f;
         ffxConfigureDescUpscaleKeyValue key{};
         key.header.type = FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE;
@@ -5010,7 +5174,8 @@ bool EnsureFfxContext(u32 render_w, u32 render_h, u32 out_w, u32 out_h) {
         key.ptr = &shading;
         g_ffx.fn.Configure(&g_ffx.context, &key.header);
     }
-    std::printf("[FSR] AMD %s ready: %ux%u -> %ux%u\n", pick->second.c_str(), render_w, render_h, out_w, out_h);
+    std::printf("[FSR] AMD %s ready: %ux%u -> %ux%u (reactive %s)\n", pick->second.c_str(), render_w, render_h, out_w, out_h,
+                g_ffx.needs_reactive ? "on" : "auto");
     return true;
 }
 
@@ -5065,32 +5230,15 @@ FfxApiResource FfxImage(const OwnImage& image, u32 usage, u32 state) {
     return resource;
 }
 
-// FSR 2 / 3 / 4: imagem do jogo (render) -> saida (out_w x out_h). Devolve a saida para a janela, ou falso.
-bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_view, VkDescriptorSet* out_set) {
-    if (!g_ffx_wanted.load(std::memory_order_relaxed) || !shown || !out_w || !out_h ||
-        (!g_ffx_native.load(std::memory_order_relaxed) && out_w <= shown->width && out_h <= shown->height)) {
-        return false;
-    }
-    if (out_w < shown->width || out_h < shown->height) {
-        // o FSR so amplia: com a area na janela menor que a imagem (resolucao maior que o monitor), o FSR AA sai no tamanho
-        // da imagem e a janela reduz com o filtro de area (DownscaleDraw). Pedir saida menor gerava lixo piscando.
-        out_w = shown->width;
-        out_h = shown->height;
-    }
-    if (!LoadFfx() || !EnsureFfxPipelines() || !EnsureFfxContext(shown->width, shown->height, out_w, out_h)) {
-        return false;
-    }
+bool PrepareTemporalInputs(State::RenderTarget* shown, bool reset_history, u32* out_depth_idx) {
     const VkImageUsageFlags input_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     if (!EnsureOwnImage(g_ffx.color, shown->width, shown->height, VK_FORMAT_R16G16B16A16_SFLOAT, input_usage) ||
         !EnsureOwnImage(g_ffx.motion, shown->width, shown->height, VK_FORMAT_R16G16_SFLOAT, input_usage) ||
         !EnsureOwnImage(g_ffx.depth[0], shown->width, shown->height, VK_FORMAT_R32_SFLOAT, input_usage) ||
         !EnsureOwnImage(g_ffx.depth[1], shown->width, shown->height, VK_FORMAT_R32_SFLOAT, input_usage) ||
-        !EnsureOwnImage(g_ffx.reactive, shown->width, shown->height, VK_FORMAT_R8_UNORM, input_usage) ||
-        !EnsureOwnImage(g_ffx.output, out_w, out_h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        !EnsureOwnImage(g_ffx.reactive, shown->width, shown->height, VK_FORMAT_R8_UNORM, input_usage)) {
         return false;
     }
-    // 1. entradas (cor, movimento, profundidade) numa passagem
     const FrameTemporal& frame = g_frame_temporal;
     State::RenderTarget* depth = frame.depth;
     const VkImageView color_view = shown->raw_view ? shown->raw_view : shown->view;
@@ -5100,7 +5248,7 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
                                       {g.sampler, color_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                       {g_taa.nearest, depth ? frame.depth_view : color_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                                       {g_taa.nearest, g_ffx.depth[past_depth].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-    VkWriteDescriptorSet writes[5]{};
+    VkWriteDescriptorSet writes[4]{};
     for (u32 i = 0; i < 4; ++i) {
         writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         writes[i].dstSet = g_ffx.inputs_set;
@@ -5109,15 +5257,7 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[i].pImageInfo = &infos[i];
     }
-    static const bool show_reactive = std::getenv("LD_SHOW_REACTIVE") != nullptr; // DIAGNOSTICO: a mascara reativa na tela
-    VkDescriptorImageInfo present_info{g.sampler, show_reactive ? g_ffx.reactive.view : g_ffx.output.view,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    writes[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writes[4].dstSet = g_ffx.present_set;
-    writes[4].descriptorCount = 1;
-    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[4].pImageInfo = &present_info;
-    vk.vkUpdateDescriptorSets(g.device, 5, writes, 0, nullptr);
+    vk.vkUpdateDescriptorSets(g.device, 4, writes, 0, nullptr);
     TaaPush push{};
     std::memcpy(push.reproject, frame.reproject, sizeof(push.reproject));
     push.size[0] = static_cast<float>(shown->width);
@@ -5127,7 +5267,7 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     push.params[1] = frame.reprojected ? 1.0f : 0.0f;
     push.depth_scale[0] = depth ? push.size[0] / static_cast<float>(frame.depth_w) : 1.0f;
     push.depth_scale[1] = depth ? push.size[1] / static_cast<float>(frame.depth_h) : 1.0f;
-    push.params[3] = frame.reprojected && frame.prev_camera && g_ffx.depth_valid[past_depth] && !g_ffx.reset ? 1.0f : 0.0f;
+    push.params[3] = frame.reprojected && frame.prev_camera && g_ffx.depth_valid[past_depth] && !reset_history ? 1.0f : 0.0f;
     if (const char* show = std::getenv("LD_SHOW_REACTIVE"); show && show[0] == '2') {
         push.params[0] = 2.0f; // DIAGNOSTICO: a diferenca em vez da mascara
     }
@@ -5166,6 +5306,46 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     }
     g_ffx.depth_valid[now_depth] = frame.reprojected;
     g_ffx.depth_index = now_depth;
+    *out_depth_idx = now_depth;
+    return true;
+}
+
+// FSR 2 / 3 / 4: imagem do jogo (render) -> saida (out_w x out_h). Devolve a saida para a janela, ou falso.
+bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_view, VkDescriptorSet* out_set) {
+    if (!g_ffx_wanted.load(std::memory_order_relaxed) || !shown || !out_w || !out_h ||
+        (!g_ffx_native.load(std::memory_order_relaxed) && out_w <= shown->width && out_h <= shown->height)) {
+        return false;
+    }
+    if (out_w < shown->width || out_h < shown->height) {
+        // o FSR so amplia: com a area na janela menor que a imagem (resolucao maior que o monitor), o FSR AA sai no tamanho
+        // da imagem e a janela reduz com o filtro de area (DownscaleDraw). Pedir saida menor gerava lixo piscando.
+        out_w = shown->width;
+        out_h = shown->height;
+    }
+    if (!LoadFfx() || !EnsureFfxPipelines() || !EnsureFfxContext(shown->width, shown->height, out_w, out_h) ||
+        !EnsureOwnImage(g_ffx.output, out_w, out_h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        return false;
+    }
+    // 1. entradas (cor, movimento, profundidade) numa passagem
+    u32 now_depth = 0;
+    if (!PrepareTemporalInputs(shown, g_ffx.reset, &now_depth)) {
+        return false;
+    }
+    const FrameTemporal& frame = g_frame_temporal;
+    static const bool show_reactive = std::getenv("LD_SHOW_REACTIVE") != nullptr;
+    static const bool force_reactive = [] {
+        const char* env = std::getenv("LD_FSR4_REACTIVE");
+        return env && env[0] == '1';
+    }();
+    VkDescriptorImageInfo present_info{g.sampler, show_reactive ? g_ffx.reactive.view : g_ffx.output.view,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet present_write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    present_write.dstSet = g_ffx.present_set;
+    present_write.descriptorCount = 1;
+    present_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    present_write.pImageInfo = &present_info;
+    vk.vkUpdateDescriptorSets(g.device, 1, &present_write, 0, nullptr);
     g_ffx.output.layout = VK_IMAGE_LAYOUT_UNDEFINED;
     MoveOwnImage(g_ffx.output, VK_IMAGE_LAYOUT_GENERAL);
     // 2. o upscaler da AMD grava os comandos dele no mesmo command buffer
@@ -5177,11 +5357,13 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     dispatch.commandList = g.command;
     dispatch.color = FfxImage(g_ffx.color, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
     dispatch.depth = FfxImage(g_ffx.depth[now_depth], FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
-    dispatch.reactive = FfxImage(g_ffx.reactive, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+    dispatch.reactive = (g_ffx.needs_reactive || show_reactive || force_reactive)
+                            ? FfxImage(g_ffx.reactive, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ)
+                            : FfxApiResource{};
     dispatch.motionVectors = FfxImage(g_ffx.motion, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
     dispatch.output = FfxImage(g_ffx.output, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dispatch.jitterOffset = {g_jitter_px_x, g_jitter_px_y};
-    dispatch.motionVectorScale = {push.size[0], push.size[1]};
+    dispatch.motionVectorScale = {static_cast<float>(shown->width), static_cast<float>(shown->height)};
     dispatch.renderSize = {shown->width, shown->height};
     dispatch.upscaleSize = {out_w, out_h};
     // 2.0: sem nitidez extra no FSR AA (mesmo tamanho): ela amplificava o tremor de sombras e texturas finas. Ampliando, leve.
@@ -5221,6 +5403,216 @@ bool FfxPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_
     *out_view = g_ffx.output.view;
     *out_set = g_ffx.present_set;
     return true;
+}
+
+std::atomic<bool> g_xess_wanted{false};
+std::atomic<bool> g_xess_native{false};
+
+struct XessRuntime {
+    xess_context_handle_t context = nullptr;
+    OwnImage output;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet present_set = VK_NULL_HANDLE;
+    u32 render_w = 0, render_h = 0, out_w = 0, out_h = 0;
+    bool failed = false, reset = true;
+    xess_quality_settings_t quality = XESS_QUALITY_SETTING_QUALITY;
+} g_xess;
+
+const char* XessQualityName(xess_quality_settings_t q) {
+    switch (q) {
+    case XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: return "Ultra Performance";
+    case XESS_QUALITY_SETTING_PERFORMANCE: return "Performance";
+    case XESS_QUALITY_SETTING_BALANCED: return "Balanced";
+    case XESS_QUALITY_SETTING_QUALITY: return "Quality";
+    case XESS_QUALITY_SETTING_ULTRA_QUALITY: return "Ultra Quality";
+    case XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS: return "Ultra Quality Plus";
+    case XESS_QUALITY_SETTING_AA: return "Native AA";
+    default: return "Custom";
+    }
+}
+
+void DestroyXessContext() {
+    if (g_xess.context) {
+        if (g.device) {
+            vk.vkDeviceWaitIdle(g.device);
+        }
+        if (g_xess_api.DestroyContext) {
+            g_xess_api.DestroyContext(g_xess.context);
+        }
+        g_xess.context = nullptr;
+    }
+}
+
+bool EnsureXessContext(u32 render_w, u32 render_h, u32 out_w, u32 out_h) {
+    if (!g_xess_device_ready || !g_xess_api.ok || !EnsureFfxPipelines()) {
+        return false;
+    }
+    if (g_xess.context && g_xess.render_w == render_w && g_xess.render_h == render_h && g_xess.out_w == out_w &&
+        g_xess.out_h == out_h) {
+        return true;
+    }
+    if (g_xess.failed && g_xess.render_w == render_w && g_xess.render_h == render_h && g_xess.out_w == out_w && g_xess.out_h == out_h) {
+        return false;
+    }
+    DestroyXessContext();
+    g_xess.render_w = render_w;
+    g_xess.render_h = render_h;
+    g_xess.out_w = out_w;
+    g_xess.out_h = out_h;
+    g_xess.failed = false;
+    if (!g_xess.present_set) {
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pool.maxSets = 1;
+        pool.poolSizeCount = 1;
+        pool.pPoolSizes = &size;
+        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts = &g.set_layout;
+        if (vk.vkCreateDescriptorPool(g.device, &pool, nullptr, &g_xess.pool) != VK_SUCCESS) {
+            g_xess.failed = true;
+            return false;
+        }
+        alloc.descriptorPool = g_xess.pool;
+        if (vk.vkAllocateDescriptorSets(g.device, &alloc, &g_xess.present_set) != VK_SUCCESS) {
+            g_xess.failed = true;
+            return false;
+        }
+    }
+    if (g_xess_api.VKCreateContext(g.instance, g.physical, g.device, &g_xess.context) != XESS_RESULT_SUCCESS || !g_xess.context) {
+        std::printf("[XESS] xessVKCreateContext failed\n");
+        g_xess.context = nullptr;
+        g_xess.failed = true;
+        return false;
+    }
+    xess_quality_settings_t pick = XESS_QUALITY_SETTING_AA;
+    if (render_w < out_w || render_h < out_h) {
+        const float ratio = std::max(static_cast<float>(out_w) / render_w, static_cast<float>(out_h) / render_h);
+        pick = ratio <= 1.38f ? XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS
+             : ratio <= 1.58f ? XESS_QUALITY_SETTING_ULTRA_QUALITY
+             : ratio <= 1.85f ? XESS_QUALITY_SETTING_QUALITY
+             : ratio <= 2.15f ? XESS_QUALITY_SETTING_BALANCED
+             : ratio <= 2.60f ? XESS_QUALITY_SETTING_PERFORMANCE
+                              : XESS_QUALITY_SETTING_ULTRA_PERFORMANCE;
+        if (g_xess_api.GetOptimalInputResolution) {
+            const xess_2d_t out_res{out_w, out_h};
+            xess_2d_t opt{}, mn{}, mx{};
+            if (g_xess_api.GetOptimalInputResolution(g_xess.context, &out_res, pick, &opt, &mn, &mx) != XESS_RESULT_SUCCESS ||
+                render_w < mn.x || render_w > mx.x || render_h < mn.y || render_h > mx.y) {
+                static const xess_quality_settings_t kOrder[] = {
+                    XESS_QUALITY_SETTING_ULTRA_QUALITY_PLUS, XESS_QUALITY_SETTING_ULTRA_QUALITY, XESS_QUALITY_SETTING_QUALITY,
+                    XESS_QUALITY_SETTING_BALANCED,           XESS_QUALITY_SETTING_PERFORMANCE,   XESS_QUALITY_SETTING_ULTRA_PERFORMANCE};
+                for (xess_quality_settings_t q : kOrder) {
+                    if (g_xess_api.GetOptimalInputResolution(g_xess.context, &out_res, q, &opt, &mn, &mx) == XESS_RESULT_SUCCESS &&
+                        render_w >= mn.x && render_w <= mx.x && render_h >= mn.y && render_h <= mx.y) {
+                        pick = q;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    g_xess.quality = pick;
+    xess_vk_init_params_t init{};
+    init.outputResolution = {out_w, out_h};
+    init.qualitySetting = pick;
+    init.initFlags = XESS_INIT_FLAG_LDR_INPUT_COLOR;
+    const xess_result_t res = g_xess_api.VKInit(g_xess.context, &init);
+    if (res != XESS_RESULT_SUCCESS) {
+        std::printf("[XESS] xessVKInit failed (code %d) for %ux%u -> %ux%u (%s)\n", static_cast<int>(res), render_w, render_h, out_w,
+                    out_h, XessQualityName(pick));
+        DestroyXessContext();
+        g_xess.failed = true;
+        return false;
+    }
+    g_xess_api.SetVelocityScale(g_xess.context, static_cast<float>(render_w), static_cast<float>(render_h));
+    g_xess.reset = true;
+    std::printf("[XESS] Intel XeSS ready (%s): %ux%u -> %ux%u\n", XessQualityName(pick), render_w, render_h, out_w, out_h);
+    return true;
+}
+
+bool XessPass(State::RenderTarget* shown, u32 out_w, u32 out_h, VkImageView* out_view, VkDescriptorSet* out_set) {
+    if (!g_xess_wanted.load(std::memory_order_relaxed) || !shown || !out_w || !out_h ||
+        (!g_xess_native.load(std::memory_order_relaxed) && out_w <= shown->width && out_h <= shown->height)) {
+        return false;
+    }
+    if (out_w < shown->width || out_h < shown->height) {
+        out_w = shown->width;
+        out_h = shown->height;
+    }
+    if (!EnsureXessContext(shown->width, shown->height, out_w, out_h) ||
+        !EnsureOwnImage(g_xess.output, out_w, out_h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        return false;
+    }
+    u32 now_depth = 0;
+    if (!PrepareTemporalInputs(shown, g_xess.reset, &now_depth)) {
+        return false;
+    }
+    const FrameTemporal& frame = g_frame_temporal;
+    g_xess.output.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    MoveOwnImage(g_xess.output, VK_IMAGE_LAYOUT_GENERAL);
+    xess_vk_execute_params_t exec{};
+    exec.colorTexture = {g_ffx.color.view, g_ffx.color.image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, g_ffx.color.format, shown->width,
+                         shown->height};
+    exec.velocityTexture = {g_ffx.motion.view, g_ffx.motion.image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, g_ffx.motion.format, shown->width,
+                            shown->height};
+    if (frame.depth_image != VK_NULL_HANDLE && frame.depth_view != VK_NULL_HANDLE && frame.depth_w == shown->width &&
+        frame.depth_h == shown->height) {
+        exec.depthTexture = {frame.depth_view, frame.depth_image, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}, frame.depth_format, shown->width,
+                             shown->height};
+    } else {
+        exec.depthTexture = {g_ffx.depth[now_depth].view, g_ffx.depth[now_depth].image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                             g_ffx.depth[now_depth].format, shown->width, shown->height};
+    }
+    exec.outputTexture = {g_xess.output.view, g_xess.output.image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, g_xess.output.format, out_w,
+                          out_h};
+    exec.jitterOffsetX = g_jitter_px_x;
+    exec.jitterOffsetY = g_jitter_px_y;
+    exec.exposureScale = 1.0f;
+    exec.resetHistory = (g_xess.reset || !frame.reprojected) ? 1u : 0u;
+    exec.inputWidth = shown->width;
+    exec.inputHeight = shown->height;
+    const xess_result_t res = g_xess_api.VKExecute(g_xess.context, g.command, &exec);
+    g_xess.reset = false;
+    MoveOwnImage(g_xess.output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (res != XESS_RESULT_SUCCESS) {
+        static u32 logged = 0;
+        if (logged++ < 5) {
+            std::printf("[XESS] xessVKExecute failed (code %d)\n", static_cast<int>(res));
+        }
+        return false;
+    }
+    VkDescriptorImageInfo info{g.sampler, g_xess.output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = g_xess.present_set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &info;
+    vk.vkUpdateDescriptorSets(g.device, 1, &write, 0, nullptr);
+    const float area_scale = static_cast<float>(out_w * out_h) / static_cast<float>(std::max(1u, shown->width * shown->height));
+    const u32 phases = std::clamp<u32>(static_cast<u32>(std::ceil(8.0f * area_scale)), 8u, 32u);
+    SetNextJitter(phases, shown->width, shown->height);
+    *out_view = g_xess.output.view;
+    *out_set = g_xess.present_set;
+    return true;
+}
+
+void DestroyUpscalerContexts() {
+    DestroyXessContext();
+    DestroyOwnImage(g_xess.output);
+    if (g_xess.pool && g.device) {
+        vk.vkDestroyDescriptorPool(g.device, g_xess.pool, nullptr);
+        g_xess.pool = VK_NULL_HANDLE;
+        g_xess.present_set = VK_NULL_HANDLE;
+    }
+    DestroyFfxContext();
+    DestroyOwnImage(g_ffx.color);
+    DestroyOwnImage(g_ffx.motion);
+    DestroyOwnImage(g_ffx.depth[0]);
+    DestroyOwnImage(g_ffx.depth[1]);
+    DestroyOwnImage(g_ffx.reactive);
+    DestroyOwnImage(g_ffx.output);
 }
 
 // ---- DIAGNOSTICO 1.9.1 (LD_GRAB_TRIGGER=<arquivo>, LD_GRAB_DIR=<pasta>, LD_GRAB_COUNT=n): quadros consecutivos ----
@@ -5559,7 +5951,11 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         u32 stencil_values[6]{};
     } dynamic;
     // 2.0: profundidade da cena guardada antes da limpeza do HUD (TAA / FSR). So com um deles ligado.
-    const u64 scene_depth = (g_aa_mode.load(std::memory_order_relaxed) || g_ffx_wanted.load(std::memory_order_relaxed)) ? PeekSceneDepth() : 0;
+    const u64 scene_depth =
+        (g_aa_mode.load(std::memory_order_relaxed) || g_ffx_wanted.load(std::memory_order_relaxed) ||
+         g_xess_wanted.load(std::memory_order_relaxed))
+            ? PeekSceneDepth()
+            : 0;
     u32 scene_depth_draws = 0;
     bool scene_depth_saved = false;
     for (const State::QueuedGame& draw : g.queue_game) {
@@ -6038,17 +6434,38 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
     VkDescriptorSet present_set = shown ? shown->present_set : VK_NULL_HANDLE;
     bool taa = false;
     UpdateFrameTemporal();
-    // 1.9.1: AMD FSR 2 / 3 / 4 (ampliacao temporal; ou FSR AA sem ampliar): a saida ja tem o tamanho da area na janela
-    bool ffx = false;
+    u32 upscale_w = static_cast<u32>(out_w), upscale_h = static_cast<u32>(out_h);
+    const u32 target_w = g_upscale_target_w.load(std::memory_order_relaxed);
+    const u32 target_h = g_upscale_target_h.load(std::memory_order_relaxed);
+    if (target_w && target_h && shown && shown->width && shown->height) {
+        const float img_aspect = static_cast<float>(shown->width) / shown->height;
+        const float tgt_aspect = static_cast<float>(target_w) / target_h;
+        if (tgt_aspect > img_aspect * 1.01f) {
+            upscale_h = target_h;
+            upscale_w = static_cast<u32>(std::floor(target_h * img_aspect));
+        } else if (tgt_aspect < img_aspect * 0.99f) {
+            upscale_w = target_w;
+            upscale_h = static_cast<u32>(std::floor(target_w / img_aspect));
+        } else {
+            upscale_w = target_w;
+            upscale_h = target_h;
+        }
+    }
+    // 1.9.1 / 2.0: AMD FSR 2 / 3 / 4 ou Intel XeSS 3.0.2 (ampliacao temporal ou Native AA)
+    bool ffx = false, xess = false;
     if (VkImageView ffx_view = VK_NULL_HANDLE;
-        present_pipeline && FfxPass(shown, static_cast<u32>(out_w), static_cast<u32>(out_h), &ffx_view, &present_set)) {
+        present_pipeline && FfxPass(shown, upscale_w, upscale_h, &ffx_view, &present_set)) {
         present_view = ffx_view;
         ffx = true;
+    } else if (VkImageView xess_view = VK_NULL_HANDLE;
+               present_pipeline && XessPass(shown, upscale_w, upscale_h, &xess_view, &present_set)) {
+        present_view = xess_view;
+        xess = true;
     } else if (VkImageView taa_view = VK_NULL_HANDLE; TaaPass(present_pipeline ? shown : nullptr, &taa_view, &present_set)) {
         present_view = taa_view;
         taa = true;
     }
-    if (!ffx && !taa) {
+    if (!ffx && !xess && !taa) {
         ClearJitter();
     }
     bool grab_window = false;
@@ -6058,7 +6475,7 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         --g_grab.active;
     }
     // 1.9.1: FSR 1 quando a imagem do jogo e menor que a area dela na janela (EASU aqui, RCAS na passagem da janela)
-    bool fsr = shown && present_pipeline && !ffx &&
+    bool fsr = shown && present_pipeline && !ffx && !xess &&
                FsrEasuPass(present_view, shown->width, shown->height, static_cast<u32>(out_w), static_cast<u32>(out_h));
     // TAA sem ampliacao (imagem do tamanho da area dela): so a nitidez do RCAS, para compensar a suavidade do TAA
     if (false && !fsr && taa && static_cast<u32>(out_w) == shown->width && static_cast<u32>(out_h) == shown->height && EnsureFsr()) {
@@ -6067,8 +6484,8 @@ bool VulkanRenderer::DrawFrame(u64 display_address) {
         fsr = true;
     }
     // imagem maior que a area na janela (resolucao acima do monitor): reducao com filtro de area em vez do bilinear
-    const u32 present_w = ffx ? g_ffx.output.width : shown ? shown->width : 0;
-    const u32 present_h = ffx ? g_ffx.output.height : shown ? shown->height : 0;
+    const u32 present_w = ffx ? g_ffx.output.width : xess ? g_xess.output.width : shown ? shown->width : 0;
+    const u32 present_h = ffx ? g_ffx.output.height : xess ? g_xess.output.height : shown ? shown->height : 0;
     const bool down = !fsr && present_pipeline && (present_w > out_w * 1.01f || present_h > out_h * 1.01f) && EnsureDown();
     Transition(g.command, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -7713,6 +8130,28 @@ void VulkanRenderer::SetPrewarmPredicted(bool enabled) {
 // 1.9.1: resolucao em que o jogo e desenhado (antes de criar qualquer alvo). Por enquanto em 16:9: numa tela de outra
 // proporcao, o maior 16:9 que cabe nela (a imagem do jogo continua 16:9).
 u32 g_render_out_w = 1920, g_render_out_h = 1080, g_render_scale_pct = 100;
+std::atomic<u32> g_upscale_target_w{0}, g_upscale_target_h{0};
+std::atomic<u32> g_render_actual_w{1920}, g_render_actual_h{1080};
+
+void VulkanRenderer::SetTargetUpscaleResolution(u32 width, u32 height) {
+    g_upscale_target_w = width;
+    g_upscale_target_h = height;
+    if (width && height) {
+        std::printf("[RENDER] target upscale resolution: %ux%u\n", width, height);
+    } else {
+        std::printf("[RENDER] target upscale resolution: window\n");
+    }
+}
+
+void VulkanRenderer::GetTargetUpscaleResolution(u32* width, u32* height) const {
+    if (width) *width = g_upscale_target_w.load(std::memory_order_relaxed);
+    if (height) *height = g_upscale_target_h.load(std::memory_order_relaxed);
+}
+
+void VulkanRenderer::GetCurrentRenderResolution(u32* width, u32* height) const {
+    if (width) *width = g_render_actual_w.load(std::memory_order_relaxed);
+    if (height) *height = g_render_actual_h.load(std::memory_order_relaxed);
+}
 
 void VulkanRenderer::SetUpscaler(int mode, float sharpness) {
     g_upscaler = mode;
@@ -7768,6 +8207,8 @@ void VulkanRenderer::SetRenderResolution(u32 width, u32 height) {
     }
     g_target_scale_x = std::clamp(static_cast<float>(w) / 1920.0f, 0.25f, 4.0f);
     g_target_scale_y = std::clamp(static_cast<float>(h) / 1080.0f, 0.25f, 4.0f);
+    g_render_actual_w = static_cast<u32>(std::lround(1920.0f * g_target_scale_x));
+    g_render_actual_h = static_cast<u32>(std::lround(1080.0f * g_target_scale_y));
     std::printf("[RENDER] game drawn at %ux%u (scale %.3f x %.3f of 1920x1080, camera x %.3f y %.3f)\n",
                 static_cast<u32>(1920 * g_target_scale_x + 0.5f), static_cast<u32>(1080 * g_target_scale_y + 0.5f), g_target_scale_x,
                 g_target_scale_y, g_camera_scale_x, g_camera_scale_y);
@@ -7796,12 +8237,37 @@ void TemporalJitter(float* x, float* y) {
 }
 
 void SetTemporalUpscaler(int major, bool native) {
+    if (major) {
+        g_xess_wanted = false;
+        g_xess_native = false;
+    }
     g_ffx_wanted = major;
     g_ffx_native = native;
+    g_ffx.failed_context = false;
+    g_ffx.reset = true;
     if (major) {
         std::printf("[RENDER] temporal upscaler: AMD FSR %s%s\n", major == 9 ? "(newest)" : std::to_string(major).c_str(),
                     native ? " (native AA)" : "");
     }
+}
+
+void SetXessUpscaler(bool enabled, bool native) {
+    if (enabled) {
+        g_ffx_wanted = 0;
+        g_ffx_native = false;
+    }
+    g_xess_wanted = enabled;
+    g_xess_native = native;
+    g_xess.failed = false;
+    g_xess.reset = true;
+    if (enabled) {
+        std::printf("[RENDER] temporal upscaler: Intel XeSS%s\n", native ? " (native AA)" : "");
+    }
+}
+
+void GetXessUpscaler(bool* enabled, bool* native) {
+    if (enabled) *enabled = g_xess_wanted.load(std::memory_order_relaxed);
+    if (native) *native = g_xess_native.load(std::memory_order_relaxed);
 }
 
 int GetAntiAliasing() {
@@ -7835,6 +8301,18 @@ void VulkanRenderer::PredictedStats(u32* built, u32* failed) const {
 u32 VulkanRenderer::PrewarmWaiting() const {
     std::lock_guard lock(g_prewarm_waiting_mutex);
     return static_cast<u32>(g_prewarm_waiting.size());
+}
+
+std::vector<u64> VulkanRenderer::WaitingPairKeys() const {
+    std::lock_guard lock(g_prewarm_waiting_mutex);
+    std::unordered_set<u64> uniq;
+    uniq.reserve(g_prewarm_waiting.size() / 2 + 16);
+    for (const std::vector<u32>& key : g_prewarm_waiting) {
+        if (key.size() >= 2) {
+            uniq.insert(key[0] | (static_cast<u64>(key[1]) << 32));
+        }
+    }
+    return std::vector<u64>(uniq.begin(), uniq.end());
 }
 
 // Fase 77: identidade do cache de pipelines do driver. O da AMD e por caminho do exe (Fase 53) e um driver novo

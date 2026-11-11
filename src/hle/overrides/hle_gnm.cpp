@@ -2313,7 +2313,11 @@ double WaitFrameTextures() {
     }
     auto& renderer = render::VulkanRenderer::Instance();
     const auto start = std::chrono::steady_clock::now();
-    const double cap_ms = g_tex_parallel ? std::max(g_tex_wait_cap_ms, 200.0) : g_tex_wait_cap_ms;
+    static const double wait_ms = [] {
+        const char* env = std::getenv("LD_TEX_WAIT_MS");
+        return env ? std::max(0.0, std::atof(env)) : 12.0;
+    }();
+    const double cap_ms = g_tex_wait_cap_ms != 50.0 ? g_tex_wait_cap_ms : wait_ms;
     const auto deadline = start + std::chrono::microseconds(static_cast<long long>(cap_ms * 1000.0));
     g_tex_wait_textures += g_tex_frame_waiting.size();
     for (;;) {
@@ -3016,7 +3020,7 @@ void PatchProjection(u8* data, u32 bytes, float sx, float sy, float jx, float jy
     // posicao reconstruida mudava um pouco a cada quadro e a sombra do chao ligava / desligava em areas inteiras.
     static const int offset_mode = [] {
         const char* env = std::getenv("LD_JITTER_OFFSET"); // DIAGNOSTICO: 0 = nao mexe, 1 = +j, 2 = -j, 3 = -j / P, 4 = +j / P
-        return env ? std::atoi(env) : 1;
+        return env ? std::atoi(env) : 3;
     }();
     // pares (1 / P00, 1 / P11) de QUALQUER projecao do jogo vista recentemente (nao so a ultima)
     float known[kAspectSlots][2];
@@ -3053,15 +3057,15 @@ void PatchProjection(u8* data, u32 bytes, float sx, float sy, float jx, float jy
                                 static_cast<unsigned long long>(old_miss.load()));
                 }
             }
+            f[i] /= sx;
+            f[i + 1] /= sy;
             if ((jx != 0.0f || jy != 0.0f) && offset_mode && i % 4 == 0 && i + 4 <= count && std::fabs(f[i + 2]) < 0.05f &&
                 std::fabs(f[i + 3]) < 0.05f) {
-                const float px = offset_mode >= 3 ? f[i] : 1.0f, py = offset_mode >= 3 ? f[i + 1] : 1.0f; // 1 / P00, 1 / P11
+                const float px = offset_mode >= 3 ? f[i] : 1.0f, py = offset_mode >= 3 ? f[i + 1] : 1.0f; // 1 / (P00*sx), 1 / (P11*sy)
                 const float sign = offset_mode == 2 || offset_mode == 3 ? -1.0f : 1.0f;
                 f[i + 2] = sign * jx * px;
                 f[i + 3] = sign * jy * py;
             }
-            f[i] /= sx;
-            f[i + 1] /= sy;
         }
     }
 }
@@ -7348,6 +7352,7 @@ void WarmThread() {
         Sleep(100);
     }
     if (!renderer.GameShadersSupported()) {
+        g_warm_finished = true;
         return;
     }
     const auto start = std::chrono::steady_clock::now();
@@ -7440,22 +7445,10 @@ void StartShaderWarmup(bool enabled) {
 // Fase 38: le o indice do pacote AOT numa thread propria logo na abertura (~160 ms); senao quem paga
 // e a thread de render, no primeiro par que faltar.
 // Fase 43: carrega todas as variantes do pacote (6 threads). Chamado na thread da abertura do pacote.
-void PreloadAllAot() {
+static void PreloadAotKeyList(const std::vector<AotKey>& keys, const char* label) {
     auto& renderer = render::VulkanRenderer::Instance();
-    for (int i = 0; i < 600 && !renderer.GameShadersSupported(); ++i) { // o Vulkan nasce com a janela
-        Sleep(100);
-    }
-    std::vector<AotKey> keys;
-    {
-        std::lock_guard lock(g_aot.mutex);
-        keys.reserve(g_aot.pairs.size());
-        for (const auto& [key, blobs] : g_aot.pairs) {
-            keys.push_back(key);
-        }
-    }
     g_ready_total = static_cast<u32>(keys.size());
     if (!renderer.GameShadersSupported() || keys.empty()) {
-        g_ready_finished = true;
         return;
     }
     renderer.SetModuleLoader(&LoadLazyAotModules); // Fase 59
@@ -7497,10 +7490,26 @@ void PreloadAllAot() {
     }
     u64 modules = 0, layouts = 0;
     renderer.GetSharedObjectCounts(&modules, &layouts);
-    log::Tagged("AOT", "full pack loaded: %u of %u variants ready in %.1f s (%u failures) | %llu modules and %llu layouts in Vulkan | "
-                "process memory %llu MB", g_ready_done.load() - g_ready_failed.load(), g_ready_total.load(), g_ready_seconds,
+    log::Tagged("AOT", "%s: %u of %u variants ready in %.1f s (%u failures) | %llu modules and %llu layouts in Vulkan | "
+                "process memory %llu MB", label, g_ready_done.load() - g_ready_failed.load(), g_ready_total.load(), g_ready_seconds,
                 g_ready_failed.load(), static_cast<unsigned long long>(modules), static_cast<unsigned long long>(layouts),
                 static_cast<unsigned long long>(g_ready_memory_mb));
+}
+
+void PreloadAllAot() {
+    auto& renderer = render::VulkanRenderer::Instance();
+    for (int i = 0; i < 600 && !renderer.GameShadersSupported(); ++i) { // o Vulkan nasce com a janela
+        Sleep(100);
+    }
+    std::vector<AotKey> keys;
+    {
+        std::lock_guard lock(g_aot.mutex);
+        keys.reserve(g_aot.pairs.size());
+        for (const auto& [key, blobs] : g_aot.pairs) {
+            keys.push_back(key);
+        }
+    }
+    PreloadAotKeyList(keys, "full pack loaded");
     // Fase 48: os pipelines ja vistos dos pares do pacote (registrados so agora) tambem entram no
     // aquecimento; a tela de carregamento espera por eles junto com os outros.
     if (g_warm_enabled.load()) { // --no-warmup: nada de pipelines na abertura
@@ -7514,6 +7523,42 @@ void PreloadAllAot() {
         renderer.BenchPipelines(bench);
     }
     g_ready_finished = true;
+}
+
+void PreloadNeededAot() {
+    auto& renderer = render::VulkanRenderer::Instance();
+    for (int i = 0; i < 600 && !renderer.GameShadersSupported(); ++i) {
+        Sleep(100);
+    }
+    if (!renderer.GameShadersSupported() || !g_warm_enabled.load()) {
+        return;
+    }
+    for (int i = 0; i < 600 && !g_warm_finished.load(); ++i) {
+        Sleep(50);
+    }
+    if (g_preload_all.load()) {
+        return;
+    }
+    const std::vector<u64> waiting = renderer.WaitingPairKeys();
+    if (waiting.empty()) {
+        return;
+    }
+    const std::unordered_set<u64> needed(waiting.begin(), waiting.end());
+    std::vector<AotKey> keys;
+    {
+        std::lock_guard lock(g_aot.mutex);
+        keys.reserve(needed.size());
+        for (const auto& [k, blobs] : g_aot.pairs) {
+            const u64 pair_key =
+                ((k.vs ^ (k.ps * 0x9E3779B97F4A7C15ull) ^ (k.signature * 0xC2B2AE3D27D4EB4Full)) | 1) ^ 0xA070000000000A00ull;
+            if (needed.count(pair_key)) {
+                keys.push_back(k);
+            }
+        }
+    }
+    PreloadAotKeyList(keys, "needed pack pairs loaded");
+    const u32 extra = renderer.PrewarmPipelines();
+    log::Tagged("AOT", "%u previously seen pack-pair pipelines queued for warmup (from %zu waiting pairs)", extra, keys.size());
 }
 
 void PreloadAotIndex() {
@@ -7595,6 +7640,7 @@ void PreloadAotIndex() {
                 std::vector<u8>().swap(g_aot_pak_memory);
             }
         } else {
+            PreloadNeededAot();
             g_ready_finished = true;
         }
     }).detach();
@@ -7702,7 +7748,7 @@ void GetLoadingStatus(LoadingStatus* out) {
     // LD_PREWARM_GATE=tudo volta a esperar todos.
     static const bool area_gate = [] {
         const char* env = std::getenv("LD_PREWARM_GATE");
-        return !(env && !std::strcmp(env, "tudo"));
+        return env && !std::strcmp(env, "area");
     }();
     if (area_gate && !g_prewarm_all.load()) { // Fase 77: Preparar / driver novo = todos
         u32 done = 0, total = 0;

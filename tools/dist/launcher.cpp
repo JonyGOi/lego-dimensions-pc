@@ -87,11 +87,12 @@ const wchar_t* const kResolutions[] = {
 const wchar_t* const kRenderScales[] = {L"50", L"67", L"75", L"85", L"100", L"125", L"150", L"200"};
 // 1.9.1: taxa de quadros (antes so "60 FPS" ligado / desligado)
 const wchar_t* const kFpsModes[] = {L"30", L"60", L"livre", L"livre_sem_vsync"}; // livre = ate os Hz do monitor
-// 1.9.1: ampliacao quando o jogo e desenhado abaixo da area na tela (escala < 100%)
-// FSR 1 = espacial; FSR 2 / 3 / 4 = temporais (DLL assinada da AMD, FFX API). FSR 4 numa GPU sem ele usa o mais novo que houver.
-const wchar_t* const kUpscalers[] = {L"off", L"fsr1", L"fsr2", L"fsr3", L"fsr4"};
+// 1.9.1: ampliacao quando o jogo e desenhado abaixo da area na tela (escala < 100% ou resolucao alvo maior)
+// FSR 1 = espacial; FSR 2 / 3 / 4 = temporais (AMD FFX API 4.1.2); xess = Intel XeSS 3.0.2 (Vulkan).
+const wchar_t* const kUpscalers[] = {L"off", L"fsr1", L"fsr2", L"fsr3", L"fsr4", L"xess"};
 // 1.9.1: anti-aliasing (TAA = 16 posicoes de deslocamento por quadro + nitidez RCAS)
-const wchar_t* const kAntiAliasing[] = {L"off", L"taa", L"fsraa", L"fsraa4"}; // fsraa = FSR 3 sem ampliar; fsraa4 = FSR 4 (pesado)
+const wchar_t* const kAntiAliasing[] = {L"off", L"taa", L"fsraa", L"fsraa4", L"xessaa"}; // fsraa = FSR 3; fsraa4 = FSR 4; xessaa = XeSS Native AA
+const wchar_t* const kTargetResolutions[] = {L"auto", L"1280x720", L"1600x900", L"1920x1080", L"2560x1080", L"2560x1440", L"3440x1440", L"3840x2160"};
 // 1.9.1: tela que nao e 16:9: imagem inteira (camera corrigida) ou 16:9 com faixas
 const wchar_t* const kAspectModes[] = {L"encher", L"16x9"};
 
@@ -116,7 +117,7 @@ const Language kLanguages[] = {
 };
 std::wstring g_res_value = L"1920x1080", g_lang_value = L"en";
 std::wstring g_fps_value = L"60", g_scale_value = L"100", g_upscaler_value = L"fsr1"; // 1.9.1
-std::wstring g_aa_value = L"off", g_aspect_value = L"encher"; // 1.9.1
+std::wstring g_aa_value = L"off", g_aspect_value = L"encher", g_target_res_value = L"auto"; // 1.9.1
 // Fase 62: icones dos botoes (--button-icons): pelo controle ligado ou fixos numa plataforma
 struct IconChoice {
     const wchar_t *code, *pt, *en;
@@ -409,6 +410,7 @@ void SaveSettings() {
     WriteIni(L"escala", g_scale_value);                     // 1.9.1
     WriteIni(L"upscaler", g_upscaler_value);                // 1.9.1
     WriteIni(L"antialiasing", g_aa_value);                  // 1.9.1
+    WriteIni(L"resolucao_alvo", g_target_res_value);        // 2.0
     WriteIni(L"proporcao", g_aspect_value);                 // 1.9.1
     WriteIni(L"console", g_opt_console ? L"1" : L"0");
     WriteIni(L"telacheia", g_opt_fullscreen ? L"1" : L"0");
@@ -1344,6 +1346,9 @@ void RunGame() {
         command += L" --render-scale " + g_scale_value; // 1.9.1
     }
     command += L" --upscaler " + g_upscaler_value; // 1.9.1
+    if (g_target_res_value != L"auto") {
+        command += L" --target-resolution " + g_target_res_value;
+    }
     command += L" --aa " + (g_aa_value == L"fsraa" ? std::wstring(L"fsraa3") : g_aa_value); // 1.9.1 (FSR AA = FSR 3: o 4 pesa ~5 ms na RX 6600)
     if (g_aspect_value == L"16x9") {
         command += L" --keep-16x9"; // 1.9.1: faixas em vez de ampliar o campo de visao
@@ -2382,15 +2387,24 @@ std::vector<Row> Rows() {
                         SaveSettings();
                     }});
     rows.push_back({kTabGraphics, RowKind::kChoice, L"Upscaler",
-                    ui::T(L"Com escala abaixo de 100%. FSR 2/3/4: temporal, mais nítido (4 = o mais novo).",
-                          L"With a scale below 100%. FSR 2/3/4: temporal, sharper (4 = the newest)."),
-                    g_upscaler_value == L"off" ? ui::T(L"Desligado (bilinear)", L"Off (bilinear)")
+                    ui::T(L"Com escala abaixo de 100% ou resolução alvo maior. FSR 4 (FFX 2.4 / 4.1.2) ou Intel XeSS 3.0.",
+                          L"With scale below 100% or higher target resolution. FSR 4 (FFX 2.4 / 4.1.2) or Intel XeSS 3.0."),
+                    g_upscaler_value == L"off"    ? ui::T(L"Desligado (bilinear)", L"Off (bilinear)")
                     : g_upscaler_value == L"fsr1" ? std::wstring(L"AMD FSR 1.0")
                     : g_upscaler_value == L"fsr2" ? std::wstring(L"AMD FSR 2")
                     : g_upscaler_value == L"fsr3" ? std::wstring(L"AMD FSR 3")
-                                                  : ui::T(L"AMD FSR 4 (pesado)", L"AMD FSR 4 (heavy)"),
+                    : g_upscaler_value == L"fsr4" ? ui::T(L"AMD FSR 4 (mais novo)", L"AMD FSR 4 (newest)")
+                                                  : std::wstring(L"Intel XeSS 3.0"),
                     [](int step) {
                         g_upscaler_value = Step(kUpscalers, g_upscaler_value, step, [](const wchar_t* r) { return std::wstring(r); });
+                        SaveSettings();
+                    }});
+    rows.push_back({kTabGraphics, RowKind::kChoice, ui::T(L"Resolução alvo (upscale)", L"Target upscale resolution"),
+                    ui::T(L"Resolução final que o FSR 2-4 / XeSS entrega na tela (também alterável em L3+R3).",
+                          L"Final resolution targeted by FSR 2-4 / XeSS (also adjustable in L3+R3)."),
+                    g_target_res_value == L"auto" ? ui::T(L"Automática (Janela)", L"Auto (Window)") : g_target_res_value,
+                    [](int step) {
+                        g_target_res_value = Step(kTargetResolutions, g_target_res_value, step, [](const wchar_t* r) { return std::wstring(r); });
                         SaveSettings();
                     }});
     rows.push_back({kTabDisplay, RowKind::kChoice, ui::T(L"Proporção", L"Aspect ratio"),
@@ -2403,11 +2417,12 @@ std::vector<Row> Rows() {
                         SaveSettings();
                     }});
     rows.push_back({kTabGraphics, RowKind::kChoice, L"Anti-aliasing",
-                    ui::T(L"TAA: o mais leve. FSR 3 AA: melhor. FSR 4 AA: o melhor, mas pesado.",
-                          L"TAA: lightest. FSR 3 AA: better. FSR 4 AA: best, but heavy."),
+                    ui::T(L"TAA: leve. FSR 3/4 AA ou Intel XeSS AA: anti-aliasing temporal em escala nativa.",
+                          L"TAA: light. FSR 3/4 AA or Intel XeSS AA: temporal anti-aliasing at native scale."),
                     g_aa_value == L"taa"      ? std::wstring(L"TAA x16")
                     : g_aa_value == L"fsraa"  ? std::wstring(L"AMD FSR 3 AA")
                     : g_aa_value == L"fsraa4" ? ui::T(L"AMD FSR 4 AA (pesado)", L"AMD FSR 4 AA (heavy)")
+                    : g_aa_value == L"xessaa" ? std::wstring(L"Intel XeSS Native AA")
                                               : ui::T(L"Desligado", L"Off"),
                     [](int step) {
                         g_aa_value = Step(kAntiAliasing, g_aa_value, step, [](const wchar_t* r) { return std::wstring(r); });
@@ -3171,6 +3186,10 @@ void LoadSettings() {
     g_upscaler_value = ReadIni(L"upscaler", L"fsr1");
     if (std::find(std::begin(kUpscalers), std::end(kUpscalers), g_upscaler_value) == std::end(kUpscalers)) {
         g_upscaler_value = L"fsr1";
+    }
+    g_target_res_value = ReadIni(L"resolucao_alvo", L"auto");
+    if (std::find(std::begin(kTargetResolutions), std::end(kTargetResolutions), g_target_res_value) == std::end(kTargetResolutions)) {
+        g_target_res_value = L"auto";
     }
     g_aa_value = ReadIni(L"antialiasing", L"off");
     if (std::find(std::begin(kAntiAliasing), std::end(kAntiAliasing), g_aa_value) == std::end(kAntiAliasing)) {

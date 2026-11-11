@@ -164,11 +164,31 @@ struct MenuItem {
     int selected = 0;
 };
 
-// F1 menu (2.0.2; was F2) (2.0: in English, with the options the port really has; they match the launcher's)
+enum MenuIdx {
+    kMenuRes = 0,
+    kMenuTargetRes,
+    kMenuRenderScale,
+    kMenuUpscaler,
+    kMenuAA,
+    kMenuDisplayMode,
+    kMenuFps,
+    kMenuFpsCounter,
+    kMenuIcons,
+    kMenuTrophySound,
+    kMenuResetTrophies,
+    kMenuPopupStyle,
+    kMenuBlankFreq,
+    kMenuCount
+};
+
+// F1 / L3+R3 menu
 static std::vector<MenuItem> g_menu_items = {
-    {"RESOLUTION (RESTART)", {"1280X720", "1600X900", "1920X1080", "2560X1080", "2560X1440", "3440X1440", "3840X2160"}, 2},
+    {"WINDOW RES (RESTART)", {"1280X720", "1600X900", "1920X1080", "2560X1080", "2560X1440", "3440X1440", "3840X2160"}, 2},
+    {"TARGET UPSCALE RES", {"AUTO (WINDOW)", "1280X720", "1600X900", "1920X1080", "2560X1080", "2560X1440", "3440X1440", "3840X2160"}, 0},
+    {"RENDER SCALE (RESTART)", {"50%", "67%", "75%", "85%", "100%", "125%", "150%", "200%"}, 4},
+    {"UPSCALER", {"OFF", "FSR 1.0", "FSR 2", "FSR 3", "FSR 4", "INTEL XESS 3.0"}, 1},
+    {"ANTI-ALIASING", {"OFF", "TAA X16", "FSR 3 AA", "FSR 4 AA", "XESS NATIVE AA"}, 0},
     {"DISPLAY MODE", {"FULLSCREEN", "WINDOWED"}, 0},
-    {"ANTI-ALIASING", {"OFF", "TAA X16", "FSR 3 AA", "FSR 4 AA"}, 0},
     {"FRAME RATE (RESTART)", {"30 FPS", "60 FPS", "UNLOCKED", "UNLOCKED NO VSYNC"}, 1},
     {"FPS COUNTER (F10)", {"OFF", "ON"}, 0},
     {"CONTROLLER ICONS", {"AUTO", "PS4", "XBOX", "SWITCH", "KEYBOARD"}, 0},
@@ -237,43 +257,64 @@ static void ApplyAndSaveVideoSettings() {
     static const u32 kResW[] = {1280, 1600, 1920, 2560, 2560, 3440, 3840};
     static const u32 kResH[] = {720, 900, 1080, 1080, 1440, 1440, 2160};
     static const wchar_t* const kResStr[] = {L"1280x720", L"1600x900", L"1920x1080", L"2560x1080", L"2560x1440", L"3440x1440", L"3840x2160"};
-    const int r = g_menu_items[0].selected;
+    const int r = g_menu_items[kMenuRes].selected;
     if (r >= 0 && r < 7) {
         WriteLauncherIni(L"resolucao", kResStr[r]);
         SetWindowResolution(kResW[r], kResH[r]);
     }
 
+    // Target upscale resolution (applies live!)
+    static const u32 kTargetW[] = {0, 1280, 1600, 1920, 2560, 2560, 3440, 3840};
+    static const u32 kTargetH[] = {0, 720, 900, 1080, 1080, 1440, 1440, 2160};
+    static const wchar_t* const kTargetStr[] = {L"auto", L"1280x720", L"1600x900", L"1920x1080", L"2560x1080", L"2560x1440", L"3440x1440", L"3840x2160"};
+    const int tr = g_menu_items[kMenuTargetRes].selected;
+    if (tr >= 0 && tr < 8) {
+        WriteLauncherIni(L"resolucao_alvo", kTargetStr[tr]);
+        render::VulkanRenderer::Instance().SetTargetUpscaleResolution(kTargetW[tr], kTargetH[tr]);
+    }
+
+    // Render scale (saved for restart — base render targets are pooled per session)
+    static const wchar_t* const kScaleStr[] = {L"50", L"67", L"75", L"85", L"100", L"125", L"150", L"200"};
+    const int rs = g_menu_items[kMenuRenderScale].selected;
+    if (rs >= 0 && rs < 8) {
+        WriteLauncherIni(L"escala", kScaleStr[rs]);
+    }
+
+    // Upscaler + Anti-aliasing (both apply live!)
+    static const wchar_t* const kUpStr[] = {L"off", L"fsr1", L"fsr2", L"fsr3", L"fsr4", L"xess"};
+    static const wchar_t* const kAaStr[] = {L"off", L"taa", L"fsraa", L"fsraa4", L"xessaa"};
+    const int up = g_menu_items[kMenuUpscaler].selected;
+    const int aa = g_menu_items[kMenuAA].selected;
+    if (up >= 0 && up < 6) {
+        WriteLauncherIni(L"upscaler", kUpStr[up]);
+    }
+    if (aa >= 0 && aa < 5) {
+        WriteLauncherIni(L"antialiasing", kAaStr[aa]);
+    }
+    render::VulkanRenderer::Instance().SetUpscaler(up == 1 ? 1 : 0, 0.25f);
+    render::SetAntiAliasing(aa == 1 ? 1 : 0);
+    if (up == 5) {
+        render::SetXessUpscaler(true, aa == 4);
+    } else if (up >= 2 && up <= 4) {
+        render::SetTemporalUpscaler(up, aa == 2 || aa == 3);
+    } else if (aa == 4) {
+        render::SetXessUpscaler(true, true);
+    } else if (aa == 2 || aa == 3) {
+        render::SetTemporalUpscaler(aa == 3 ? 4 : 3, true);
+    } else {
+        render::SetTemporalUpscaler(0, false);
+        render::SetXessUpscaler(false, false);
+    }
+
     // Display mode
-    const bool want_full = g_menu_items[1].selected == 0;
+    const bool want_full = g_menu_items[kMenuDisplayMode].selected == 0;
     WriteLauncherIni(L"telacheia", want_full ? L"1" : L"0");
     if (hwnd) {
         SetFullscreen(hwnd, want_full);
     }
 
-    // Anti-aliasing (2.0: the real options; it used to offer MSAA, which the port never had). Applies right away.
-    static const wchar_t* const kAaStr[] = {L"off", L"taa", L"fsraa", L"fsraa4"};
-    const int aa = g_menu_items[2].selected;
-    if (aa >= 0 && aa < 4) {
-        WriteLauncherIni(L"antialiasing", kAaStr[aa]);
-        render::SetAntiAliasing(aa == 1 ? 1 : 0);
-        if (aa >= 2) {
-            render::SetTemporalUpscaler(aa == 3 ? 4 : 3, true);
-        } else {
-            // back to the launcher's upscaler (FSR 2 / 3 / 4 only work below 100% render scale)
-            wchar_t exe[MAX_PATH]{}, buf[32]{};
-            int major = 0;
-            if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
-                std::filesystem::path root = std::filesystem::path(exe).parent_path();
-                if (root.filename() == L"build") root = root.parent_path();
-                GetPrivateProfileStringW(L"launcher", L"upscaler", L"off", buf, 32, (root / L"launcher.ini").wstring().c_str());
-                major = !_wcsicmp(buf, L"fsr2") ? 2 : !_wcsicmp(buf, L"fsr3") ? 3 : !_wcsicmp(buf, L"fsr4") ? 4 : 0;
-            }
-            render::SetTemporalUpscaler(major, false);
-        }
-    }
-
     // Frame rate: 30 / 60 / unlocked (up to the monitor's refresh, no tearing) / unlocked without VSync. Applies right away.
-    const int f = g_menu_items[3].selected;
+    const int f = g_menu_items[kMenuFps].selected;
     static const wchar_t* const kFpsStr[] = {L"30", L"60", L"livre", L"livre_sem_vsync"};
     if (f >= 0 && f < 4) {
         WriteLauncherIni(L"fps", kFpsStr[f]);
@@ -286,22 +327,22 @@ static void ApplyAndSaveVideoSettings() {
     }
 
     // FPS counter
-    SetStatsOverlay(g_menu_items[4].selected == 1);
+    SetStatsOverlay(g_menu_items[kMenuFpsCounter].selected == 1);
 
     // Controller icons
     static const char* const kIconsAnsi[] = {"auto", "ps4", "xboxone", "wiiu", "keyboard"};
     static const wchar_t* const kIconsStr[] = {L"auto", L"ps4", L"xboxone", L"wiiu", L"keyboard"};
-    const int ic = g_menu_items[5].selected;
+    const int ic = g_menu_items[kMenuIcons].selected;
     if (ic >= 0 && ic < 5) {
         WriteLauncherIni(L"icones", kIconsStr[ic]);
         gnm::SetButtonIcons(kIconsAnsi[ic]);
     }
 
     // Trophy sound
-    if (g_menu_items.size() > 6) {
+    if (g_menu_items.size() > static_cast<size_t>(kMenuTrophySound)) {
         static const wchar_t* const kSoundStr[] = {L"playstation", L"xbox", L"steam", L"off"};
         static const char* const kSoundAnsi[] = {"playstation", "xbox", "steam", "off"};
-        const int ts = g_menu_items[6].selected;
+        const int ts = g_menu_items[kMenuTrophySound].selected;
         if (ts >= 0 && ts < 4) {
             WriteLauncherIni(L"trophy_sound", kSoundStr[ts]);
             hle::trophy::TrophyManager::Instance().SetSoundType(kSoundAnsi[ts]);
@@ -309,16 +350,16 @@ static void ApplyAndSaveVideoSettings() {
     }
 
     // Reset trophies
-    if (g_menu_items.size() > 7 && g_menu_selected == 7) {
+    if (g_menu_items.size() > static_cast<size_t>(kMenuResetTrophies) && g_menu_selected == kMenuResetTrophies) {
         hle::trophy::TrophyManager::Instance().ResetTrophies();
-        g_menu_items[7].selected = 1;
+        g_menu_items[kMenuResetTrophies].selected = 1;
     }
 
     // Popup style
-    if (g_menu_items.size() > 8) {
+    if (g_menu_items.size() > static_cast<size_t>(kMenuPopupStyle)) {
         static const wchar_t* const kPopupStr[] = {L"ps5", L"ps4", L"xbox", L"xbox360", L"steam"};
         static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-        const int ps = g_menu_items[8].selected;
+        const int ps = g_menu_items[kMenuPopupStyle].selected;
         if (ps >= 0 && ps < 5) {
             WriteLauncherIni(L"popup_style", kPopupStr[ps]);
             hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[ps]);
@@ -326,10 +367,10 @@ static void ApplyAndSaveVideoSettings() {
     }
 
     // Blank frequency
-    if (g_menu_items.size() > 9) {
+    if (g_menu_items.size() > static_cast<size_t>(kMenuBlankFreq)) {
         static const int kBlankHz[] = {900, 600, 300, 120, 60};
         static const wchar_t* const kBlankStr[] = {L"900", L"600", L"300", L"120", L"60"};
-        const int bf = g_menu_items[9].selected;
+        const int bf = g_menu_items[kMenuBlankFreq].selected;
         if (bf >= 0 && bf < 5) {
             WriteLauncherIni(L"blank_frequency", kBlankStr[bf]);
             SetBlankFrequency(kBlankHz[bf]);
@@ -339,33 +380,36 @@ static void ApplyAndSaveVideoSettings() {
     g_save_confirm_timer = 90;
 }
 
-// 2.0: the menu shows what the game is running with (the launcher's command line). It used to read the old fps60 key of
-// launcher.ini and turn the unlocked frame rate back off at start-up - the launcher writes fps60=1 for "unlocked".
 static void InitMenuDefaults() {
     static bool s_init = false;
     if (s_init) return;
     s_init = true;
 
     if (lang::Pt()) {
-        g_menu_items[0].label = "RESOLUCAO (REINICIAR)";
-        g_menu_items[1].label = "MODO DE TELA";
-        g_menu_items[1].options = {"TELA CHEIA", "JANELA"};
-        g_menu_items[2].label = "ANTI-ALIASING";
-        g_menu_items[2].options = {"DESLIGADO", "TAA X16", "FSR 3 AA", "FSR 4 AA"};
-        g_menu_items[3].label = "TAXA DE QUADROS";
-        g_menu_items[3].options = {"30 FPS", "60 FPS", "ILIMITADO", "ILIMITADO SEM VSYNC"};
-        g_menu_items[4].label = "CONTADOR FPS (F10)";
-        g_menu_items[4].options = {"DESLIGADO", "LIGADO"};
-        g_menu_items[5].label = "ICONES DE CONTROLE";
-        g_menu_items[5].options = {"AUTO", "PS4", "XBOX", "SWITCH", "TECLADO"};
-        g_menu_items[6].label = "SOM DE CONQUISTA";
-        g_menu_items[6].options = {"PLAYSTATION", "XBOX", "STEAM", "DESLIGADO"};
-        g_menu_items[7].label = "REINICIAR CONQUISTAS";
-        g_menu_items[7].options = {"< APERTE ENTER >", "CONQUISTAS REINICIADAS!"};
-        g_menu_items[8].label = "ESTILO DO POP-UP";
-        g_menu_items[8].options = {"PS5 (QUALIFICADO)", "PS4", "XBOX", "XBOX 360", "STEAM"};
-        g_menu_items[9].label = "FREQUENCIA BLANK";
-        g_menu_items[9].options = {"900 HZ (FLUIDO)", "600 HZ", "300 HZ", "120 HZ", "60 HZ"};
+        g_menu_items[kMenuRes].label = "RESOLUCAO JANELA (REINICIAR)";
+        g_menu_items[kMenuTargetRes].label = "RESOLUCAO ALVO (UPSCALE)";
+        g_menu_items[kMenuTargetRes].options = {"AUTO (JANELA)", "1280X720", "1600X900", "1920X1080", "2560X1080", "2560X1440", "3440X1440", "3840X2160"};
+        g_menu_items[kMenuRenderScale].label = "ESCALA DE RENDER (REINICIAR)";
+        g_menu_items[kMenuUpscaler].label = "UPSCALER";
+        g_menu_items[kMenuUpscaler].options = {"DESLIGADO", "FSR 1.0", "FSR 2", "FSR 3", "FSR 4", "INTEL XESS 3.0"};
+        g_menu_items[kMenuAA].label = "ANTI-ALIASING";
+        g_menu_items[kMenuAA].options = {"DESLIGADO", "TAA X16", "FSR 3 AA", "FSR 4 AA", "XESS NATIVE AA"};
+        g_menu_items[kMenuDisplayMode].label = "MODO DE TELA";
+        g_menu_items[kMenuDisplayMode].options = {"TELA CHEIA", "JANELA"};
+        g_menu_items[kMenuFps].label = "TAXA DE QUADROS";
+        g_menu_items[kMenuFps].options = {"30 FPS", "60 FPS", "ILIMITADO", "ILIMITADO SEM VSYNC"};
+        g_menu_items[kMenuFpsCounter].label = "CONTADOR FPS (F10)";
+        g_menu_items[kMenuFpsCounter].options = {"DESLIGADO", "LIGADO"};
+        g_menu_items[kMenuIcons].label = "ICONES DE CONTROLE";
+        g_menu_items[kMenuIcons].options = {"AUTO", "PS4", "XBOX", "SWITCH", "TECLADO"};
+        g_menu_items[kMenuTrophySound].label = "SOM DE CONQUISTA";
+        g_menu_items[kMenuTrophySound].options = {"PLAYSTATION", "XBOX", "STEAM", "DESLIGADO"};
+        g_menu_items[kMenuResetTrophies].label = "REINICIAR CONQUISTAS";
+        g_menu_items[kMenuResetTrophies].options = {"< APERTE ENTER >", "CONQUISTAS REINICIADAS!"};
+        g_menu_items[kMenuPopupStyle].label = "ESTILO DO POP-UP";
+        g_menu_items[kMenuPopupStyle].options = {"PS5 (QUALIFICADO)", "PS4", "XBOX", "XBOX 360", "STEAM"};
+        g_menu_items[kMenuBlankFreq].label = "FREQUENCIA BLANK";
+        g_menu_items[kMenuBlankFreq].options = {"900 HZ (FLUIDO)", "600 HZ", "300 HZ", "120 HZ", "60 HZ"};
     }
     wchar_t exe[MAX_PATH];
     if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
@@ -376,49 +420,83 @@ static void InitMenuDefaults() {
 
         GetPrivateProfileStringW(L"launcher", L"resolucao", L"1920x1080", buf, 64, ini.wstring().c_str());
         static const wchar_t* const kRes[] = {L"1280x720", L"1600x900", L"1920x1080", L"2560x1080", L"2560x1440", L"3440x1440", L"3840x2160"};
-        g_menu_items[0].selected = 2;
+        g_menu_items[kMenuRes].selected = 2;
         for (int i = 0; i < 7; ++i) {
             if (!_wcsicmp(buf, kRes[i])) {
-                g_menu_items[0].selected = i;
+                g_menu_items[kMenuRes].selected = i;
+            }
+        }
+
+        static const wchar_t* const kTarget[] = {L"auto", L"1280x720", L"1600x900", L"1920x1080", L"2560x1080", L"2560x1440", L"3440x1440", L"3840x2160"};
+        GetPrivateProfileStringW(L"launcher", L"resolucao_alvo", L"auto", buf, 64, ini.wstring().c_str());
+        g_menu_items[kMenuTargetRes].selected = 0;
+        u32 tw = 0, th = 0;
+        render::VulkanRenderer::Instance().GetTargetUpscaleResolution(&tw, &th);
+        std::wstring target_wstr = (tw && th) ? (std::to_wstring(tw) + L"x" + std::to_wstring(th)) : std::wstring(buf);
+        for (int i = 0; i < 8; ++i) {
+            if (!_wcsicmp(target_wstr.c_str(), kTarget[i])) {
+                g_menu_items[kMenuTargetRes].selected = i;
+            }
+        }
+
+        static const wchar_t* const kScale[] = {L"50", L"67", L"75", L"85", L"100", L"125", L"150", L"200"};
+        GetPrivateProfileStringW(L"launcher", L"escala", L"100", buf, 64, ini.wstring().c_str());
+        g_menu_items[kMenuRenderScale].selected = 4;
+        for (int i = 0; i < 8; ++i) {
+            if (!_wcsicmp(buf, kScale[i])) {
+                g_menu_items[kMenuRenderScale].selected = i;
+            }
+        }
+
+        static const wchar_t* const kUp[] = {L"off", L"fsr1", L"fsr2", L"fsr3", L"fsr4", L"xess"};
+        GetPrivateProfileStringW(L"launcher", L"upscaler", L"fsr1", buf, 64, ini.wstring().c_str());
+        g_menu_items[kMenuUpscaler].selected = 1;
+        for (int i = 0; i < 6; ++i) {
+            if (!_wcsicmp(buf, kUp[i])) {
+                g_menu_items[kMenuUpscaler].selected = i;
             }
         }
 
         GetPrivateProfileStringW(L"launcher", L"icones", L"auto", buf, 64, ini.wstring().c_str());
-        if (wcsstr(buf, L"ps4") || wcsstr(buf, L"ps3")) g_menu_items[5].selected = 1;
-        else if (wcsstr(buf, L"xbox")) g_menu_items[5].selected = 2;
-        else if (wcsstr(buf, L"wiiu") || wcsstr(buf, L"switch")) g_menu_items[5].selected = 3;
-        else if (wcsstr(buf, L"keyboard")) g_menu_items[5].selected = 4;
-        else g_menu_items[5].selected = 0;
+        if (wcsstr(buf, L"ps4") || wcsstr(buf, L"ps3")) g_menu_items[kMenuIcons].selected = 1;
+        else if (wcsstr(buf, L"xbox")) g_menu_items[kMenuIcons].selected = 2;
+        else if (wcsstr(buf, L"wiiu") || wcsstr(buf, L"switch")) g_menu_items[kMenuIcons].selected = 3;
+        else if (wcsstr(buf, L"keyboard")) g_menu_items[kMenuIcons].selected = 4;
+        else g_menu_items[kMenuIcons].selected = 0;
 
         GetPrivateProfileStringW(L"launcher", L"trophy_sound", L"playstation", buf, 64, ini.wstring().c_str());
-        if (!_wcsicmp(buf, L"xbox")) g_menu_items[6].selected = 1;
-        else if (!_wcsicmp(buf, L"steam")) g_menu_items[6].selected = 2;
-        else if (!_wcsicmp(buf, L"off") || !_wcsicmp(buf, L"desligado")) g_menu_items[6].selected = 3;
-        else g_menu_items[6].selected = 0;
+        if (!_wcsicmp(buf, L"xbox")) g_menu_items[kMenuTrophySound].selected = 1;
+        else if (!_wcsicmp(buf, L"steam")) g_menu_items[kMenuTrophySound].selected = 2;
+        else if (!_wcsicmp(buf, L"off") || !_wcsicmp(buf, L"desligado")) g_menu_items[kMenuTrophySound].selected = 3;
+        else g_menu_items[kMenuTrophySound].selected = 0;
 
         GetPrivateProfileStringW(L"launcher", L"popup_style", L"ps5", buf, 64, ini.wstring().c_str());
-        if (!_wcsicmp(buf, L"ps4")) g_menu_items[8].selected = 1;
-        else if (!_wcsicmp(buf, L"xbox")) g_menu_items[8].selected = 2;
-        else if (!_wcsicmp(buf, L"xbox360")) g_menu_items[8].selected = 3;
-        else if (!_wcsicmp(buf, L"steam")) g_menu_items[8].selected = 4;
-        else g_menu_items[8].selected = 0;
+        if (!_wcsicmp(buf, L"ps4")) g_menu_items[kMenuPopupStyle].selected = 1;
+        else if (!_wcsicmp(buf, L"xbox")) g_menu_items[kMenuPopupStyle].selected = 2;
+        else if (!_wcsicmp(buf, L"xbox360")) g_menu_items[kMenuPopupStyle].selected = 3;
+        else if (!_wcsicmp(buf, L"steam")) g_menu_items[kMenuPopupStyle].selected = 4;
+        else g_menu_items[kMenuPopupStyle].selected = 0;
 
         int bf = GetPrivateProfileIntW(L"launcher", L"blank_frequency", 900, ini.wstring().c_str());
-        if (bf == 600) g_menu_items[9].selected = 1;
-        else if (bf == 300) g_menu_items[9].selected = 2;
-        else if (bf == 120) g_menu_items[9].selected = 3;
-        else if (bf == 60) g_menu_items[9].selected = 4;
-        else g_menu_items[9].selected = 0;
+        if (bf == 600) g_menu_items[kMenuBlankFreq].selected = 1;
+        else if (bf == 300) g_menu_items[kMenuBlankFreq].selected = 2;
+        else if (bf == 120) g_menu_items[kMenuBlankFreq].selected = 3;
+        else if (bf == 60) g_menu_items[kMenuBlankFreq].selected = 4;
+        else g_menu_items[kMenuBlankFreq].selected = 0;
         SetBlankFrequency(bf);
     }
-    g_menu_items[1].selected = g_start_fullscreen.load() || g_fullscreen ? 0 : 1;
+    g_menu_items[kMenuDisplayMode].selected = g_start_fullscreen.load() || g_fullscreen ? 0 : 1;
     int major = 0;
     bool native = false;
     render::GetTemporalUpscaler(&major, &native);
-    g_menu_items[2].selected = native ? (major == 4 ? 3 : 2) : render::GetAntiAliasing() == 1 ? 1 : 0;
-    g_menu_items[3].selected = !g_unlocked_fps.load() ? (g_force_60hz.load() ? 1 : 0)
-                                                       : (render::VulkanRenderer::Instance().NoVsync() ? 3 : 2);
-    g_menu_items[4].selected = g_stats_overlay.load() ? 1 : 0;
+    bool xess_on = false, xess_native = false;
+    render::GetXessUpscaler(&xess_on, &xess_native);
+    if (xess_on && !xess_native) g_menu_items[kMenuUpscaler].selected = 5;
+    else if (major >= 2 && major <= 4 && !native) g_menu_items[kMenuUpscaler].selected = major;
+    g_menu_items[kMenuAA].selected = xess_native ? 4 : native ? (major == 4 ? 3 : 2) : render::GetAntiAliasing() == 1 ? 1 : 0;
+    g_menu_items[kMenuFps].selected = !g_unlocked_fps.load() ? (g_force_60hz.load() ? 1 : 0)
+                                                               : (render::VulkanRenderer::Instance().NoVsync() ? 3 : 2);
+    g_menu_items[kMenuFpsCounter].selected = g_stats_overlay.load() ? 1 : 0;
 }
 
 } // namespace
@@ -456,7 +534,7 @@ void HandleVideoMenuController(u32 pressed) {
     } else if (pressed & 0x80) { // Left
         auto& item = g_menu_items[g_menu_selected];
         item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
-        if (g_menu_selected == 8) {
+        if (g_menu_selected == kMenuPopupStyle) {
             static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
             hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
         }
@@ -464,7 +542,7 @@ void HandleVideoMenuController(u32 pressed) {
     } else if (pressed & 0x20) { // Right
         auto& item = g_menu_items[g_menu_selected];
         item.selected = (item.selected + 1) % item.options.size();
-        if (g_menu_selected == 8) {
+        if (g_menu_selected == kMenuPopupStyle) {
             static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
             hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
         }
@@ -825,7 +903,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (wparam == VK_LEFT) {
                 auto& item = g_menu_items[g_menu_selected];
                 item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
-                if (g_menu_selected == 8) {
+                if (g_menu_selected == kMenuPopupStyle) {
                     static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
                     hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
                 }
@@ -834,7 +912,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (wparam == VK_RIGHT) {
                 auto& item = g_menu_items[g_menu_selected];
                 item.selected = (item.selected + 1) % item.options.size();
-                if (g_menu_selected == 8) {
+                if (g_menu_selected == kMenuPopupStyle) {
                     static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
                     hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
                 }
@@ -2135,56 +2213,67 @@ void QueueStatsOverlay() {
     if (g_video_menu_open.load()) {
         constexpr u32 kBg = 0xEE121216, kBorder = 0xFF00D000, kTitleYellow = 0xFF00E0FF, kHiBg = 0xAA303038;
         constexpr u32 kWhite = 0xFFFFFFFF, kGray = 0xFFA0A0A0, kCyan = 0xFFE0C040;
-        
+
         float scale_ui = client.bottom >= 1400 ? 1.5f : (client.bottom >= 1000 ? 1.0f : 0.75f);
-        float box_w = 700.0f * scale_ui;
-        float box_h = 560.0f * scale_ui;
+        scale_ui = std::min(scale_ui, std::min(client.right / 820.0f, client.bottom / 670.0f));
+        float box_w = 780.0f * scale_ui;
+        float box_h = 640.0f * scale_ui;
         float box_x0 = (client.right - box_w) / 2.0f;
         float box_y0 = (client.bottom - box_h) / 2.0f;
         float box_x1 = box_x0 + box_w;
         float box_y1 = box_y0 + box_h;
-        
+
         c.Rect(box_x0 - 4.0f, box_y0 - 4.0f, box_x1 + 4.0f, box_y1 + 4.0f, kBorder);
         c.Rect(box_x0, box_y0, box_x1, box_y1, kBg);
-        
+
         const std::string title = lang::Pt() ? "CONFIGURACOES DE VIDEO" : "VIDEO SETTINGS";
-        float font_title = 3.5f * scale_ui;
-        c.Write(title, box_x0 + (box_w - TextWidth(title, font_title)) / 2.0f, box_y0 + 20.0f * scale_ui, font_title, kTitleYellow);
-        
-        c.Rect(box_x0 + 20.0f * scale_ui, box_y0 + 55.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y0 + 57.0f * scale_ui, kGray);
-        
-        float row_y = box_y0 + 75.0f * scale_ui;
-        float font_item = 2.4f * scale_ui;
+        float font_title = 3.2f * scale_ui;
+        c.Write(title, box_x0 + (box_w - TextWidth(title, font_title)) / 2.0f, box_y0 + 16.0f * scale_ui, font_title, kTitleYellow);
+
+        u32 rw = 0, rh = 0, tw = 0, th = 0;
+        render::VulkanRenderer::Instance().GetCurrentRenderResolution(&rw, &rh);
+        render::VulkanRenderer::Instance().GetTargetUpscaleResolution(&tw, &th);
+        const std::string tgt_txt = (tw && th) ? (std::to_string(tw) + "X" + std::to_string(th))
+                                               : (std::to_string(client.right) + "X" + std::to_string(client.bottom));
+        const std::string res_info = (lang::Pt() ? "RENDER INTERNO: " : "INTERNAL RENDER: ") + std::to_string(rw) + "X" +
+                                     std::to_string(rh) + (lang::Pt() ? "  ->  ALVO: " : "  ->  TARGET: ") + tgt_txt;
+        float font_info = 1.65f * scale_ui;
+        c.Write(res_info, box_x0 + (box_w - TextWidth(res_info, font_info)) / 2.0f, box_y0 + 48.0f * scale_ui, font_info, kCyan);
+
+        c.Rect(box_x0 + 20.0f * scale_ui, box_y0 + 70.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y0 + 72.0f * scale_ui, kGray);
+
+        float row_y = box_y0 + 84.0f * scale_ui;
+        float font_item = 2.25f * scale_ui;
         for (size_t i = 0; i < g_menu_items.size(); ++i) {
             const auto& item = g_menu_items[i];
             const bool is_sel = (static_cast<int>(i) == g_menu_selected);
             if (is_sel) {
-                c.Rect(box_x0 + 16.0f * scale_ui, row_y - 4.0f * scale_ui, box_x1 - 16.0f * scale_ui, row_y + 26.0f * scale_ui, kHiBg);
+                c.Rect(box_x0 + 16.0f * scale_ui, row_y - 3.0f * scale_ui, box_x1 - 16.0f * scale_ui, row_y + 24.0f * scale_ui, kHiBg);
             }
             c.Write(is_sel ? ("> " + item.label) : ("  " + item.label), box_x0 + 24.0f * scale_ui, row_y, font_item, is_sel ? kTitleYellow : kWhite);
-            
+
             std::string val_str = "< " + item.options[item.selected] + " >";
             float val_w = TextWidth(val_str, font_item);
-            c.Write(val_str, box_x1 - val_w - 32.0f * scale_ui, row_y, font_item, is_sel ? kCyan : kGray);
-            
-            row_y += 38.0f * scale_ui;
+            c.Write(val_str, box_x1 - val_w - 28.0f * scale_ui, row_y, font_item, is_sel ? kCyan : kGray);
+
+            row_y += 35.0f * scale_ui;
         }
-        
-        c.Rect(box_x0 + 20.0f * scale_ui, box_y1 - 60.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y1 - 58.0f * scale_ui, kGray);
+
+        c.Rect(box_x0 + 20.0f * scale_ui, box_y1 - 56.0f * scale_ui, box_x1 - 20.0f * scale_ui, box_y1 - 54.0f * scale_ui, kGray);
         if (g_save_confirm_timer > 0) {
             --g_save_confirm_timer;
             const std::string saved_msg = lang::Pt() ? "CONFIGURACOES SALVAS!" : "SETTINGS SAVED!";
-            c.Write(saved_msg, box_x0 + (box_w - TextWidth(saved_msg, font_item)) / 2.0f, box_y1 - 42.0f * scale_ui, font_item, kBorder);
+            c.Write(saved_msg, box_x0 + (box_w - TextWidth(saved_msg, font_item)) / 2.0f, box_y1 - 38.0f * scale_ui, font_item, kBorder);
         } else {
             const std::string footer = lang::Pt() ? "[CIMA/BAIXO] NAVEGAR  [ESQ/DIR] ALTERAR  [ENTER] SALVAR  [F1/ESC] SAIR" : "[UP/DOWN] SELECT  [LEFT/RIGHT] CHANGE  [ENTER] SAVE  [F1/ESC] CLOSE";
-            float font_foot = 1.7f * scale_ui;
-            c.Write(footer, box_x0 + (box_w - TextWidth(footer, font_foot)) / 2.0f, box_y1 - 40.0f * scale_ui, font_foot, kGray);
+            float font_foot = 1.65f * scale_ui;
+            c.Write(footer, box_x0 + (box_w - TextWidth(footer, font_foot)) / 2.0f, box_y1 - 38.0f * scale_ui, font_foot, kGray);
         }
     }
 
-    if (g_video_menu_open.load() && g_menu_selected == 8) {
+    if (g_video_menu_open.load() && g_menu_selected == kMenuPopupStyle) {
         static const char* const kStyles[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-        int sel = g_menu_items[8].selected;
+        int sel = g_menu_items[kMenuPopupStyle].selected;
         if (sel >= 0 && sel < 5) {
             float scale_toast = client.bottom >= 1400 ? 1.4f : (client.bottom >= 1000 ? 1.0f : 0.8f);
             RenderTrophyToast(c, client, scale_toast, kStyles[sel], 16, 'G',
@@ -2549,7 +2638,8 @@ bool RunLoadingScreen(u32 max_seconds, bool prewarm_only) {
         const double pairs = st.pairs_finished ? 1.0 : st.pairs_total ? static_cast<double>(st.pairs_done) / st.pairs_total : 0.0;
         const double pipes = pipelines_finished ? 1.0 : st.pipelines_total ? static_cast<double>(st.pipelines_done) / st.pipelines_total : 0.0;
         const double aot = st.aot_finished ? 1.0 : st.aot_total ? static_cast<double>(st.aot_done) / st.aot_total : 0.0;
-        const double total = std::clamp(0.1 * pack + 0.1 * pairs + 0.1 * pipes + 0.7 * aot, 0.0, 1.0);
+        const double total = std::clamp(all ? (0.1 * pack + 0.1 * pairs + 0.3 * pipes + 0.5 * aot)
+                                            : (0.15 * pack + 0.10 * pairs + 0.25 * aot + 0.50 * pipes), 0.0, 1.0);
 
         vertices.clear();
         const std::string title = "LEGO DIMENSIONS";
@@ -2564,9 +2654,12 @@ bool RunLoadingScreen(u32 max_seconds, bool prewarm_only) {
         Text(vertices, line, 300.0f, 320.0f, 2.5f, st.pack_finished ? kGreen : kWhite);
         std::snprintf(line, sizeof(line), lang::T("SHADERS JA USADOS: %u / %u", "SHADERS ALREADY USED: %u / %u"), st.pairs_done, st.pairs_total);
         Text(vertices, line, 300.0f, 355.0f, 2.5f, st.pairs_finished ? kGreen : kWhite);
-        std::snprintf(line, sizeof(line), lang::T("PIPELINES JA VISTOS: %u / %u", "PIPELINES ALREADY SEEN: %u / %u"), st.pipelines_done, st.pipelines_total);
+        std::snprintf(line, sizeof(line), lang::T("PIPELINES COMPILADOS: %u / %u", "COMPILED PIPELINES: %u / %u"), st.pipelines_done, st.pipelines_total);
         Text(vertices, line, 300.0f, 390.0f, 2.5f, pipelines_finished ? kGreen : kWhite);
-        std::snprintf(line, sizeof(line), lang::T("TODOS OS SHADERS DO PACOTE: %u / %u", "ALL SHADERS IN THE PACK: %u / %u"), st.aot_done, st.aot_total);
+        std::snprintf(line, sizeof(line),
+                      all ? lang::T("TODOS OS SHADERS DO PACOTE: %u / %u", "ALL SHADERS IN THE PACK: %u / %u")
+                          : lang::T("SHADERS AOT PARA PIPELINES: %u / %u", "AOT SHADERS FOR PIPELINES: %u / %u"),
+                      st.aot_done, st.aot_total);
         Text(vertices, line, 300.0f, 425.0f, 2.5f, st.aot_finished ? kGreen : kWhite);
         // barra
         Quad(vertices, 296.0f, 476.0f, 984.0f, 504.0f, kGray);

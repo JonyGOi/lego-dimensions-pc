@@ -362,6 +362,9 @@ public:
     void SetPrewarmPredicted(bool enabled);              // Fase 77: so no --prewarm-only (receitas previstas)
     void SetRenderResolution(u32 width, u32 height);     // 1.9.1: resolucao em que o jogo e desenhado (antes do 1o alvo)
     void SetRenderScale(u32 percent);                    // 1.9.1: interna = saida x porcentagem (25-400)
+    void SetTargetUpscaleResolution(u32 width, u32 height);
+    void GetTargetUpscaleResolution(u32* width, u32* height) const;
+    void GetCurrentRenderResolution(u32* width, u32* height) const;
     void SetUnlockedPresent(bool enabled);               // 1.9.1: FPS desbloqueado (MAILBOX ou VSync)
     void SetNoVsync(bool enabled);                       // 1.9.1: sem VSync (IMMEDIATE, pode rasgar)
     bool NoVsync() const;
@@ -373,6 +376,7 @@ public:
     void SavePipelineCache(const char* reason);                 // Fase 70: grava o cache de pipelines do Vulkan (arquivo temporario + troca)
     void SetCurrentLevel(const std::string& name);              // Fase 72: o jogo comecou a carregar esta area
     void PrewarmPriorityProgress(u32* done, u32* total) const; // Fase 72: so os pipelines da area prioritaria
+    std::vector<u64> WaitingPairKeys() const;
 
     // Cor de limpeza (padrao desde a Fase 17: cinza bem escuro, para a geometria se destacar).
     void SetClearColor(float r, float g, float b, float a);
@@ -429,6 +433,9 @@ int GetAntiAliasing();
 void GetTemporalUpscaler(int* major, bool* native);
 // 1.9.1: AMD FSR 2 / 3 / 4 (versao maior; 9 = a mais nova; 0 = desligado). native = FSR AA (sem ampliar).
 void SetTemporalUpscaler(int major, bool native);
+// Intel XeSS 3.0.2 (Vulkan): native = XeSS AA sem ampliar.
+void SetXessUpscaler(bool enabled, bool native);
+void GetXessUpscaler(bool* enabled, bool* native);
 
 // Pasta com os .spv recompilados do jogo (assets/shaders_spv), conferidos na inicializacao.
 void SetGameSpirvDirectory(const std::string& directory);

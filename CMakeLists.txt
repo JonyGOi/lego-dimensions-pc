@@ -93,11 +93,12 @@ add_executable(lego_dimensions
 )
 target_include_directories(lego_dimensions PRIVATE src src/hle/generated)
 # 1.9.1: AMD FSR 2 / 3 / 4 (FFX API do SDK FSR 2.4.0): so os headers aqui; as DLLs assinadas vao ao lado do exe
-target_include_directories(lego_dimensions PRIVATE externals/fidelityfx-sdk/include)
+target_include_directories(lego_dimensions PRIVATE externals/fidelityfx-sdk/include externals/xess-sdk/include)
 add_custom_command(TARGET lego_dimensions POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/externals/fidelityfx-sdk/bin/amd_fidelityfx_loader_vk.dll
         ${CMAKE_SOURCE_DIR}/externals/fidelityfx-sdk/bin/amd_fidelityfx_upscaler_vk.dll
+        ${CMAKE_SOURCE_DIR}/externals/xess-sdk/bin/libxess.dll
         $<TARGET_FILE_DIR:lego_dimensions>)
 
 # SDL3 (Fase 24.5): so o subsistema de gamepad, para o DualShock 4. Biblioteca estatica ja

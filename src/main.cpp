@@ -1344,11 +1344,20 @@ int main(int argc, char** argv) {
             lang::SetFromCode(argv[++i]);
         } else if (!std::strcmp(argv[i], "--background-pad")) {
             hle::SetPadBackgroundInput(true); // Fase 60: o controle vale mesmo com a janela fora de foco
-        } else if (!std::strcmp(argv[i], "--aa") && i + 1 < argc) { // 1.9.1: taa | off
+        } else if (!std::strcmp(argv[i], "--aa") && i + 1 < argc) { // 1.9.1: taa | off | fsraa3 | fsraa4 | xessaa
             const char* aa = argv[++i];
             render::SetAntiAliasing(!std::strcmp(aa, "taa") ? 1 : 0);
+            int cur_major = 0;
+            bool cur_nat = false, cur_xess = false, cur_xess_nat = false;
+            render::GetTemporalUpscaler(&cur_major, &cur_nat);
+            render::GetXessUpscaler(&cur_xess, &cur_xess_nat);
             if (!std::strncmp(aa, "fsraa", 5)) { // 1.9.1: FSR AA = FSR sem ampliar (fsraa = a mais nova, fsraa3 / fsraa4)
-                render::SetTemporalUpscaler(aa[5] ? aa[5] - '0' : 3, true); // sem numero: FSR 3 (o 4 pesa ~5 ms numa RX 6600)
+                const int aa_major = aa[5] ? aa[5] - '0' : 3;
+                if (cur_xess) render::SetXessUpscaler(true, true);
+                else render::SetTemporalUpscaler(cur_major ? cur_major : aa_major, true);
+            } else if (!std::strcmp(aa, "xessaa") || !std::strcmp(aa, "xess")) {
+                if (cur_major) render::SetTemporalUpscaler(cur_major, true);
+                else render::SetXessUpscaler(true, true);
             }
         } else if (!std::strcmp(argv[i], "--no-vsync")) {
             render::VulkanRenderer::Instance().SetNoVsync(true); // 1.9.1: IMMEDIATE (mais FPS, com tearing)
@@ -1364,21 +1373,38 @@ int main(int argc, char** argv) {
                     render::VulkanRenderer::Instance().SetRenderResolution(width, height);
                 }
             }
-        } else if (!std::strcmp(argv[i], "--upscaler") && i + 1 < argc) { // 1.9.1: fsr1 | off
+        } else if (!std::strcmp(argv[i], "--upscaler") && i + 1 < argc) { // 1.9.1: fsr1..4 | xess | off
             const char* mode = argv[++i];
             static float sharpness = 0.25f;
             if (const char* env = std::getenv("LD_FSR_SHARPNESS")) {
                 sharpness = static_cast<float>(std::atof(env));
             }
             render::VulkanRenderer::Instance().SetUpscaler(!std::strcmp(mode, "fsr1") ? 1 : 0, sharpness);
-            // 1.9.1: fsr2 / fsr3 / fsr4 / fsr (a mais nova) = ampliacao temporal da AMD (FFX API)
-            const int major = !std::strcmp(mode, "fsr2") ? 2 : !std::strcmp(mode, "fsr3") ? 3 : !std::strcmp(mode, "fsr4") ? 4
-                              : !std::strcmp(mode, "fsr") ? 9 : 0;
-            if (major) {
-                render::SetTemporalUpscaler(major, false);
+            int cur_major = 0;
+            bool cur_nat = false, cur_xess = false, cur_xess_nat = false;
+            render::GetTemporalUpscaler(&cur_major, &cur_nat);
+            render::GetXessUpscaler(&cur_xess, &cur_xess_nat);
+            const bool want_native = cur_nat || cur_xess_nat;
+            if (!std::strcmp(mode, "xess")) {
+                render::SetXessUpscaler(true, want_native);
+            } else {
+                // 1.9.1: fsr2 / fsr3 / fsr4 / fsr (a mais nova) = ampliacao temporal da AMD (FFX API)
+                const int major = !std::strcmp(mode, "fsr2") ? 2 : !std::strcmp(mode, "fsr3") ? 3 : !std::strcmp(mode, "fsr4") ? 4
+                                  : !std::strcmp(mode, "fsr") ? 9 : 0;
+                if (major) {
+                    render::SetTemporalUpscaler(major, want_native);
+                }
             }
         } else if (!std::strcmp(argv[i], "--render-scale") && i + 1 < argc) {
             render::VulkanRenderer::Instance().SetRenderScale(static_cast<u32>(std::atoi(argv[++i]))); // 1.9.1: % da saida
+        } else if (!std::strcmp(argv[i], "--target-resolution") && i + 1 < argc) {
+            const char* trg = argv[++i];
+            unsigned tw = 0, th = 0;
+            if (std::sscanf(trg, "%ux%u", &tw, &th) == 2 && tw && th) {
+                render::VulkanRenderer::Instance().SetTargetUpscaleResolution(tw, th);
+            } else {
+                render::VulkanRenderer::Instance().SetTargetUpscaleResolution(0, 0);
+            }
         } else if (!std::strcmp(argv[i], "--fullscreen")) {
             hle::videoout::SetStartFullscreen(true); // Fase 60: tela cheia sem bordas (F11 alterna)
         } else if (!std::strcmp(argv[i], "--fps60")) {
