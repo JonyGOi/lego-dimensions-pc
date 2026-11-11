@@ -1172,6 +1172,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
         if (g_achievements_overlay_open.load()) {
+            const bool fresh = !(lparam & (1 << 30));
             const auto filtered = GetFilteredAchievements(g_achievements_filter);
             const int total_items = static_cast<int>(filtered.size());
             if (wparam == VK_UP) {
@@ -1182,11 +1183,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 g_achievements_selected = std::max(0, g_achievements_selected - g_achievements_visible_count);
             } else if (wparam == VK_NEXT) {
                 g_achievements_selected = std::min(std::max(0, total_items - 1), g_achievements_selected + g_achievements_visible_count);
-            } else if (wparam == 'X' || wparam == VK_TAB) {
+            } else if ((wparam == 'X' || wparam == VK_TAB) && fresh) {
                 g_achievements_filter = (g_achievements_filter + 1) % 3;
                 g_achievements_selected = 0;
                 g_achievements_scroll = 0;
-            } else if (wparam == VK_ESCAPE) {
+            } else if (wparam == VK_ESCAPE && fresh) {
                 g_achievements_overlay_open = false;
             }
             if (g_achievements_selected < g_achievements_scroll) g_achievements_scroll = g_achievements_selected;
@@ -1194,6 +1195,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
         if (g_video_menu_open.load()) {
+            const bool fresh = !(lparam & (1 << 30));
             if (wparam == VK_UP) {
                 g_menu_selected = (g_menu_selected - 1 + static_cast<int>(g_menu_items.size())) % g_menu_items.size();
                 return 0;
@@ -1220,15 +1222,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 }
                 return 0;
             }
-            if (wparam == VK_TAB && !(lparam & (1 << 30))) {
+            if (wparam == VK_TAB && fresh) {
                 SwitchVideoImageTab(true);
                 return 0;
             }
-            if (wparam == VK_RETURN) {
+            if (wparam == VK_RETURN && fresh) {
                 ApplyAndSaveVideoSettings();
                 return 0;
             }
-            if (wparam == VK_ESCAPE) {
+            if (wparam == VK_ESCAPE && fresh) {
                 g_video_menu_open = false;
                 return 0;
             }
