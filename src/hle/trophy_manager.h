@@ -40,6 +40,7 @@ public:
     void SetSoundType(const std::string& sound_name);
     std::string GetSoundType() const;
     void CycleSoundType();
+    void PlayTrophySound();
 
     void SetPopupStyle(const std::string& style);
     std::string GetPopupStyle() const;
@@ -64,7 +65,6 @@ private:
 
     void LoadTrophyXml();
     void SaveTrophyXml();
-    void PlayTrophySound();
 
     mutable std::recursive_mutex m_mutex;
     std::filesystem::path m_root_path;

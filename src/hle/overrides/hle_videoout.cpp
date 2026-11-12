@@ -523,7 +523,11 @@ static void ApplyAndSaveVideoSettings() {
         const int ts = g_menu_items[kMenuTrophySound].selected;
         if (ts >= 0 && ts < 4) {
             WriteLauncherIni(L"trophy_sound", kSoundStr[ts]);
-            hle::trophy::TrophyManager::Instance().SetSoundType(kSoundAnsi[ts]);
+            auto& tm = hle::trophy::TrophyManager::Instance();
+            tm.SetSoundType(kSoundAnsi[ts]);
+            if (g_menu_selected == kMenuTrophySound) {
+                tm.PlayTrophySound();
+            }
         }
     }
 
@@ -731,6 +735,30 @@ static void SwitchVideoImageTab(bool to_image) {
     }
 }
 
+static void PreviewCurrentTrophySound() {
+    static const char* const kSoundAnsi[] = {"playstation", "xbox", "steam", "off"};
+    const int sel = g_menu_items[kMenuTrophySound].selected;
+    if (sel >= 0 && sel < 4) {
+        auto& tm = hle::trophy::TrophyManager::Instance();
+        tm.SetSoundType(kSoundAnsi[sel]);
+        tm.PlayTrophySound();
+    }
+}
+
+static void StepVideoMenuOption(int delta) {
+    if (g_menu_selected < 0 || g_menu_selected >= static_cast<int>(g_menu_items.size())) return;
+    auto& item = g_menu_items[g_menu_selected];
+    const int count = static_cast<int>(item.options.size());
+    if (count <= 0) return;
+    item.selected = ((item.selected + delta) % count + count) % count;
+    if (g_menu_selected == kMenuPopupStyle) {
+        static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
+        hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
+    } else if (g_menu_selected == kMenuTrophySound) {
+        PreviewCurrentTrophySound();
+    }
+}
+
 void ToggleVideoSettingsMenu() {
     InitMenuDefaults();
     const bool next = !g_video_menu_open.load();
@@ -766,20 +794,10 @@ void HandleVideoMenuController(u32 pressed) {
         g_menu_selected = (g_menu_selected + 1) % g_menu_items.size();
         last_nav = now;
     } else if (pressed & 0x80) { // Left
-        auto& item = g_menu_items[g_menu_selected];
-        item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
-        if (g_menu_selected == kMenuPopupStyle) {
-            static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-            hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
-        }
+        StepVideoMenuOption(-1);
         last_nav = now;
     } else if (pressed & 0x20) { // Right
-        auto& item = g_menu_items[g_menu_selected];
-        item.selected = (item.selected + 1) % item.options.size();
-        if (g_menu_selected == kMenuPopupStyle) {
-            static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-            hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
-        }
+        StepVideoMenuOption(1);
         last_nav = now;
     } else if (pressed & 0x4000) { // Cross (Enter / Apply)
         ApplyAndSaveVideoSettings();
@@ -1206,21 +1224,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
             if (wparam == VK_LEFT) {
-                auto& item = g_menu_items[g_menu_selected];
-                item.selected = (item.selected - 1 + static_cast<int>(item.options.size())) % item.options.size();
-                if (g_menu_selected == kMenuPopupStyle) {
-                    static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-                    hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
-                }
+                StepVideoMenuOption(-1);
                 return 0;
             }
             if (wparam == VK_RIGHT) {
-                auto& item = g_menu_items[g_menu_selected];
-                item.selected = (item.selected + 1) % item.options.size();
-                if (g_menu_selected == kMenuPopupStyle) {
-                    static const char* const kPopupAnsi[] = {"ps5", "ps4", "xbox", "xbox360", "steam"};
-                    hle::trophy::TrophyManager::Instance().SetPopupStyle(kPopupAnsi[item.selected]);
-                }
+                StepVideoMenuOption(1);
                 return 0;
             }
             if (wparam == VK_TAB && fresh) {
@@ -2644,8 +2652,11 @@ void QueueStatsOverlay() {
                     : (lang::Pt() ? "CONFIGURACOES SALVAS!" : "SETTINGS SAVED!");
             c.Write(saved_msg, box_x0 + (box_w - TextWidth(saved_msg, font_item)) / 2.0f, box_y1 - 36.0f * scale_ui, font_item, kBorder);
         } else {
-            const std::string footer = lang::Pt() ? "[CIMA/BAIXO] NAVEGAR  [ESQ/DIR] ALTERAR  [TAB] IMAGEM  [ENTER] SALVAR  [F1/ESC] SAIR"
-                                                  : "[UP/DOWN] SELECT  [LEFT/RIGHT] CHANGE  [TAB] IMAGE  [ENTER] SAVE  [F1/ESC] CLOSE";
+            const std::string footer = (g_menu_selected == kMenuTrophySound)
+                ? (lang::Pt() ? "[ESQ/DIR] OUVIR PREVIA  [ENTER] REPETIR E SALVAR  [TAB] IMAGEM  [F1/ESC] SAIR"
+                              : "[LEFT/RIGHT] PREVIEW SOUND  [ENTER] REPLAY & SAVE  [TAB] IMAGE  [F1/ESC] CLOSE")
+                : (lang::Pt() ? "[CIMA/BAIXO] NAVEGAR  [ESQ/DIR] ALTERAR  [TAB] IMAGEM  [ENTER] SALVAR  [F1/ESC] SAIR"
+                              : "[UP/DOWN] SELECT  [LEFT/RIGHT] CHANGE  [TAB] IMAGE  [ENTER] SAVE  [F1/ESC] CLOSE");
             float font_foot = 1.55f * scale_ui;
             const float fw = TextWidth(footer, font_foot);
             const float eff_f = (fw > box_w - 32.0f * scale_ui) ? (font_foot * (box_w - 32.0f * scale_ui) / fw) : font_foot;

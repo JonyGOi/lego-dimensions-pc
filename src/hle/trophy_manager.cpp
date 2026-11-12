@@ -1,5 +1,5 @@
 #include "trophy_manager.h"
-#include "trophy_sounds.h"
+#include "common/trophy_sound_player.h"
 #include "runtime/lang.h"
 #include "hle_log.h"
 
@@ -161,26 +161,14 @@ void TrophyManager::QueueToast(int trophy_id) {
 }
 
 void TrophyManager::PlayTrophySound() {
-    if (m_sound_type == "off" || m_sound_type == "desligado" || m_sound_type == "none") {
-        return;
+    std::string sound_type;
+    std::filesystem::path root_path;
+    {
+        std::lock_guard lock(m_mutex);
+        sound_type = m_sound_type;
+        root_path = m_root_path;
     }
-
-    // Check custom sound file first
-    auto custom_wav = m_root_path / "assets" / "custom_trophy" / "trophy.wav";
-    std::error_code ec;
-    if (std::filesystem::exists(custom_wav, ec)) {
-        PlaySoundW(custom_wav.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-        return;
-    }
-
-    if (m_sound_type == "xbox") {
-        PlaySoundW(reinterpret_cast<LPCWSTR>(kTrophySoundXbox), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-    } else if (m_sound_type == "steam") {
-        PlaySoundW(reinterpret_cast<LPCWSTR>(kTrophySoundSteam), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-    } else {
-        // Default: PlayStation
-        PlaySoundW(reinterpret_cast<LPCWSTR>(kTrophySoundPlaystation), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-    }
+    trophy_sound::PlayA(sound_type, root_path);
 }
 
 void TrophyManager::SetSoundType(const std::string& sound_name) {

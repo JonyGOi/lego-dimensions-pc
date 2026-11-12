@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "../../src/common/game_region.h"
 #include "../../src/common/toypad_process.h"
+#include "../../src/common/trophy_sound_player.h"
 #include "../../src/hle/trophy_defs.h"
 
 #include <shellapi.h>
@@ -48,6 +49,7 @@
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "winmm.lib")
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' "      \
                         "processorArchitecture='amd64' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -2521,14 +2523,18 @@ std::vector<Row> Rows() {
 
     static const wchar_t* const kTrophySounds[] = {L"playstation", L"xbox", L"steam", L"desligado"};
     rows.push_back({kTabTrophies, RowKind::kChoice, ui::T(L"Som de conquista", L"Trophy sound"),
-                    ui::T(L"Efeito sonoro ao desbloquear conquistas (PlayStation, Xbox, Steam).",
-                          L"Sound effect when unlocking achievements (PlayStation, Xbox, Steam)."),
+                    ui::T(L"Efeito sonoro ao desbloquear (PlayStation, Xbox, Steam; toca prévia ao trocar).",
+                          L"Unlock sound effect (PlayStation, Xbox, Steam; plays a preview on change)."),
                     g_trophy_sound_value == L"xbox" ? std::wstring(L"Xbox") :
                     g_trophy_sound_value == L"steam" ? std::wstring(L"Steam") :
                     (g_trophy_sound_value == L"desligado" || g_trophy_sound_value == L"off") ? ui::T(L"Desligado", L"Off") : std::wstring(L"PlayStation"),
                     [](int step) {
+                        if (g_trophy_sound_value == L"off") g_trophy_sound_value = L"desligado";
                         g_trophy_sound_value = Step(kTrophySounds, g_trophy_sound_value, step, [](const wchar_t* s) { return std::wstring(s); });
                         SaveSettings();
+                        if (!g_self_test) {
+                            trophy_sound::PlayW(g_trophy_sound_value, g_root);
+                        }
                     }});
 
     rows.push_back({kTabTrophies, RowKind::kAction, ui::T(L"Lista de conquistas", L"Achievement list"),
